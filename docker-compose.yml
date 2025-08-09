@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  whatsapp-bot:
+    build: .
+    container_name: fresh-whatsapp-bot
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      # Bot Configuration
+      - BOT_NAME=${BOT_NAME:-Fresh WhatsApp Bot}
+      - PREFIX=${PREFIX:-.}
+      - MODE=${MODE:-public}
+      
+      # Session & Owner
+      - SESSION_ID=${SESSION_ID}
+      - OWNER_NUMBER=${OWNER_NUMBER}
+      - OWNER_NAME=${OWNER_NAME:-Bot Owner}
+      
+      # Features
+      - AUTO_READ=${AUTO_READ:-true}
+      - AUTO_REACT=${AUTO_REACT:-true}
+      - AUTO_BIO=${AUTO_BIO:-true}
+      - WELCOME=${WELCOME:-true}
+      - ANTILINK=${ANTILINK:-false}
+      - REJECT_CALL=${REJECT_CALL:-true}
+      
+      # Server
+      - PORT=${PORT:-3000}
+      - NODE_ENV=${NODE_ENV:-production}
+      - TIMEZONE=${TIMEZONE:-Africa/Lagos}
+      
+      # Optional API Keys
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - WEATHER_API_KEY=${WEATHER_API_KEY}
+    
+    volumes:
+      # Persist session data
+      - ./session:/app/session
+      # Persist logs
+      - ./logs:/app/logs
+      # Persist temp files
+      - ./temp:/app/temp
+    
+    networks:
+      - bot-network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+  # Optional: Redis for caching (if you want to add it later)
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: fresh-bot-redis
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis-data:/data
+  #   networks:
+  #     - bot-network
+
+  # Optional: MongoDB for data persistence (if you want to add it later)
+  # mongodb:
+  #   image: mongo:6
+  #   container_name: fresh-bot-mongodb
+  #   restart: unless-stopped
+  #   ports:
+  #     - "27017:27017"
+  #   environment:
+  #     - MONGO_INITDB_ROOT_USERNAME=admin
+  #     - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD:-botpassword}
+  #   volumes:
+  #     - mongo-data:/data/db
+  #   networks:
+  #     - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
+
+# volumes:
+#   redis-data:
+#   mongo-data:
