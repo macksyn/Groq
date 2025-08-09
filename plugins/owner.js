@@ -529,5 +529,5 @@ export const info = {
       aliases: ['cleanup'],
       ownerOnly: true
     }
-   }
+  ]
 };
