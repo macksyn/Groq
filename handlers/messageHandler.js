@@ -3,7 +3,6 @@ import { readdirSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { getBuffer } from '../lib/functions.js';
 import { COMMAND_CATEGORIES } from '../lib/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
