@@ -1,7 +1,7 @@
 # Use official Node.js LTS image
 FROM node:18-alpine
 
-# Install system dependencies for WhatsApp
+# Install system dependencies for WhatsApp and crypto
 RUN apk add --no-cache \
     ffmpeg \
     wget \
@@ -10,18 +10,20 @@ RUN apk add --no-cache \
     python3 \
     make \
     g++ \
-    chromium \
-    nss \
-    freetype \
-    freetype-dev \
-    harfbuzz \
-    ca-certificates \
-    ttf-freefont
+    libc6-compat \
+    cairo-dev \
+    jpeg-dev \
+    pango-dev \
+    giflib-dev \
+    librsvg-dev \
+    pixman-dev \
+    pkgconfig \
+    vips-dev \
+    openssl-dev
 
-# Set Chrome path for Puppeteer
-ENV CHROME_BIN=/usr/bin/chromium-browser \
-    CHROME_PATH=/usr/bin/chromium-browser \
-    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+# Set environment variables for crypto support
+ENV NODE_ENV=production \
+    NODE_OPTIONS="--max-old-space-size=512"
 
 # Create app directory
 WORKDIR /app
