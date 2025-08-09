@@ -300,7 +300,7 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
 
     // Handle antilink
     if (config.ANTILINK && m.isGroup && !isOwner) {
-      const linkRegex = /(https?:\\/\\/[^\\s]+)|([a-zA-Z0-9-]+\\.[a-zA-Z]{2,})/gi;
+      const linkRegex = /(https?:\/\/[^\s]+)|([a-zA-Z0-9-]+\.[a-zA-Z]{2,})/gi;
       if (linkRegex.test(m.body)) {
         try {
           await sock.sendMessage(m.from, {
