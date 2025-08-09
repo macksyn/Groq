@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import moment from 'moment-timezone';
 import { fileURLToPath } from 'url';
-import { isAdmin, isOwner } from '../utils/helpers.js';
+import { isAdmin, isOwner } from '../lib/helpers.js';
 import { config } from '../config/config.js';
 import { logger } from '../utils/logger.js';
 import { getAllBirthdays, getBirthdayData } from './attendance.js';
