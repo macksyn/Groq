@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import moment from 'moment-timezone';
 import { fileURLToPath } from 'url';
-import { isAdmin, isOwner } from '../utils/helpers.js';
+import { isAdmin, isOwner } from '../lib/helpers.js';
 import { COMMAND_CATEGORIES } from '../lib/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
