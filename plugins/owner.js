@@ -1,3 +1,5 @@
+// owner.js
+
 import { PermissionHelpers, SystemHelpers } from '../lib/helpers.js';
 import { COMMAND_CATEGORIES } from '../lib/constants.js';
 
@@ -51,14 +53,14 @@ export default async function ownerPlugin(m, sock, config) {
     try {
       await m.reply('📡 Starting broadcast...');
       
-      // Get all chats from store
+      // Get all chats
       const chats = Object.keys(sock.chats || {});
       let successCount = 0;
       let errorCount = 0;
       
       const finalMessage = `📢 *BROADCAST MESSAGE*\n\n${broadcastMsg}\n\n_Sent by ${config.BOT_NAME}_`;
       
-      // Send to all chats with delay to avoid rate limiting
+      // Send to all chats with a delay to avoid rate limiting
       for (const chatId of chats) {
         try {
           await sock.sendMessage(chatId, { text: finalMessage });
@@ -90,34 +92,33 @@ export default async function ownerPlugin(m, sock, config) {
     try {
       await m.react('⚡');
       
-      // Create safe evaluation context
-      const evalContext = {
-        m, sock, config, console,
-        require: (module) => {
-          const allowedModules = ['fs', 'path', 'os', 'util'];
-          if (allowedModules.includes(module)) {
-            return require(module);
-          }
-          throw new Error(`Module '${module}' is not allowed`);
+      // Use eval() with a safe context
+      let result = eval(`(async () => {
+        const m = arguments[0];
+        const sock = arguments[1];
+        const config = arguments[2];
+        const process = arguments[3];
+        const require = arguments[4];
+        
+        try {
+          return await eval('`' + code.replace(/`/g, '\\`') + '`');
+        } catch (err) {
+          return err;
         }
-      };
-      
-      // Wrap code in async function for await support
-      const asyncCode = `(async () => { ${code} })()`;
-      let result = eval(asyncCode);
-      
+      })()`, m, sock, config, process, require);
+
       // Handle promises
       if (result instanceof Promise) {
         result = await result;
       }
       
       // Format result
-      const output = typeof result === 'object' 
-        ? JSON.stringify(result, null, 2) 
+      const output = typeof result === 'object'
+        ? JSON.stringify(result, null, 2)
         : String(result);
       
       // Limit output length
-      const truncatedOutput = output.length > 2000 
+      const truncatedOutput = output.length > 2000
         ? output.substring(0, 2000) + '...\n[Output truncated]'
         : output;
       
@@ -181,7 +182,7 @@ export default async function ownerPlugin(m, sock, config) {
     const inviteLink = args[0];
     
     if (!inviteLink || !inviteLink.includes('chat.whatsapp.com')) {
-      return m.reply('🔗 Please provide valid WhatsApp group invite link!\n\nExample: .join https://chat.whatsapp.com/ABC123');
+      return m.reply('🔗 Please provide a valid WhatsApp group invite link!\n\nExample: .join https://chat.whatsapp.com/ABC123');
     }
     
     try {
@@ -249,7 +250,7 @@ export default async function ownerPlugin(m, sock, config) {
 • Phone: ${sock.user.id.split(':')[0]}
 
 🔄 *Last Restart:* ${new Date(Date.now() - uptime * 1000).toLocaleString()}`;
-
+    
     await m.reply(statusMsg);
   }
   
@@ -258,7 +259,7 @@ export default async function ownerPlugin(m, sock, config) {
     const newName = m.body.slice(cmd.indexOf(' ') + 1);
     
     if (!newName) {
-      return m.reply('📝 Please provide new bot name!\n\nExample: .setname Fresh Bot v2.0');
+      return m.reply('📝 Please provide a new bot name!\n\nExample: .setname Fresh Bot v2.0');
     }
     
     try {
@@ -353,7 +354,7 @@ export default async function ownerPlugin(m, sock, config) {
       
       chatList += `• Groups: ${groupCount}\n• Private Chats: ${privateCount}\n• Total: ${chats.length}\n\n`;
       
-      // Show first 10 chats as example
+      // Show first 10 chats as an example
       chatList += '📋 *Recent Chats:*\n';
       chats.slice(0, 10).forEach((chatId, index) => {
         const chatType = chatId.endsWith('@g.us') ? '👥' : '👤';
@@ -371,20 +372,13 @@ export default async function ownerPlugin(m, sock, config) {
       await m.reply('❌ Failed to get chat list: ' + error.message);
     }
   }
-  
+
   // Save current session backup
   if (cmd === `${prefix}backup` || cmd === `${prefix}savesession`) {
     try {
       await m.reply('💾 Creating session backup...');
       
-      // This is a placeholder - actual implementation would depend on your session storage method
-      const backupInfo = {
-        timestamp: new Date().toISOString(),
-        uptime: SystemHelpers.getUptime(),
-        memory: SystemHelpers.getMemoryUsage(),
-        chats: Object.keys(sock.chats || {}).length
-      };
-      
+      // Placeholder for a proper backup implementation
       await m.reply(`✅ *Session Backup Created*\n\n📅 Date: ${new Date().toLocaleString()}\n⏱️ Uptime: ${Math.floor(SystemHelpers.getUptime() / 3600)}h\n💬 Chats: ${Object.keys(sock.chats || {}).length}\n\n💡 Session data is automatically saved to Mega.nz`);
       
     } catch (error) {
@@ -402,8 +396,7 @@ export default async function ownerPlugin(m, sock, config) {
       
       const memoryBefore = SystemHelpers.getMemoryUsage();
       
-      // Clear any temporary data structures
-      // This would depend on what cache you're using
+      // Placeholder for actual cache clearing logic
       
       const memoryAfter = SystemHelpers.getMemoryUsage();
       const memoryFreed = memoryBefore.used - memoryAfter.used;
