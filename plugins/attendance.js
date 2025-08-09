@@ -39,6 +39,9 @@ if (fs.existsSync(settingsPath)) {
 // Helper functions for database operations
 function loadDatabase() {
     try {
+        if (!fs.existsSync(dbPath)) {
+            fs.writeFileSync(dbPath, JSON.stringify({ users: {}, groups: {}, settings: {} }, null, 2));
+        }
         return JSON.parse(fs.readFileSync(dbPath));
     } catch (error) {
         console.error('Error loading database:', error);
@@ -84,10 +87,6 @@ export default async function attendancePlugin(m, sock, config) {
         if (attendanceSettings.enableStreakBonus && user.attendance.streak > 1) {
             reward *= attendanceSettings.streakBonusMultiplier;
         }
-
-        // Add reward to economy
-        // This assumes addMoney is exported from your economy plugin or a lib file
-        // addMoney(m.sender, reward, 'Attendance Bonus');
 
         db.users[m.sender] = user;
         saveDatabase(db);
