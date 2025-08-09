@@ -1,8 +1,8 @@
-# Use official Node.js LTS image
-FROM node:18-alpine
+# Use Node.js 18 LTS
+FROM node:18-slim
 
-# Install system dependencies for WhatsApp and crypto
-RUN apk add --no-cache \
+# Install essential system dependencies only
+RUN apt-get update && apt-get install -y \
     ffmpeg \
     wget \
     curl \
@@ -10,40 +10,28 @@ RUN apk add --no-cache \
     python3 \
     make \
     g++ \
-    libc6-compat \
-    cairo-dev \
-    jpeg-dev \
-    pango-dev \
-    giflib-dev \
-    librsvg-dev \
-    pixman-dev \
-    pkgconfig \
-    vips-dev \
-    openssl-dev
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Set environment variables for crypto support
-ENV NODE_ENV=production \
-    NODE_OPTIONS="--max-old-space-size=512"
-
-# Create app directory
+# Set working directory
 WORKDIR /app
 
-# Create non-root user for security
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S whatsappbot -u 1001
+# Create non-root user
+RUN useradd -m -u 1001 whatsappbot
 
-# Copy package files
-COPY --chown=whatsappbot:nodejs package*.json ./
+# Copy package files first for better caching
+COPY --chown=whatsappbot:whatsappbot package*.json ./
 
-# Install dependencies
-RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
+# Install dependencies with legacy peer deps flag
+RUN npm install --omit=dev --legacy-peer-deps && \
+    npm cache clean --force
 
 # Copy application files
-COPY --chown=whatsappbot:nodejs . .
+COPY --chown=whatsappbot:whatsappbot . .
 
-# Create necessary directories with proper permissions
-RUN mkdir -p session plugins temp logs public && \
-    chown -R whatsappbot:nodejs /app
+# Create necessary directories
+RUN mkdir -p session temp logs && \
+    chown -R whatsappbot:whatsappbot /app
 
 # Switch to non-root user
 USER whatsappbot
@@ -51,9 +39,9 @@ USER whatsappbot
 # Expose port
 EXPOSE 3000
 
-# Add health check
+# Health check
 HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:3000/health || exit 1
 
-# Start the application
+# Start application
 CMD ["node", "index.js"]
