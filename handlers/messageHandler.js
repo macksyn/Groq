@@ -279,12 +279,12 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
     const isPublic = config.MODE === 'public';
     
     // Log all messages for debugging
-    const senderName = m.isGroup ? \`\${m.sender.split('@')[0]} in \${m.from}\` : m.sender.split('@')[0];
-    console.log(chalk.blue(\`📨 Message from \${senderName}: \${m.body.substring(0, 50)}\${m.body.length > 50 ? '...' : ''}\`));
+    const senderName = m.isGroup ? `${m.sender.split('@')[0]} in ${m.from}` : m.sender.split('@')[0];
+    console.log(chalk.blue(`📨 Message from ${senderName}: ${m.body.substring(0, 50)}${m.body.length > 50 ? '...' : ''}`));
     
     // Check permissions
     if (!isPublic && !isOwner) {
-      console.log(chalk.yellow(\`⚠️ Private mode - ignoring message from \${senderName}\`));
+      console.log(chalk.yellow(`⚠️ Private mode - ignoring message from ${senderName}`));
       return;
     }
 
@@ -324,7 +324,7 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       return;
     }
 
-    console.log(chalk.green(\`🎯 Processing command: \${m.body}\`));
+    console.log(chalk.green(`🎯 Processing command: ${m.body}`));
 
     // Load and run plugins
     const plugins = await loadPlugins();
@@ -335,23 +335,23 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       return;
     }
     
-    console.log(chalk.cyan(\`🔌 Running \${plugins.length} plugins...\`));
+    console.log(chalk.cyan(`🔌 Running ${plugins.length} plugins...`));
     
     let commandProcessed = false;
     
     for (const plugin of plugins) {
       try {
-        console.log(chalk.blue(\`🔄 Running plugin: \${plugin.name}\`));
+        console.log(chalk.blue(`🔄 Running plugin: ${plugin.name}`));
         await plugin.handler(m, sock, config);
         commandProcessed = true;
       } catch (error) {
-        console.error(chalk.red(\`❌ Plugin \${plugin.name} error:\`), error.message);
+        console.error(chalk.red(`❌ Plugin ${plugin.name} error:`), error.message);
       }
     }
     
     if (!commandProcessed && hasPrefix) {
-      console.log(chalk.yellow(\`❓ Unknown command: \${m.body}\`));
-      await m.reply(\`❓ Unknown command. Type *\${config.PREFIX}menu* to see available commands.\`);
+      console.log(chalk.yellow(`❓ Unknown command: ${m.body}`));
+      await m.reply(`❓ Unknown command. Type *${config.PREFIX}menu* to see available commands.`);
     }
 
   } catch (error) {
