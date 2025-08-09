@@ -1,19 +1,8 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-// Import Node.js built-in modules first
-import crypto from 'crypto';
-import { Buffer } from 'buffer';
-
-// Make crypto globally available for Baileys
-if (!global.crypto) {
-  global.crypto = crypto;
-}
-
-// Ensure Buffer is available
-if (!global.Buffer) {
-  global.Buffer = Buffer;
-}
+// Import crypto polyfill first to ensure crypto is available
+import './crypto-polyfill.js';
 
 import { 
   makeWASocket, 
