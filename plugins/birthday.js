@@ -4,6 +4,7 @@ import path from 'path';
 import moment from 'moment-timezone';
 import { fileURLToPath } from 'url';
 import { COMMAND_CATEGORIES } from '../lib/constants.js';
+import { isOwner } from '../lib/helpers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,6 +40,9 @@ if (fs.existsSync(settingsPath)) {
 // Helper functions for database operations
 function loadDatabase() {
     try {
+        if (!fs.existsSync(dbPath)) {
+            fs.writeFileSync(dbPath, JSON.stringify({ users: {}, groups: {}, settings: {} }, null, 2));
+        }
         return JSON.parse(fs.readFileSync(dbPath));
     } catch (error) {
         console.error('Error loading database:', error);
