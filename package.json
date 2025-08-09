@@ -1,0 +1,50 @@
+{
+  "name": "fresh-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "A fresh WhatsApp bot built with Baileys and Mega session storage",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "pm2": "pm2 start index.js --name whatsapp-bot",
+    "pm2:stop": "pm2 stop whatsapp-bot",
+    "pm2:restart": "pm2 restart whatsapp-bot",
+    "pm2:delete": "pm2 delete whatsapp-bot"
+  },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "baileys",
+    "whatsapp-bot",
+    "automation",
+    "mega",
+    "session"
+  ],
+  "author": "Fresh Bot Developer",
+  "license": "MIT",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.6.0",
+    "axios": "^1.6.8",
+    "chalk": "^5.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "megajs": "^1.1.0",
+    "moment-timezone": "^0.5.45",
+    "pino": "^8.20.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/fresh-whatsapp-bot"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/fresh-whatsapp-bot/issues"
+  },
+  "homepage": "https://github.com/yourusername/fresh-whatsapp-bot#readme"
+}
