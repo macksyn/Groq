@@ -55,6 +55,9 @@ if (fs.existsSync(settingsPath)) {
 // Helper functions for database operations
 function loadDatabase() {
     try {
+        if (!fs.existsSync(dbPath)) {
+            fs.writeFileSync(dbPath, JSON.stringify({ users: {}, groups: {}, settings: {} }, null, 2));
+        }
         return JSON.parse(fs.readFileSync(dbPath));
     } catch (error) {
         console.error('Error loading database:', error);
