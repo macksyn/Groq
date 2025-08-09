@@ -3,9 +3,12 @@ import path from 'path';
 import moment from 'moment-timezone';
 import { fileURLToPath } from 'url';
 import { isAdmin, isOwner } from '../lib/helpers.js';
-import { config } from '../config/config.js';
 import { logger } from '../utils/logger.js';
 import { getAllBirthdays, getBirthdayData } from './attendance.js';
+
+export default async function myPlugin(m, sock, config) {
+  const prefix = config.PREFIX;
+  const cmd = m.body.toLowerCase();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
