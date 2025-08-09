@@ -7,10 +7,14 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
+    "setup": "node setup.js",
     "pm2": "pm2 start index.js --name whatsapp-bot",
     "pm2:stop": "pm2 stop whatsapp-bot",
     "pm2:restart": "pm2 restart whatsapp-bot",
-    "pm2:delete": "pm2 delete whatsapp-bot"
+    "pm2:delete": "pm2 delete whatsapp-bot",
+    "docker": "docker-compose up -d",
+    "docker:stop": "docker-compose down",
+    "docker:logs": "docker-compose logs -f"
   },
   "keywords": [
     "whatsapp",
@@ -19,7 +23,8 @@
     "whatsapp-bot",
     "automation",
     "mega",
-    "session"
+    "session",
+    "fresh-bot"
   ],
   "author": "Fresh Bot Developer",
   "license": "MIT",
@@ -31,7 +36,10 @@
     "express": "^4.19.2",
     "megajs": "^1.1.0",
     "moment-timezone": "^0.5.45",
-    "pino": "^8.20.0"
+    "pino": "^8.20.0",
+    "node-fetch": "^3.3.2",
+    "sharp": "^0.33.2",
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
