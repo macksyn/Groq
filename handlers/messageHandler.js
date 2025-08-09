@@ -1,96 +1,123 @@
-// messageHandler.js
-import { readdirSync } from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import chalk from 'chalk';
+import { serializeMessage } from '../lib/serializer.js';
+import { PermissionHelpers, RateLimitHelpers } from '../lib/helpers.js';
+import pluginManager from '../lib/pluginManager.js';
 
-import { COMMAND_CATEGORIES } from '../lib/constants.js';
+// Auto reaction emojis
+const reactionEmojis = ['❤️', '👍', '🔥', '⚡', '🎉', '💯', '✨', '🚀'];
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// This is the main fix: Dynamically load all plugins from the '../plugins' directory
-const pluginsDir = path.join(__dirname, '..', 'plugins');
-const plugins = [];
-
-try {
-  const pluginFiles = readdirSync(pluginsDir).filter(file => file.endsWith('.js'));
-  for (const file of pluginFiles) {
-    const pluginPath = path.join(pluginsDir, file);
-    const { default: pluginFunction, info } = await import(`file://${pluginPath}`);
-    if (pluginFunction && info) {
-      plugins.push({ pluginFunction, info });
-      console.log(`✅ Plugin loaded: ${info.name}`);
-    } else {
-      console.warn(`⚠️ Failed to load plugin: ${file} (missing default export or info object)`);
-    }
-  }
-} catch (error) {
-  console.error('❌ Error loading plugins:', error);
-}
-
-export default async function MessageHandler(m, sock, logger, config) {
+// Main message handler
+export default async function MessageHandler(messageUpdate, sock, logger, config) {
   try {
-    if (!m.body || m.fromMe || !m.isBot) return;
+    if (messageUpdate.type !== 'notify') return;
+    if (!messageUpdate.messages?.[0]) return;
 
-    const prefix = config.PREFIX;
-    const body = m.body;
+    // Serialize message with helper methods
+    const m = serializeMessage(messageUpdate.messages[0], sock);
+    if (!m.message) return;
 
-    // Fix for the regular expression error
-    const linkRegex = /(https?:\/\/[^\s]+)|([a-zA-Z0-9-]+\.[a-zA-Z]{2,})/gi;
+    // Handle status broadcasts
+    if (m.key.remoteJid === 'status@broadcast') {
+      if (config.AUTO_STATUS_SEEN) {
+        await sock.readMessages([m.key]);
+      }
+      return;
+    }
 
-    // Check if the message is a command
-    if (body.startsWith(prefix)) {
-      const args = body.slice(prefix.length).trim().split(' ');
-      const command = args.shift().toLowerCase();
+    // Auto read messages
+    if (config.AUTO_READ) {
+      await sock.readMessages([m.key]);
+    }
+
+    // Permission checks
+    const isOwner = PermissionHelpers.isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net');
+    const isPublic = config.MODE === 'public';
+    
+    if (!isPublic && !isOwner) return;
+
+    // Rate limiting check
+    if (RateLimitHelpers.isLimited(m.sender, 'global', 10, 60000)) {
+      return; // Silently ignore rate limited users
+    }
+
+    // Log incoming message
+    const senderName = m.isGroup 
+      ? `${m.sender.split('@')[0]} in ${m.from.split('@')[0]}` 
+      : m.sender.split('@')[0];
+    
+    if (m.body.startsWith(config.PREFIX)) {
+      console.log(chalk.blue(`📨 Command from ${senderName}: ${m.body.substring(0, 50)}${m.body.length > 50 ? '...' : ''}`));
+    }
+
+    // Auto react to messages (only for non-commands and random chance)
+    if (config.AUTO_REACT && !m.isSelf && !m.body.startsWith(config.PREFIX) && Math.random() < 0.1) {
+      const randomEmoji = reactionEmojis[Math.floor(Math.random() * reactionEmojis.length)];
+      try {
+        await m.react(randomEmoji);
+      } catch (error) {
+        // Silent fail for reactions
+      }
+    }
+
+    // Handle antilink protection
+    if (config.ANTILINK && m.isGroup && !isOwner) {
+      const linkRegex = /(https?:\/\/[^\s]+)|([a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/gi;
       
-      // Iterate through all loaded plugins to find a matching command
-      for (const { pluginFunction, info } of plugins) {
-        const commandInfo = info.commands.find(cmd =>
-          cmd.name === command || (cmd.aliases && cmd.aliases.includes(command))
-        );
-        
-        if (commandInfo) {
-          // Check for owner-only or group-only restrictions
-          if (commandInfo.ownerOnly && m.sender !== config.OWNER_NUMBER + '@s.whatsapp.net') {
-            await m.reply('🚫 This command is for the bot owner only.');
-            return;
-          }
-          if (commandInfo.groupOnly && !m.isGroup) {
-            await m.reply('👥 This command can only be used in a group chat.');
-            return;
+      if (linkRegex.test(m.body)) {
+        try {
+          // Check if bot is admin before trying to remove
+          const isBotAdmin = await m.isBotAdmin();
+          
+          if (isBotAdmin) {
+            await sock.sendMessage(m.from, {
+              text: '🚫 Links are not allowed in this group!',
+              mentions: [m.sender]
+            });
+            
+            // Give user a moment to see the message before removal
+            setTimeout(async () => {
+              try {
+                await sock.groupParticipantsUpdate(m.from, [m.sender], 'remove');
+              } catch (removeError) {
+                console.log(chalk.yellow('⚠️ Failed to remove user:', removeError.message));
+              }
+            }, 2000);
+          } else {
+            await sock.sendMessage(m.from, {
+              text: '🚫 Links detected! Bot needs admin privileges to remove users.',
+              mentions: [m.sender]
+            });
           }
           
-          // Execute the plugin's function with error handling
-          try {
-            await pluginFunction(m, sock, config);
-            console.log(`Command executed: ${command} by ${m.pushName}`);
-          } catch (error) {
-            console.error(`❌ Error executing command ${command}:`, error);
-            await m.reply(`❌ An error occurred while running this command: ${error.message}`);
-          }
-          return; // Stop after executing the command
+          return; // Don't process other commands for link messages
+        } catch (error) {
+          console.log(chalk.yellow('⚠️ Antilink error:', error.message));
         }
       }
-      
-      // Optional: Add a response for unknown commands
-      // await m.reply(`I don't know the command '${command}'. Type ${prefix}menu to see all commands.`);
     }
 
-    // You can add other non-command message handling logic here
-    if (config.ANTILINK && m.isGroup && linkRegex.test(body) && !m.isOwner) {
-      // Add your anti-link logic here
+    // Execute all plugins through plugin manager
+    try {
+      await pluginManager.executePlugins(m, sock, config);
+    } catch (error) {
+      console.error(chalk.red('❌ Plugin execution error:'), error.message);
     }
 
-    // Your existing auto-read/auto-react logic can go here
-    if (config.AUTO_REACT) {
-        // You'll need to define a logic for auto-reacting
-    }
-    
-    if (config.AUTO_READ) {
-        await sock.readMessages([m.key]);
-    }
+    // Handle group participant updates (moved to groupHandler.js)
+    // This is now handled in the main index.js file
 
   } catch (error) {
-    logger.error('❌ Message handler error:', error);
+    console.error(chalk.red('❌ Message handler error:'), error.message);
+    
+    // Optional: Send error notification to owner
+    if (config.OWNER_NUMBER && error.message) {
+      try {
+        await sock.sendMessage(config.OWNER_NUMBER + '@s.whatsapp.net', {
+          text: `🚨 Bot Error Alert\n\n❌ Error: ${error.message}\n📍 Location: Message Handler\n⏰ Time: ${new Date().toLocaleString()}`
+        });
+      } catch (notifyError) {
+        // Silent fail for error notifications
+      }
+    }
   }
 }
