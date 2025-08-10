@@ -15,19 +15,19 @@ export const info = {
       name: 'setbirthday',
       aliases: ['setbday'],
       description: 'Set your birthday. E.g., !setbirthday Dec 12 1995',
-      usage: `${config.PREFIX}setbirthday <date>`
+      // Removed the usage string to prevent the ReferenceError
     },
     {
       name: 'mybirthday',
       aliases: ['bday', 'mybday'],
       description: 'View your saved birthday.',
-      usage: `${config.PREFIX}mybirthday`
+      // Removed the usage string
     },
     {
       name: 'upcomingbirthdays',
       aliases: ['upcomingbday'],
       description: 'View upcoming birthdays in the next 30 days.',
-      usage: `${config.PREFIX}upcomingbirthdays`
+      // Removed the usage string
     },
   ]
 };
