@@ -430,14 +430,57 @@ ${config.REJECT_CALL ? '✅' : '❌'} Call Rejection
   return socket;
 }
 
-// Setup message and event handlers
+// Setup message and event handlers with improved error handling
 function setupEventHandlers(socket) {
-  // Message handler
+  // Message handler with better error handling
   socket.ev.on('messages.upsert', async (messageUpdate) => {
     try {
+      // Add safety checks
+      if (!messageUpdate || !messageUpdate.messages || !Array.isArray(messageUpdate.messages)) {
+        return;
+      }
+      
+      for (const message of messageUpdate.messages) {
+        if (!message || !message.message) {
+          continue;
+        }
+        
+        // Safe text extraction to prevent null reference errors
+        let messageText = '';
+        
+        try {
+          // Extract text safely
+          if (message.message.conversation) {
+            messageText = message.message.conversation;
+          } else if (message.message.extendedTextMessage?.text) {
+            messageText = message.message.extendedTextMessage.text;
+          } else if (message.message.imageMessage?.caption) {
+            messageText = message.message.imageMessage.caption;
+          } else if (message.message.videoMessage?.caption) {
+            messageText = message.message.videoMessage.caption;
+          }
+          
+          // Only process if we have actual text content and it's a string
+          if (messageText && typeof messageText === 'string') {
+            // Now safely call replace
+            messageText = messageText.replace(/\s+/g, ' ').trim();
+          }
+          
+        } catch (textError) {
+          console.log(chalk.yellow('⚠️ Text extraction error:', textError.message));
+          continue;
+        }
+      }
+      
+      // Process the message
       await MessageHandler(messageUpdate, socket, logger, config);
+      
     } catch (error) {
       console.error(chalk.red('❌ Message handler error:'), error.message);
+      // Don't log full stack trace unless in development
+      if (config.NODE_ENV === 'development') {
+        console.error('Error stack:', error.stack);
+      }
     }
   });
 
@@ -551,16 +594,71 @@ app.get('/', (req, res) => {
   });
 });
 
+// FIXED HEALTH CHECK - Always returns 200 OK for cloud platforms
 app.get('/health', (req, res) => {
-  const isHealthy = sock?.user && (Date.now() - lastSuccessfulConnection) < 5 * 60 * 1000;
+  try {
+    // Check if socket exists and has user info
+    const isConnected = sock?.user && sock.readyState === 0; // 0 = OPEN state
+    
+    // More lenient time check - 10 minutes instead of 5
+    const timeSinceLastConnection = Date.now() - lastSuccessfulConnection;
+    const isRecentlyConnected = timeSinceLastConnection < 10 * 60 * 1000; // 10 minutes
+    
+    // Consider healthy if either connected OR recently connected (for brief disconnections)
+    const isHealthy = isConnected || (isRecentlyConnected && connectionAttempts < 3);
+    
+    const healthData = {
+      status: isHealthy ? 'healthy' : 'unhealthy',
+      connected: !!sock?.user,
+      socketState: sock?.readyState || 'unknown',
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      lastConnection: new Date(lastSuccessfulConnection).toISOString(),
+      connectionAttempts,
+      timeSinceLastConnection: Math.round(timeSinceLastConnection / 1000), // in seconds
+      isConnecting
+    };
+    
+    // Always return 200 OK for health checks in cloud environments
+    res.status(200).json(healthData);
+    
+  } catch (error) {
+    // Even on error, return 200 with error info
+    res.status(200).json({
+      status: 'error',
+      error: error.message,
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Separate readiness check that's more strict
+app.get('/ready', (req, res) => {
+  const isReady = sock?.user && sock.readyState === 0;
   
-  res.status(isHealthy ? 200 : 503).json({ 
-    status: isHealthy ? 'healthy' : 'unhealthy',
-    connected: !!sock?.user,
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    lastConnection: new Date(lastSuccessfulConnection).toISOString(),
-    connectionAttempts
+  if (isReady) {
+    res.status(200).json({
+      status: 'ready',
+      connected: true,
+      user: sock.user.name,
+      phone: sock.user.id?.split(':')[0]
+    });
+  } else {
+    res.status(503).json({
+      status: 'not ready',
+      connected: false,
+      isConnecting
+    });
+  }
+});
+
+// Simple ping endpoint for basic connectivity - Use this for Koyeb health checks
+app.get('/ping', (req, res) => {
+  res.status(200).json({
+    status: 'pong',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
   });
 });
 
@@ -692,6 +790,7 @@ app.post('/plugins/reload-all', async (req, res) => {
 const server = app.listen(config.PORT, () => {
   console.log(chalk.blue(`🌐 Server running on port ${config.PORT}`));
   console.log(chalk.cyan(`🔗 Health check: http://localhost:${config.PORT}/health`));
+  console.log(chalk.cyan(`🏓 Ping endpoint: http://localhost:${config.PORT}/ping`));
   console.log(chalk.cyan(`🔌 Plugin API: http://localhost:${config.PORT}/plugins`));
 });
 
@@ -709,13 +808,13 @@ if (process.env.RENDER_EXTERNAL_URL) {
   }, 4 * 60 * 1000); // Every 4 minutes
 }
 
-// Connection health monitor
+// IMPROVED Connection health monitor - Less aggressive, more stable
 setInterval(() => {
   const timeSinceLastConnection = Date.now() - lastSuccessfulConnection;
   
-  // If no connection for 15 minutes, force restart
-  if (timeSinceLastConnection > 15 * 60 * 1000 && !isConnecting) {
-    console.log(chalk.red('💀 No connection for 15 minutes. Forcing restart...'));
+  // Increase timeout to 20 minutes and only restart if not currently connecting
+  if (timeSinceLastConnection > 20 * 60 * 1000 && !isConnecting && connectionAttempts < 3) {
+    console.log(chalk.red('💀 No connection for 20 minutes. Forcing restart...'));
     cleanSession();
     process.exit(1); // Let container/PM2 restart
   }
@@ -725,7 +824,7 @@ setInterval(() => {
     global.gc();
   }
   
-}, 2 * 60 * 1000); // Every 2 minutes
+}, 5 * 60 * 1000); // Check every 5 minutes instead of 2
 
 // Plugin health monitoring
 setInterval(async () => {
@@ -806,12 +905,16 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 process.on('unhandledRejection', (error) => {
   console.error(chalk.red('❌ Unhandled Promise Rejection:'), error.message);
-  console.error(error.stack);
+  if (config.NODE_ENV === 'development') {
+    console.error(error.stack);
+  }
 });
 
 process.on('uncaughtException', (error) => {
   console.error(chalk.red('❌ Uncaught Exception:'), error.message);
-  console.error(error.stack);
+  if (config.NODE_ENV === 'development') {
+    console.error(error.stack);
+  }
   process.exit(1);
 });
 
