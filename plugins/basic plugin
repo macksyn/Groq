@@ -95,7 +95,7 @@ Current time: ${new Date().toLocaleString()}`);
   }
   
   // Info command
-  if (cmd === prefix + 'info') {
+  if (cmd === prefix + 'info2') {
     console.log('✅ Info command detected');
     const memUsage = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
     const uptime = Math.floor(process.uptime() / 60);
