@@ -26,6 +26,7 @@ import { fileURLToPath } from 'url';
 import MessageHandler from './handlers/messageHandler.js';
 import CallHandler from './handlers/callHandler.js';
 import GroupHandler from './handlers/groupHandler.js';
+import PluginManager from './lib/pluginManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
