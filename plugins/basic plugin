@@ -5,7 +5,7 @@ export default async function handler(m, sock, config) {
   console.log(`🔍 Basic plugin processing: ${cmd}`);
   
   // Ping command
-  if (cmd === prefix + 'ping') {
+  if (cmd === prefix + 'ping2') {
     console.log('✅ Ping command detected');
     const start = Date.now();
     await m.react('🏓');
@@ -76,7 +76,7 @@ Current time: ${new Date().toLocaleString()}`);
   }
   
   // Owner command
-  if (cmd === prefix + 'owner') {
+  if (cmd === prefix + 'owner2') {
     console.log('✅ Owner command detected');
     await m.reply(`👑 *Bot Owner*
 
