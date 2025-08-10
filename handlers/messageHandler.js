@@ -1,10 +1,81 @@
 import chalk from 'chalk';
 import { serializeMessage } from '../lib/serializer.js';
 import { PermissionHelpers, RateLimitHelpers } from '../lib/helpers.js';
-import pluginManager from '../lib/pluginManager.js';
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Auto reaction emojis
 const reactionEmojis = ['❤️', '👍', '🔥', '⚡', '🎉', '💯', '✨', '🚀'];
+
+// Simple plugin loader (instead of complex pluginManager)
+let pluginsLoaded = false;
+let loadedPlugins = [];
+
+async function loadPlugins() {
+  if (pluginsLoaded) return loadedPlugins;
+  
+  try {
+    console.log(chalk.blue('🔌 Loading plugins...'));
+    const pluginsDir = path.join(__dirname, '..', 'plugins');
+    
+    // Create plugins directory if it doesn't exist
+    try {
+      await fs.access(pluginsDir);
+    } catch {
+      await fs.mkdir(pluginsDir, { recursive: true });
+      console.log(chalk.yellow('📂 Created plugins directory'));
+    }
+    
+    const files = await fs.readdir(pluginsDir);
+    const jsFiles = files.filter(file => file.endsWith('.js') && !file.startsWith('.'));
+    
+    for (const file of jsFiles) {
+      try {
+        const pluginPath = path.join(pluginsDir, file);
+        const pluginModule = await import(`file://${pluginPath}?t=${Date.now()}`);
+        
+        if (pluginModule.default && typeof pluginModule.default === 'function') {
+          loadedPlugins.push({
+            name: file,
+            handler: pluginModule.default,
+            info: pluginModule.info || { name: file }
+          });
+          console.log(chalk.green(`✅ Loaded plugin: ${file}`));
+        } else {
+          console.log(chalk.yellow(`⚠️ Plugin ${file} has no default export function`));
+        }
+      } catch (error) {
+        console.log(chalk.red(`❌ Failed to load plugin ${file}:`), error.message);
+      }
+    }
+    
+    pluginsLoaded = true;
+    console.log(chalk.cyan(`🚀 Successfully loaded ${loadedPlugins.length} plugins`));
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Error loading plugins:'), error.message);
+  }
+  
+  return loadedPlugins;
+}
+
+// Execute plugins
+async function executePlugins(m, sock, config) {
+  const plugins = await loadPlugins();
+  
+  for (const plugin of plugins) {
+    try {
+      await plugin.handler(m, sock, config);
+    } catch (error) {
+      console.error(chalk.red(`❌ Plugin ${plugin.name} error:`), error.message);
+      // Continue with other plugins even if one fails
+    }
+  }
+}
 
 // Main message handler
 export default async function MessageHandler(messageUpdate, sock, logger, config) {
@@ -45,7 +116,7 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       ? `${m.sender.split('@')[0]} in ${m.from.split('@')[0]}` 
       : m.sender.split('@')[0];
     
-    if (m.body.startsWith(config.PREFIX)) {
+    if (m.body && m.body.startsWith(config.PREFIX)) {
       console.log(chalk.blue(`📨 Command from ${senderName}: ${m.body.substring(0, 50)}${m.body.length > 50 ? '...' : ''}`));
     }
 
@@ -96,23 +167,12 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       }
     }
 
-    // Execute all plugins through plugin manager
+    // Execute all plugins
     try {
-      await pluginManager.executePlugins(m, sock, config);
-      
-      // Special handling for plugins with auto-detection
-      // Check if attendance form was auto-detected and handled
-      if (m.body && /GIST\s+HQ.*?Name[:*].*?Relationship[:*]/is.test(m.body)) {
-        // Attendance plugin will handle this automatically
-        return;
-      }
-      
+      await executePlugins(m, sock, config);
     } catch (error) {
       console.error(chalk.red('❌ Plugin execution error:'), error.message);
     }
-
-    // Handle group participant updates (moved to groupHandler.js)
-    // This is now handled in the main index.js file
 
   } catch (error) {
     console.error(chalk.red('❌ Message handler error:'), error.message);
