@@ -356,60 +356,148 @@ function getCurrentDate() {
 
 // Get target user from mentions, quoted message, or text input
 function getTargetUser(m, text) {
-  // Check for mentions
-  if (m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
-    return m.message.extendedTextMessage.contextInfo.mentionedJid[0];
+  try {
+    // Safety check for m object
+    if (!m || !m.message) {
+      return null;
+    }
+
+    // Check for mentions
+    if (m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
+      return m.message.extendedTextMessage.contextInfo.mentionedJid[0];
+    }
+    
+    // Check for quoted message
+    if (m.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+      return m.message.extendedTextMessage.contextInfo.participant;
+    }
+    
+    // Extract from text input
+    if (text && typeof text === 'string') {
+      const phoneNumber = text.replace(/[^0-9]/g, '');
+      if (phoneNumber.length >= 10) {
+        return phoneNumber + '@s.whatsapp.net';
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error getting target user:', error);
+    return null;
   }
-  
-  // Check for quoted message
-  if (m.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
-    return m.message.extendedTextMessage.contextInfo.participant;
-  }
-  
-  // Extract from text input
-  const phoneNumber = text.replace(/[^0-9]/g, '');
-  if (phoneNumber.length >= 10) {
-    return phoneNumber + '@s.whatsapp.net';
-  }
-  
-  return null;
 }
 
 // Check if user is admin (you might need to adjust this based on your bot's admin system)
 function isAdmin(userId) {
-  // Implement your admin check logic here
-  const adminNumbers = process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : [];
-  return adminNumbers.includes(userId.split('@')[0]);
+  try {
+    if (!userId || typeof userId !== 'string') return false;
+    
+    // Implement your admin check logic here
+    const adminNumbers = process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : [];
+    return adminNumbers.includes(userId.split('@')[0]);
+  } catch (error) {
+    console.error('Error checking admin status:', error);
+    return false;
+  }
 }
 
 function isOwner(userId) {
-  // Implement your owner check logic here
-  const ownerNumber = process.env.OWNER_NUMBER || '';
-  return userId.split('@')[0] === ownerNumber;
+  try {
+    if (!userId || typeof userId !== 'string') return false;
+    
+    // Implement your owner check logic here
+    const ownerNumber = process.env.OWNER_NUMBER || '';
+    return userId.split('@')[0] === ownerNumber;
+  } catch (error) {
+    console.error('Error checking owner status:', error);
+    return false;
+  }
 }
 
-// Main plugin handler function
+// Main plugin handler function - FIXED VERSION
 export default async function economyHandler(m, sock, config) {
   try {
+    // CRITICAL FIX: Add comprehensive null safety checks
+    if (!m || !m.body || typeof m.body !== 'string') {
+      return; // Exit early if no valid message body
+    }
+
+    if (!config || !config.PREFIX || typeof config.PREFIX !== 'string') {
+      console.error('❌ Economy plugin: Invalid config or PREFIX');
+      return;
+    }
+
+    if (!m.body.startsWith(config.PREFIX)) {
+      return; // Not a command
+    }
+
+    // SAFE string processing with null checks
+    let messageBody = '';
+    try {
+      messageBody = m.body.slice(config.PREFIX.length).trim();
+      if (!messageBody) {
+        return; // Empty command
+      }
+    } catch (stringError) {
+      console.error('❌ Error processing message body:', stringError.message);
+      return;
+    }
+
+    // SAFE argument parsing
+    let args = [];
+    let command = '';
+    try {
+      args = messageBody.split(' ').filter(arg => arg.length > 0); // Remove empty args
+      if (args.length === 0) {
+        return; // No valid command
+      }
+      command = args[0].toLowerCase();
+    } catch (argsError) {
+      console.error('❌ Error parsing arguments:', argsError.message);
+      return;
+    }
+
+    // SAFE user ID extraction
+    let senderId = '';
+    let from = '';
+    try {
+      if (!m.key || !m.key.remoteJid) {
+        console.error('❌ Economy plugin: Invalid message key');
+        return;
+      }
+      
+      senderId = m.key.participant || m.key.remoteJid;
+      from = m.key.remoteJid;
+      
+      if (!senderId || !from) {
+        console.error('❌ Economy plugin: Could not determine sender or chat');
+        return;
+      }
+    } catch (keyError) {
+      console.error('❌ Error extracting message info:', keyError.message);
+      return;
+    }
+
     // Initialize database connection
     if (!db) {
       await initDatabase();
       await loadSettings();
     }
     
-    if (!m.body || !m.body.startsWith(config.PREFIX)) return;
-    
-    const args = m.body.slice(config.PREFIX.length).trim().split(' ');
-    const command = args[0].toLowerCase();
-    const senderId = m.key.participant || m.key.remoteJid;
-    const from = m.key.remoteJid;
-    
     // Initialize user
     await initUser(senderId);
     
-    // Helper function for sending replies
+    // Helper function for sending replies with error handling
     const reply = async (text) => {
-      await sock.sendMessage(from, { text }, { quoted: m });
+      try {
+        if (!text || typeof text !== 'string') {
+          console.error('❌ Attempted to send empty reply');
+          return;
+        }
+        await sock.sendMessage(from, { text }, { quoted: m });
+      } catch (replyError) {
+        console.error('❌ Error sending reply:', replyError.message);
+      }
     };
     
     // Handle different commands
@@ -478,97 +566,118 @@ export default async function economyHandler(m, sock, config) {
       case 'inv':
         await handleInventory({ m, sock, config, senderId, from, reply });
         break;
+        
+      default:
+        // Don't respond to unknown commands to avoid spam
+        break;
     }
   } catch (error) {
-    console.error('❌ Economy plugin error:', error);
+    console.error('❌ Economy plugin error:', error.message);
+    // Don't send error messages to chat to avoid spam
   }
 }
 
 // Handle subcommands for the main economy command
 async function handleSubCommand(subCommand, args, context) {
-  switch (subCommand.toLowerCase()) {
-    case 'balance':
-    case 'bal':
-    case 'wallet':
-      await handleBalance(context, args);
-      break;
-    case 'send':
-    case 'transfer':
-    case 'pay':
-      await handleSend(context, args);
-      break;
-    case 'deposit':
-    case 'dep':
-      await handleDeposit(context, args);
-      break;
-    case 'withdraw':
-    case 'wd':
-      await handleWithdraw(context, args);
-      break;
-    case 'work':
-      await handleWork(context);
-      break;
-    case 'rob':
-      await handleRob(context, args);
-      break;
-    case 'daily':
-      await handleDaily(context);
-      break;
-    case 'profile':
-      await handleProfile(context, args);
-      break;
-    case 'leaderboard':
-    case 'lb':
-      await handleLeaderboard(context);
-      break;
-    case 'clan':
-      await handleClan(context, args);
-      break;
-    case 'shop':
-      await handleShop(context);
-      break;
-    case 'inventory':
-    case 'inv':
-      await handleInventory(context);
-      break;
-    case 'settings':
-      await handleSettings(context, args);
-      break;
-    default:
-      await context.reply(`❓ Unknown economy command: *${subCommand}*\n\nUse *${context.config.PREFIX}economy* to see available commands.`);
+  try {
+    if (!subCommand || typeof subCommand !== 'string') {
+      await context.reply('⚠️ *Please specify a valid subcommand*');
+      return;
+    }
+
+    switch (subCommand.toLowerCase()) {
+      case 'balance':
+      case 'bal':
+      case 'wallet':
+        await handleBalance(context, args);
+        break;
+      case 'send':
+      case 'transfer':
+      case 'pay':
+        await handleSend(context, args);
+        break;
+      case 'deposit':
+      case 'dep':
+        await handleDeposit(context, args);
+        break;
+      case 'withdraw':
+      case 'wd':
+        await handleWithdraw(context, args);
+        break;
+      case 'work':
+        await handleWork(context);
+        break;
+      case 'rob':
+        await handleRob(context, args);
+        break;
+      case 'daily':
+        await handleDaily(context);
+        break;
+      case 'profile':
+        await handleProfile(context, args);
+        break;
+      case 'leaderboard':
+      case 'lb':
+        await handleLeaderboard(context);
+        break;
+      case 'clan':
+        await handleClan(context, args);
+        break;
+      case 'shop':
+        await handleShop(context);
+        break;
+      case 'inventory':
+      case 'inv':
+        await handleInventory(context);
+        break;
+      case 'settings':
+        await handleSettings(context, args);
+        break;
+      default:
+        await context.reply(`❓ Unknown economy command: *${subCommand}*\n\nUse *${context.config.PREFIX}economy* to see available commands.`);
+    }
+  } catch (error) {
+    console.error('❌ Economy subcommand error:', error.message);
+    await context.reply('❌ *Error processing command. Please try again.*');
   }
 }
 
 // Show economy menu
 async function showEconomyMenu(reply, prefix) {
-  const menuText = `💰 *ECONOMY SYSTEM* 💰\n\n` +
-                  `💵 *Wallet Commands:*\n` +
-                  `• *balance/bal* - Check your balance\n` +
-                  `• *send @user amount* - Send money\n` +
-                  `• *deposit amount* - Deposit to bank\n` +
-                  `• *withdraw amount* - Withdraw from bank\n\n` +
-                  `💼 *Earning Commands:*\n` +
-                  `• *work* - Work to earn money\n` +
-                  `• *daily* - Claim daily reward\n` +
-                  `• *rob @user* - Rob someone (risky!)\n\n` +
-                  `👥 *Social Commands:*\n` +
-                  `• *profile [@user]* - View profile\n` +
-                  `• *leaderboard* - Top users\n` +
-                  `• *clan* - Clan system\n\n` +
-                  `🛍️ *Shop Commands:*\n` +
-                  `• *shop* - Browse items\n` +
-                  `• *inventory* - View your items\n\n` +
-                  `💡 *Usage:* ${prefix}economy [command] or ${prefix}[command]`;
-  
-  await reply(menuText);
+  try {
+    const menuText = `💰 *ECONOMY SYSTEM* 💰\n\n` +
+                    `💵 *Wallet Commands:*\n` +
+                    `• *balance/bal* - Check your balance\n` +
+                    `• *send @user amount* - Send money\n` +
+                    `• *deposit amount* - Deposit to bank\n` +
+                    `• *withdraw amount* - Withdraw from bank\n\n` +
+                    `💼 *Earning Commands:*\n` +
+                    `• *work* - Work to earn money\n` +
+                    `• *daily* - Claim daily reward\n` +
+                    `• *rob @user* - Rob someone (risky!)\n\n` +
+                    `👥 *Social Commands:*\n` +
+                    `• *profile [@user]* - View profile\n` +
+                    `• *leaderboard* - Top users\n` +
+                    `• *clan* - Clan system\n\n` +
+                    `🛍️ *Shop Commands:*\n` +
+                    `• *shop* - Browse items\n` +
+                    `• *inventory* - View your items\n\n` +
+                    `💡 *Usage:* ${prefix}economy [command] or ${prefix}[command]`;
+    
+    await reply(menuText);
+  } catch (error) {
+    console.error('❌ Error showing economy menu:', error.message);
+  }
 }
 
 // Handle balance command
 async function handleBalance(context, args) {
   const { reply, senderId, m } = context;
-  const targetUser = args.length > 0 ? getTargetUser(m, args.join(' ')) : senderId;
   
   try {
+    // Safe argument processing
+    const targetUser = (args && args.length > 0) ? getTargetUser(m, args.join(' ')) : senderId;
+    
     if (targetUser && targetUser !== senderId) {
       await initUser(targetUser);
       const targetData = await getUserData(targetUser);
@@ -596,12 +705,12 @@ async function handleBalance(context, args) {
 async function handleSend(context, args) {
   const { reply, senderId, sock, m, from } = context;
   
-  if (args.length < 2) {
-    await reply(`⚠️ *Usage:*\n• Reply to someone: *${context.config.PREFIX}send amount*\n• Mention someone: *${context.config.PREFIX}send @user amount*\n• Use number: *${context.config.PREFIX}send 1234567890 amount*\n\n💡 *Example: ${context.config.PREFIX}send @user 1000*`);
-    return;
-  }
-  
   try {
+    if (!args || args.length < 2) {
+      await reply(`⚠️ *Usage:*\n• Reply to someone: *${context.config.PREFIX}send amount*\n• Mention someone: *${context.config.PREFIX}send @user amount*\n• Use number: *${context.config.PREFIX}send 1234567890 amount*\n\n💡 *Example: ${context.config.PREFIX}send @user 1000*`);
+      return;
+    }
+    
     const targetUser = getTargetUser(m, args[0]);
     let amount = parseInt(args[args.length - 1]);
     
@@ -659,12 +768,12 @@ async function handleSend(context, args) {
 async function handleDeposit(context, args) {
   const { reply, senderId } = context;
   
-  if (args.length === 0) {
-    await reply(`⚠️ *Usage:* ${context.config.PREFIX}deposit [amount]\n\n💡 *Example:* ${context.config.PREFIX}deposit 1000`);
-    return;
-  }
-  
   try {
+    if (!args || args.length === 0) {
+      await reply(`⚠️ *Usage:* ${context.config.PREFIX}deposit [amount]\n\n💡 *Example:* ${context.config.PREFIX}deposit 1000`);
+      return;
+    }
+    
     const amount = parseInt(args[0]);
     if (isNaN(amount) || amount <= 0) {
       await reply('⚠️ *Please provide a valid amount to deposit*');
@@ -694,12 +803,12 @@ async function handleDeposit(context, args) {
 async function handleWithdraw(context, args) {
   const { reply, senderId } = context;
   
-  if (args.length === 0) {
-    await reply(`⚠️ *Usage:* ${context.config.PREFIX}withdraw [amount]\n\n💡 *Example:* ${context.config.PREFIX}withdraw 1000`);
-    return;
-  }
-  
   try {
+    if (!args || args.length === 0) {
+      await reply(`⚠️ *Usage:* ${context.config.PREFIX}withdraw [amount]\n\n💡 *Example:* ${context.config.PREFIX}withdraw 1000`);
+      return;
+    }
+    
     const amount = parseInt(args[0]);
     if (isNaN(amount) || amount <= 0) {
       await reply('⚠️ *Please provide a valid amount to withdraw*');
@@ -758,12 +867,12 @@ async function handleWork(context) {
 async function handleRob(context, args) {
   const { reply, senderId, sock, m, from } = context;
   
-  if (args.length === 0) {
-    await reply(`⚠️ *Usage:*\n• Reply to someone: *${context.config.PREFIX}rob*\n• Mention someone: *${context.config.PREFIX}rob @user*\n• Use number: *${context.config.PREFIX}rob 1234567890*\n\n💡 *Example: ${context.config.PREFIX}rob @username*`);
-    return;
-  }
-  
   try {
+    if (!args || args.length === 0) {
+      await reply(`⚠️ *Usage:*\n• Reply to someone: *${context.config.PREFIX}rob*\n• Mention someone: *${context.config.PREFIX}rob @user*\n• Use number: *${context.config.PREFIX}rob 1234567890*\n\n💡 *Example: ${context.config.PREFIX}rob @username*`);
+      return;
+    }
+    
     const targetUser = getTargetUser(m, args[0]);
     if (!targetUser) {
       await reply('⚠️ *Please specify a valid target*');
@@ -883,7 +992,7 @@ async function handleProfile(context, args) {
   const { reply, senderId, sock, m, from } = context;
   
   try {
-    const targetUser = args.length > 0 ? getTargetUser(m, args.join(' ')) : senderId;
+    const targetUser = (args && args.length > 0) ? getTargetUser(m, args.join(' ')) : senderId;
     
     await initUser(targetUser);
     const profileData = await getUserData(targetUser);
@@ -939,12 +1048,12 @@ async function handleLeaderboard(context) {
 async function handleClan(context, args) {
   const { reply, senderId, sock, m, from } = context;
   
-  if (args.length === 0) {
-    await reply(`🛡️ *Clan Commands:*\n\n• *${context.config.PREFIX}clan create [name]* - Create a clan\n• *${context.config.PREFIX}clan join [name]* - Join a clan\n• *${context.config.PREFIX}clan leave* - Leave your clan\n• *${context.config.PREFIX}clan disband* - Disband your clan (leader only)\n• *${context.config.PREFIX}clan info* - View clan information\n• *${context.config.PREFIX}clan list* - View all clans\n• *${context.config.PREFIX}clan members* - View clan members`);
-    return;
-  }
-  
   try {
+    if (!args || args.length === 0) {
+      await reply(`🛡️ *Clan Commands:*\n\n• *${context.config.PREFIX}clan create [name]* - Create a clan\n• *${context.config.PREFIX}clan join [name]* - Join a clan\n• *${context.config.PREFIX}clan leave* - Leave your clan\n• *${context.config.PREFIX}clan disband* - Disband your clan (leader only)\n• *${context.config.PREFIX}clan info* - View clan information\n• *${context.config.PREFIX}clan list* - View all clans\n• *${context.config.PREFIX}clan members* - View clan members`);
+      return;
+    }
+    
     const subcmd = args[0].toLowerCase();
     const clanName = args.slice(1).join(' ');
     const userData = await getUserData(senderId);
@@ -1142,7 +1251,11 @@ async function handleClan(context, args) {
 async function handleShop(context) {
   const { reply } = context;
   
-  await reply(`🛍️ *ECONOMY SHOP* 🛍️\n\n🚧 *Coming Soon!* 🚧\n\nStay tuned for items you can buy with your hard-earned ${ecoSettings.currency}!\n\n💡 *Suggestions for shop items:*\n• 🛡️ Protection items\n• 💎 Premium roles\n• 🎁 Special rewards\n• ⚡ Power-ups`);
+  try {
+    await reply(`🛍️ *ECONOMY SHOP* 🛍️\n\n🚧 *Coming Soon!* 🚧\n\nStay tuned for items you can buy with your hard-earned ${ecoSettings.currency}!\n\n💡 *Suggestions for shop items:*\n• 🛡️ Protection items\n• 💎 Premium roles\n• 🎁 Special rewards\n• ⚡ Power-ups`);
+  } catch (error) {
+    console.error('Shop error:', error);
+  }
 }
 
 // Handle inventory command
@@ -1173,13 +1286,13 @@ async function handleInventory(context) {
 async function handleSettings(context, args) {
   const { reply, senderId } = context;
   
-  if (!isAdmin(senderId) && !isOwner(senderId)) {
-    await reply('🚫 *Only admins can access economy settings*');
-    return;
-  }
-  
   try {
-    if (args.length === 0) {
+    if (!isAdmin(senderId) && !isOwner(senderId)) {
+      await reply('🚫 *Only admins can access economy settings*');
+      return;
+    }
+    
+    if (!args || args.length === 0) {
       let settingsText = `⚙️ *ECONOMY SETTINGS* ⚙️\n\n`;
       settingsText += `💰 *Economy:*\n`;
       settingsText += `• Starting Balance: ${ecoSettings.currency}${ecoSettings.startingBalance}\n`;
