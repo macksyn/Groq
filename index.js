@@ -10,6 +10,8 @@ import pino from 'pino';
 import moment from 'moment-timezone';
 import { File } from 'megajs';
 import { fileURLToPath } from 'url';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 import { 
   makeWASocket, 
@@ -43,7 +45,8 @@ const config = {
   REJECT_CALL: process.env.REJECT_CALL === 'true',
   AUTO_STATUS_SEEN: process.env.AUTO_STATUS_SEEN === 'true',
   PORT: process.env.PORT || 3000,
-  NODE_ENV: process.env.NODE_ENV || 'development'
+  NODE_ENV: process.env.NODE_ENV || 'production',
+  TIMEZONE: process.env.TIMEZONE || 'Africa/Lagos'
 };
 
 // Validate required configuration
@@ -81,6 +84,7 @@ let isConnecting = false;
 let connectionAttempts = 0;
 let lastSuccessfulConnection = Date.now();
 let bioUpdateCount = 0;
+let server = null;
 
 // Constants
 const MAX_CONNECTION_ATTEMPTS = 15;
@@ -101,15 +105,23 @@ setInterval(() => {
 async function initializePluginManager() {
   try {
     console.log(chalk.blue('🔌 Initializing PluginManager...'));
-    await PluginManager.loadPlugins();
     
-    // Show plugin health check on startup
-    const health = await PluginManager.healthCheck();
-    if (!health.healthy) {
-      console.log(chalk.yellow('⚠️ Plugin health issues detected:'));
-      health.issues.forEach(issue => {
-        console.log(chalk.yellow(`   • ${issue}`));
-      });
+    // Check if PluginManager exists and has required methods
+    if (typeof PluginManager?.loadPlugins === 'function') {
+      await PluginManager.loadPlugins();
+      
+      // Show plugin health check on startup
+      if (typeof PluginManager?.healthCheck === 'function') {
+        const health = await PluginManager.healthCheck();
+        if (!health.healthy) {
+          console.log(chalk.yellow('⚠️ Plugin health issues detected:'));
+          health.issues.forEach(issue => {
+            console.log(chalk.yellow(`   • ${issue}`));
+          });
+        }
+      }
+    } else {
+      console.log(chalk.yellow('⚠️ PluginManager not available or missing methods'));
     }
     
   } catch (error) {
@@ -171,7 +183,7 @@ async function updateBio(socket) {
   }
 
   try {
-    const time = moment().tz(process.env.TIMEZONE || 'Africa/Lagos').format('HH:mm:ss');
+    const time = moment().tz(config.TIMEZONE).format('HH:mm:ss');
     const bioText = `🤖 ${config.BOT_NAME} | Online at ${time}`;
     
     await socket.updateProfileStatus(bioText);
@@ -284,13 +296,13 @@ function setupConnectionHandler(socket, saveCreds) {
         // Send startup notification (only for new logins or owner)
         if (isNewLogin || config.OWNER_NUMBER) {
           try {
-            const pluginStats = PluginManager.getPluginStats();
+            const pluginStats = getPluginStats();
             const startupMsg = `🤖 *${config.BOT_NAME} Connected!*
 
 📊 *Status:* Online ✅
 ⚙️ *Mode:* ${config.MODE.toUpperCase()}
 🎯 *Prefix:* ${config.PREFIX}
-⏰ *Time:* ${moment().tz(process.env.TIMEZONE || 'Africa/Lagos').format('DD/MM/YYYY HH:mm:ss')}
+⏰ *Time:* ${moment().tz(config.TIMEZONE).format('DD/MM/YYYY HH:mm:ss')}
 
 🔌 *Plugins:* ${pluginStats.enabled}/${pluginStats.total} loaded
 
@@ -416,7 +428,7 @@ ${config.REJECT_CALL ? '✅' : '❌'} Call Rejection
         } else {
           console.log(chalk.red('🛑 Bot stopped - manual intervention required'));
           botStatus = 'error';
-          process.exit(1);
+          // Don't exit process in cloud environment - keep server running
         }
       }
       
@@ -469,7 +481,9 @@ function setupEventHandlers(socket) {
         }
       }
       
-      await MessageHandler(messageUpdate, socket, logger, config);
+      if (typeof MessageHandler === 'function') {
+        await MessageHandler(messageUpdate, socket, logger, config);
+      }
       
     } catch (error) {
       console.error(chalk.red('❌ Message handler error:'), error.message);
@@ -482,7 +496,9 @@ function setupEventHandlers(socket) {
   // Call handler
   socket.ev.on('call', async (callUpdate) => {
     try {
-      await CallHandler(callUpdate, socket, config);
+      if (typeof CallHandler === 'function') {
+        await CallHandler(callUpdate, socket, config);
+      }
     } catch (error) {
       console.error(chalk.red('❌ Call handler error:'), error.message);
     }
@@ -491,7 +507,9 @@ function setupEventHandlers(socket) {
   // Group updates handler
   socket.ev.on('groups.update', async (groupUpdate) => {
     try {
-      await GroupHandler(socket, groupUpdate, config);
+      if (typeof GroupHandler === 'function') {
+        await GroupHandler(socket, groupUpdate, config);
+      }
     } catch (error) {
       console.error(chalk.red('❌ Group handler error:'), error.message);
     }
@@ -503,6 +521,18 @@ function setupEventHandlers(socket) {
       lastSuccessfulConnection = Date.now();
     }
   });
+}
+
+// Safe plugin stats getter
+function getPluginStats() {
+  try {
+    if (typeof PluginManager?.getPluginStats === 'function') {
+      return PluginManager.getPluginStats();
+    }
+    return { total: 0, enabled: 0, disabled: 0 };
+  } catch (error) {
+    return { total: 0, enabled: 0, disabled: 0 };
+  }
 }
 
 // Main bot startup function
@@ -548,9 +578,89 @@ async function startBot() {
   }
 }
 
-// Express server setup
+// Express server setup with security
 const app = express();
-app.use(express.json());
+
+// Security middleware
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+  crossOriginEmbedderPolicy: false
+}));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.'
+});
+app.use(limiter);
+
+// Body parsing with limits
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Static files - FIXED: Serve the public directory
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Express error:', err.message);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// Process error handlers
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  // Don't exit in production - let container orchestrator handle it
+  if (config.NODE_ENV !== 'production') {
+    process.exit(1);
+  }
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit in production
+});
+
+// Graceful shutdown
+function gracefulShutdown(signal) {
+  console.log(`\n${signal} received. Starting graceful shutdown...`);
+  
+  if (server) {
+    server.close(() => {
+      console.log('HTTP server closed.');
+      
+      if (sock) {
+        try {
+          sock.end();
+          console.log('WhatsApp connection closed.');
+        } catch (error) {
+          console.error('Error closing WhatsApp connection:', error);
+        }
+      }
+      
+      process.exit(0);
+    });
+    
+    // Force close after 10 seconds
+    setTimeout(() => {
+      console.log('Forcing shutdown...');
+      process.exit(1);
+    }, 10000);
+  } else {
+    process.exit(0);
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Main entry point
 async function main() {
@@ -561,35 +671,47 @@ async function main() {
     // Express server routes
     const startTime = Date.now();
     
+    // Main status endpoint
     app.get('/', (req, res) => {
-      const pluginStats = PluginManager.getPluginStats();
-      res.json({
-        status: botStatus,
-        bot: config.BOT_NAME,
-        mode: config.MODE,
-        owner: config.OWNER_NUMBER,
-        plugins: {
-          total: pluginStats.total,
-          enabled: pluginStats.enabled,
-          disabled: pluginStats.disabled
-        },
-        uptime: Math.floor((Date.now() - startTime) / 1000),
-        timestamp: new Date().toISOString()
-      });
+      try {
+        const pluginStats = getPluginStats();
+        res.json({
+          status: botStatus,
+          bot: config.BOT_NAME,
+          mode: config.MODE,
+          owner: config.OWNER_NUMBER,
+          plugins: {
+            total: pluginStats.total,
+            enabled: pluginStats.enabled,
+            disabled: pluginStats.disabled
+          },
+          uptime: Math.floor((Date.now() - startTime) / 1000),
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        res.status(500).json({ error: 'Internal server error' });
+      }
     });
     
-    // Health check - Always returns 200 OK
+    // Health check - Always returns 200 OK for Koyeb
     app.get('/health', (req, res) => {
       try {
+        const memUsage = process.memoryUsage();
         const healthData = {
-          status: botStatus,
+          status: botStatus === 'running' ? 'healthy' : botStatus,
           connected: botStatus === 'running',
           socketState: sock?.readyState || 'unknown',
           uptime: process.uptime(),
           lastConnection: new Date(lastSuccessfulConnection).toISOString(),
           connectionAttempts,
-          timeSinceLastConnection: Math.round((Date.now() - lastSuccessfulConnection) / 1000), // in seconds
-          isConnecting
+          timeSinceLastConnection: Math.round((Date.now() - lastSuccessfulConnection) / 1000),
+          isConnecting,
+          memory: {
+            heapUsed: memUsage.heapUsed,
+            heapTotal: memUsage.heapTotal,
+            external: memUsage.external
+          },
+          timestamp: new Date().toISOString()
         };
         res.status(200).json(healthData);
       } catch (error) {
@@ -602,17 +724,21 @@ async function main() {
       }
     });
     
-    // Readiness check - More strict
+    // Readiness check
     app.get('/ready', (req, res) => {
-      const isReady = sock?.user && sock.readyState === 0;
-      if (isReady) {
-        res.status(200).json({ status: 'ready', connected: true });
-      } else {
-        res.status(503).json({ status: 'not ready', connected: false });
+      try {
+        const isReady = sock?.user && botStatus === 'running';
+        if (isReady) {
+          res.status(200).json({ status: 'ready', connected: true });
+        } else {
+          res.status(503).json({ status: 'not ready', connected: false });
+        }
+      } catch (error) {
+        res.status(503).json({ status: 'error', error: error.message });
       }
     });
     
-    // Simple ping endpoint for basic connectivity
+    // Simple ping endpoint
     app.get('/ping', (req, res) => {
       res.status(200).json({
         status: 'pong',
@@ -621,36 +747,222 @@ async function main() {
       });
     });
     
+    // QR status
     app.get('/qr', (req, res) => {
-      if (sock?.user) {
-        res.json({ status: 'connected', message: 'Bot is already connected' });
-      } else {
-        res.json({ status: botStatus, message: 'Check console for QR code' });
+      try {
+        if (sock?.user) {
+          res.json({ status: 'connected', message: 'Bot is already connected' });
+        } else {
+          res.json({ status: botStatus, message: 'Check console for QR code' });
+        }
+      } catch (error) {
+        res.status(500).json({ error: 'Internal server error' });
       }
     });
     
-    // Plugin Management API Routes (same as before)
-    app.get('/plugins', async (req, res) => { /* ... */ });
-    app.get('/plugins/stats', async (req, res) => { /* ... */ });
-    app.get('/plugins/health', async (req, res) => { /* ... */ });
-    app.post('/plugins/:filename/enable', async (req, res) => { /* ... */ });
-    app.post('/plugins/:filename/disable', async (req, res) => { /* ... */ });
-    app.post('/plugins/:filename/reload', async (req, res) => { /* ... */ });
-    app.post('/plugins/reload-all', async (req, res) => { /* ... */ });
+    // Plugin Management API Routes - FIXED: Complete implementations
+    app.get('/plugins', async (req, res) => {
+      try {
+        if (typeof PluginManager?.getAllPlugins === 'function') {
+          const plugins = await PluginManager.getAllPlugins();
+          res.json(plugins);
+        } else {
+          res.json({ plugins: [], message: 'PluginManager not available' });
+        }
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    
+    app.get('/plugins/stats', async (req, res) => {
+      try {
+        const stats = getPluginStats();
+        res.json(stats);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    
+    app.get('/plugins/health', async (req, res) => {
+      try {
+        if (typeof PluginManager?.healthCheck === 'function') {
+          const health = await PluginManager.healthCheck();
+          res.json(health);
+        } else {
+          res.json({ healthy: true, issues: [] });
+        }
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    
+    app.post('/plugins/:filename/enable', async (req, res) => {
+      try {
+        const { filename } = req.params;
+        if (typeof PluginManager?.enablePlugin === 'function') {
+          const result = await PluginManager.enablePlugin(filename);
+          res.json({ success: true, result });
+        } else {
+          res.status(404).json({ error: 'PluginManager not available' });
+        }
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    
+    app.post('/plugins/:filename/disable', async (req, res) => {
+      try {
+        const { filename } = req.params;
+        if (typeof PluginManager?.disablePlugin === 'function') {
+          const result = await PluginManager.disablePlugin(filename);
+          res.json({ success: true, result });
+        } else {
+          res.status(404).json({ error: 'PluginManager not available' });
+        }
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    
+    app.post('/plugins/:filename/reload', async (req, res) => {
+      try {
+        const { filename } = req.params;
+        if (typeof PluginManager?.reloadPlugin === 'function') {
+          const result = await PluginManager.reloadPlugin(filename);
+          res.json({ success: true, result });
+        } else {
+          res.status(404).json({ error: 'PluginManager not available' });
+        }
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    
+    app.post('/plugins/reload-all', async (req, res) => {
+      try {
+        if (typeof PluginManager?.reloadAllPlugins === 'function') {
+          const result = await PluginManager.reloadAllPlugins();
+          res.json({ success: true, result });
+        } else {
+          res.status(404).json({ error: 'PluginManager not available' });
+        }
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // API endpoint for bot info (used by the HTML page)
+    app.get('/api/bot-info', (req, res) => {
+      try {
+        const memUsage = process.memoryUsage();
+        const pluginStats = getPluginStats();
+        
+        res.json({
+          botName: config.BOT_NAME,
+          status: botStatus,
+          mode: config.MODE,
+          prefix: config.PREFIX,
+          ownerNumber: config.OWNER_NUMBER,
+          features: {
+            autoRead: config.AUTO_READ,
+            autoReact: config.AUTO_REACT,
+            welcome: config.WELCOME,
+            antilink: config.ANTILINK,
+            rejectCall: config.REJECT_CALL,
+            autoBio: config.AUTO_BIO
+          },
+          plugins: pluginStats,
+          uptime: process.uptime(),
+          memory: {
+            heapUsed: memUsage.heapUsed,
+            heapTotal: memUsage.heapTotal
+          },
+          lastConnection: new Date(lastSuccessfulConnection).toISOString(),
+          connectionAttempts,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    });
+
+    // Catch all route - serve index.html for any unmatched routes
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    });
 
     // Start Express server
-    const server = app.listen(config.PORT, () => {
+    server = app.listen(config.PORT, '0.0.0.0', () => {
       console.log(chalk.blue(`🌐 Server running on port ${config.PORT}`));
       console.log(chalk.cyan(`🔗 Health check: http://localhost:${config.PORT}/health`));
       console.log(chalk.cyan(`🏓 Ping endpoint: http://localhost:${config.PORT}/ping`));
       console.log(chalk.cyan(`🔌 Plugin API: http://localhost:${config.PORT}/plugins`));
+      console.log(chalk.cyan(`🌍 Web Interface: http://localhost:${config.PORT}/`));
       
-      // Now that the server is listening, start the bot connection
-      startBot();
+      // Start the bot connection after server is ready
+      setTimeout(() => {
+        startBot();
+      }, 2000);
     });
 
-    // ... (rest of the code for graceful shutdown, monitoring, etc.)
+    // Server error handling
+    server.on('error', (error) => {
+      console.error(chalk.red('❌ Server error:'), error.message);
+      if (error.code === 'EADDRINUSE') {
+        console.log(chalk.yellow(`⚠️ Port ${config.PORT} is already in use`));
+        process.exit(1);
+      }
+    });
+
+    // Keep-alive mechanism for cloud deployments
+    if (config.NODE_ENV === 'production') {
+      // Send periodic keep-alive requests to self (prevents sleeping)
+      setInterval(async () => {
+        try {
+          await axios.get(`http://localhost:${config.PORT}/ping`, { timeout: 5000 });
+        } catch (error) {
+          // Ignore keep-alive errors
+        }
+      }, 5 * 60 * 1000); // Every 5 minutes
+    }
+
+    // Memory monitoring and cleanup
+    setInterval(() => {
+      const memUsage = process.memoryUsage();
+      const memUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
+      
+      if (memUsedMB > 400) { // Alert if memory usage exceeds 400MB
+        console.log(chalk.yellow(`⚠️ High memory usage: ${memUsedMB}MB`));
+        
+        // Force garbage collection if available
+        if (global.gc) {
+          global.gc();
+          console.log(chalk.blue('🗑️ Garbage collection triggered'));
+        }
+      }
+    }, 2 * 60 * 1000); // Every 2 minutes
+
+    // Connection health monitoring
+    setInterval(() => {
+      const timeSinceLastConnection = Date.now() - lastSuccessfulConnection;
+      const hoursOffline = timeSinceLastConnection / (1000 * 60 * 60);
+      
+      if (hoursOffline > 2 && botStatus !== 'running' && !isConnecting) {
+        console.log(chalk.yellow(`⚠️ Bot has been offline for ${Math.round(hoursOffline)} hours`));
+        console.log(chalk.blue('🔄 Attempting to restart connection...'));
+        
+        // Reset connection attempts and try to reconnect
+        connectionAttempts = Math.floor(connectionAttempts / 2);
+        startBot();
+      }
+    }, 30 * 60 * 1000); // Every 30 minutes
+
+    console.log(chalk.green('✅ Application initialized successfully!'));
+    console.log(chalk.blue('🔥 Ready to serve WhatsApp bot requests'));
 }
 
 // Call the main function to start everything
-main();
+main().catch(error => {
+  console.error(chalk.red('❌ Fatal error during startup:'), error);
+  process.exit(1);
+});
