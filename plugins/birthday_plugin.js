@@ -1,7 +1,9 @@
 // plugins/birthday.js - Birthday plugin compatible with PluginManager
 import moment from 'moment-timezone';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
-import { isAdmin, isOwner } from '../lib/helpers.js';
+// Removed: import { isAdmin, isOwner } from '../utils/helpers.js';
+// Removed: import { config } from '../config/config.js';
+// Removed: import { logger } from '../utils/logger.js';
 
 // Set Nigeria timezone
 moment.tz.setDefault('Africa/Lagos');
@@ -33,12 +35,11 @@ export const info = {
       description: 'View upcoming birthdays in the next 30 days.',
       usage: `${config.PREFIX}upcomingbirthdays`
     }
-    // Add more commands here if needed
   ]
 };
 
 // =======================
-// 🎂 BIRTHDAY PARSING UTILITIES (Adapted from attendance_plugin)
+// 🎂 BIRTHDAY PARSING UTILITIES
 // =======================
 const MONTH_NAMES = {
   'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
@@ -119,7 +120,8 @@ function parseBirthday(dobText) {
 
     return null;
   } catch (error) {
-    logger.error('Error parsing birthday:', error);
+    // Replaced logger.error with console.error as logger is not imported
+    console.error('Error parsing birthday:', error);
     return null;
   }
 }
@@ -165,10 +167,12 @@ async function saveBirthday(userId, birthdayData) {
     const user = await unifiedUserManager.initUser(userId);
     user.birthdayData = birthdayData;
     await unifiedUserManager.updateUserData(userId, { birthdayData });
-    logger.info(`✅ Birthday saved for ${userId}: ${birthdayData.displayDate}`);
+    // Replaced logger.info with console.log
+    console.log(`✅ Birthday saved for ${userId}: ${birthdayData.displayDate}`);
     return true;
   } catch (error) {
-    logger.error('Error saving birthday:', error);
+    // Replaced logger.error with console.error
+    console.error('Error saving birthday:', error);
     return false;
   }
 }
@@ -178,7 +182,8 @@ async function getBirthday(userId) {
     const user = await unifiedUserManager.getUserData(userId);
     return user ? user.birthdayData : null;
   } catch (error) {
-    logger.error('Error getting birthday:', error);
+    // Replaced logger.error with console.error
+    console.error('Error getting birthday:', error);
     return null;
   }
 }
@@ -188,11 +193,12 @@ async function getAllBirthdays() {
     const users = await unifiedUserManager.getAllUsers();
     return users.filter(user => user.birthdayData).map(user => ({
       userId: user.userId,
-      name: user.name || user.userId, // Assume user has a name or use userId
+      name: user.name || user.userId,
       birthday: user.birthdayData
     }));
   } catch (error) {
-    logger.error('Error getting all birthdays:', error);
+    // Replaced logger.error with console.error
+    console.error('Error getting all birthdays:', error);
     return [];
   }
 }
@@ -302,7 +308,7 @@ async function handleUpcomingBirthdays(context) {
 }
 
 async function main(context) {
-  const { args, reply, senderId, sock, message } = context;
+  const { args, reply } = context;
   if (args.length === 0) {
     await reply(`
 🎂 *BIRTHDAY SYSTEM* 🎂
