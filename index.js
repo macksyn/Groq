@@ -10,8 +10,6 @@ import pino from 'pino';
 import moment from 'moment-timezone';
 import { File } from 'megajs';
 import { fileURLToPath } from 'url';
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
 
 import { 
   makeWASocket, 
@@ -95,6 +93,60 @@ const RECONNECT_DELAY = {
   MAX: 60000,
   MULTIPLIER: 1.5
 };
+
+// Simple rate limiting implementation (no external dependency)
+const rateLimitStore = new Map();
+function simpleRateLimit(windowMs = 15 * 60 * 1000, maxRequests = 100) {
+  return (req, res, next) => {
+    const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+    const now = Date.now();
+    const windowStart = now - windowMs;
+    
+    // Clean old entries
+    for (const [ip, requests] of rateLimitStore.entries()) {
+      const filteredRequests = requests.filter(timestamp => timestamp > windowStart);
+      if (filteredRequests.length === 0) {
+        rateLimitStore.delete(ip);
+      } else {
+        rateLimitStore.set(ip, filteredRequests);
+      }
+    }
+    
+    // Check current IP
+    const clientRequests = rateLimitStore.get(clientIP) || [];
+    const recentRequests = clientRequests.filter(timestamp => timestamp > windowStart);
+    
+    if (recentRequests.length >= maxRequests) {
+      return res.status(429).json({
+        error: 'Too many requests',
+        message: `Rate limit exceeded. Try again later.`,
+        retryAfter: Math.ceil(windowMs / 1000)
+      });
+    }
+    
+    // Add current request
+    recentRequests.push(now);
+    rateLimitStore.set(clientIP, recentRequests);
+    
+    next();
+  };
+}
+
+// Basic security headers (no helmet dependency)
+function addSecurityHeaders(req, res, next) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Content-Security-Policy', 
+    "default-src 'self'; " +
+    "style-src 'self' 'unsafe-inline'; " +
+    "script-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: https:; " +
+    "connect-src 'self';"
+  );
+  next();
+}
 
 // Reset bio update count every hour
 setInterval(() => {
@@ -578,35 +630,23 @@ async function startBot() {
   }
 }
 
-// Express server setup with security
+// Express server setup with built-in security
 const app = express();
 
-// Security middleware
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "https:"],
-    },
-  },
-  crossOriginEmbedderPolicy: false
-}));
+// Apply security headers
+app.use(addSecurityHeaders);
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.'
-});
-app.use(limiter);
+// Apply rate limiting
+app.use(simpleRateLimit(15 * 60 * 1000, 100)); // 100 requests per 15 minutes
+
+// Trust proxy (important for Koyeb)
+app.set('trust proxy', true);
 
 // Body parsing with limits
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Static files - FIXED: Serve the public directory
+// CRITICAL FIX: Serve static files from public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Error handling middleware
@@ -760,7 +800,7 @@ async function main() {
       }
     });
     
-    // Plugin Management API Routes - FIXED: Complete implementations
+    // Plugin Management API Routes
     app.get('/plugins', async (req, res) => {
       try {
         if (typeof PluginManager?.getAllPlugins === 'function') {
@@ -886,9 +926,14 @@ async function main() {
       }
     });
 
-    // Catch all route - serve index.html for any unmatched routes
+    // CRITICAL FIX: Catch all route - serve index.html for any unmatched routes
     app.get('*', (req, res) => {
-      res.sendFile(path.join(__dirname, 'public', 'index.html'));
+      const htmlPath = path.join(__dirname, 'public', 'index.html');
+      if (fs.existsSync(htmlPath)) {
+        res.sendFile(htmlPath);
+      } else {
+        res.status(404).json({ error: 'HTML file not found' });
+      }
     });
 
     // Start Express server
