@@ -595,42 +595,14 @@ app.get('/', (req, res) => {
 });
 
 // FIXED HEALTH CHECK - Always returns 200 OK for cloud platforms
+// Renamed to /health to be a more common convention
 app.get('/health', (req, res) => {
-  try {
-    // Check if socket exists and has user info
-    const isConnected = sock?.user && sock.readyState === 0; // 0 = OPEN state
-    
-    // More lenient time check - 10 minutes instead of 5
-    const timeSinceLastConnection = Date.now() - lastSuccessfulConnection;
-    const isRecentlyConnected = timeSinceLastConnection < 10 * 60 * 1000; // 10 minutes
-    
-    // Consider healthy if either connected OR recently connected (for brief disconnections)
-    const isHealthy = isConnected || (isRecentlyConnected && connectionAttempts < 3);
-    
-    const healthData = {
-      status: isHealthy ? 'healthy' : 'unhealthy',
-      connected: !!sock?.user,
-      socketState: sock?.readyState || 'unknown',
-      uptime: process.uptime(),
-      memory: process.memoryUsage(),
-      lastConnection: new Date(lastSuccessfulConnection).toISOString(),
-      connectionAttempts,
-      timeSinceLastConnection: Math.round(timeSinceLastConnection / 1000), // in seconds
-      isConnecting
-    };
-    
-    // Always return 200 OK for health checks in cloud environments
-    res.status(200).json(healthData);
-    
-  } catch (error) {
-    // Even on error, return 200 with error info
-    res.status(200).json({
-      status: 'error',
-      error: error.message,
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString()
-    });
-  }
+  res.status(200).json({
+    status: 'healthy',
+    message: 'Server is running',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Separate readiness check that's more strict
