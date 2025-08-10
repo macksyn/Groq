@@ -1,81 +1,10 @@
 import chalk from 'chalk';
 import { serializeMessage } from '../lib/serializer.js';
 import { PermissionHelpers, RateLimitHelpers } from '../lib/helpers.js';
-import fs from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import PluginManager from '../lib/pluginManager.js';
 
 // Auto reaction emojis
 const reactionEmojis = ['❤️', '👍', '🔥', '⚡', '🎉', '💯', '✨', '🚀'];
-
-// Simple plugin loader (instead of complex pluginManager)
-let pluginsLoaded = false;
-let loadedPlugins = [];
-
-async function loadPlugins() {
-  if (pluginsLoaded) return loadedPlugins;
-  
-  try {
-    console.log(chalk.blue('🔌 Loading plugins...'));
-    const pluginsDir = path.join(__dirname, '..', 'plugins');
-    
-    // Create plugins directory if it doesn't exist
-    try {
-      await fs.access(pluginsDir);
-    } catch {
-      await fs.mkdir(pluginsDir, { recursive: true });
-      console.log(chalk.yellow('📂 Created plugins directory'));
-    }
-    
-    const files = await fs.readdir(pluginsDir);
-    const jsFiles = files.filter(file => file.endsWith('.js') && !file.startsWith('.'));
-    
-    for (const file of jsFiles) {
-      try {
-        const pluginPath = path.join(pluginsDir, file);
-        const pluginModule = await import(`file://${pluginPath}?t=${Date.now()}`);
-        
-        if (pluginModule.default && typeof pluginModule.default === 'function') {
-          loadedPlugins.push({
-            name: file,
-            handler: pluginModule.default,
-            info: pluginModule.info || { name: file }
-          });
-          console.log(chalk.green(`✅ Loaded plugin: ${file}`));
-        } else {
-          console.log(chalk.yellow(`⚠️ Plugin ${file} has no default export function`));
-        }
-      } catch (error) {
-        console.log(chalk.red(`❌ Failed to load plugin ${file}:`), error.message);
-      }
-    }
-    
-    pluginsLoaded = true;
-    console.log(chalk.cyan(`🚀 Successfully loaded ${loadedPlugins.length} plugins`));
-    
-  } catch (error) {
-    console.error(chalk.red('❌ Error loading plugins:'), error.message);
-  }
-  
-  return loadedPlugins;
-}
-
-// Execute plugins
-async function executePlugins(m, sock, config) {
-  const plugins = await loadPlugins();
-  
-  for (const plugin of plugins) {
-    try {
-      await plugin.handler(m, sock, config);
-    } catch (error) {
-      console.error(chalk.red(`❌ Plugin ${plugin.name} error:`), error.message);
-      // Continue with other plugins even if one fails
-    }
-  }
-}
 
 // Main message handler
 export default async function MessageHandler(messageUpdate, sock, logger, config) {
@@ -167,9 +96,9 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       }
     }
 
-    // Execute all plugins
+    // Execute all plugins using PluginManager
     try {
-      await executePlugins(m, sock, config);
+      await PluginManager.executePlugins(m, sock, config);
     } catch (error) {
       console.error(chalk.red('❌ Plugin execution error:'), error.message);
     }
