@@ -1,4 +1,3 @@
-
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -45,6 +44,7 @@ const config = {
   WELCOME: process.env.WELCOME === 'true',
   ANTILINK: process.env.ANTILINK === 'true',
   REJECT_CALL: process.env.REJECT_CALL === 'true',
+  AUTO_STATUS_SEEN: process.env.AUTO_STATUS_SEEN === 'true',
   PORT: process.env.PORT || 3000,
   NODE_ENV: process.env.NODE_ENV || 'development'
 };
@@ -102,6 +102,26 @@ const RECONNECT_DELAY = {
 setInterval(() => {
   bioUpdateCount = 0;
 }, 60 * 60 * 1000);
+
+// Initialize PluginManager on startup
+async function initializePluginManager() {
+  try {
+    console.log(chalk.blue('🔌 Initializing PluginManager...'));
+    await PluginManager.loadPlugins();
+    
+    // Show plugin health check on startup
+    const health = await PluginManager.healthCheck();
+    if (!health.healthy) {
+      console.log(chalk.yellow('⚠️ Plugin health issues detected:'));
+      health.issues.forEach(issue => {
+        console.log(chalk.yellow(`   • ${issue}`));
+      });
+    }
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Failed to initialize PluginManager:'), error.message);
+  }
+}
 
 // Download session from Mega with better error handling
 async function downloadSessionFromMega() {
@@ -260,15 +280,21 @@ function setupConnectionHandler(socket, saveCreds) {
         lastSuccessfulConnection = Date.now();
         isConnecting = false;
         
+        // Initialize plugins after successful connection
+        await initializePluginManager();
+        
         // Send startup notification (only for new logins or owner)
         if (isNewLogin || config.OWNER_NUMBER) {
           try {
+            const pluginStats = PluginManager.getPluginStats();
             const startupMsg = `🤖 *${config.BOT_NAME} Connected!*
 
 📊 *Status:* Online ✅
 ⚙️ *Mode:* ${config.MODE.toUpperCase()}
 🎯 *Prefix:* ${config.PREFIX}
 ⏰ *Time:* ${moment().tz(process.env.TIMEZONE || 'Africa/Lagos').format('DD/MM/YYYY HH:mm:ss')}
+
+🔌 *Plugins:* ${pluginStats.enabled}/${pluginStats.total} loaded
 
 🎮 *Active Features:*
 ${config.AUTO_READ ? '✅' : '❌'} Auto Read
@@ -509,11 +535,17 @@ async function initializeBot() {
 
 // Express server routes
 app.get('/', (req, res) => {
+  const pluginStats = PluginManager.getPluginStats();
   res.json({
     status: sock?.user ? 'connected' : 'connecting',
     bot: config.BOT_NAME,
     mode: config.MODE,
     owner: config.OWNER_NUMBER,
+    plugins: {
+      total: pluginStats.total,
+      enabled: pluginStats.enabled,
+      disabled: pluginStats.disabled
+    },
     uptime: process.uptime(),
     timestamp: new Date().toISOString()
   });
@@ -540,10 +572,127 @@ app.get('/qr', (req, res) => {
   }
 });
 
+// Plugin Management API Routes
+app.get('/plugins', async (req, res) => {
+  try {
+    const plugins = PluginManager.listPlugins();
+    const stats = PluginManager.getPluginStats();
+    
+    res.json({
+      success: true,
+      stats,
+      plugins
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.get('/plugins/stats', async (req, res) => {
+  try {
+    const stats = PluginManager.getPluginStats();
+    res.json({
+      success: true,
+      stats
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.get('/plugins/health', async (req, res) => {
+  try {
+    const health = await PluginManager.healthCheck();
+    res.json({
+      success: true,
+      ...health
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.post('/plugins/:filename/enable', async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const success = await PluginManager.enablePlugin(filename);
+    
+    res.json({
+      success,
+      message: success ? `Plugin ${filename} enabled` : `Failed to enable ${filename}`
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.post('/plugins/:filename/disable', async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const success = await PluginManager.disablePlugin(filename);
+    
+    res.json({
+      success,
+      message: success ? `Plugin ${filename} disabled` : `Failed to disable ${filename}`
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.post('/plugins/:filename/reload', async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const success = await PluginManager.reloadPlugin(filename);
+    
+    res.json({
+      success,
+      message: success ? `Plugin ${filename} reloaded` : `Failed to reload ${filename}`
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.post('/plugins/reload-all', async (req, res) => {
+  try {
+    await PluginManager.reloadAllPlugins();
+    
+    res.json({
+      success: true,
+      message: 'All plugins reloaded successfully'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Start Express server
 const server = app.listen(config.PORT, () => {
   console.log(chalk.blue(`🌐 Server running on port ${config.PORT}`));
   console.log(chalk.cyan(`🔗 Health check: http://localhost:${config.PORT}/health`));
+  console.log(chalk.cyan(`🔌 Plugin API: http://localhost:${config.PORT}/plugins`));
 });
 
 // Keep alive ping for cloud platforms
@@ -578,6 +727,35 @@ setInterval(() => {
   
 }, 2 * 60 * 1000); // Every 2 minutes
 
+// Plugin health monitoring
+setInterval(async () => {
+  try {
+    const health = await PluginManager.healthCheck();
+    
+    if (!health.healthy && health.issues.length > 0) {
+      console.log(chalk.yellow('⚠️ Plugin health issues detected:'));
+      health.issues.forEach(issue => {
+        console.log(chalk.yellow(`   • ${issue}`));
+      });
+      
+      // Optional: Send alert to owner about plugin issues
+      if (config.OWNER_NUMBER && sock?.user) {
+        try {
+          const alertMsg = `🚨 *Plugin Health Alert*\n\n⚠️ Issues detected:\n${health.issues.map(issue => `• ${issue}`).join('\n')}\n\n💡 Check /plugins endpoint for details`;
+          
+          await sock.sendMessage(config.OWNER_NUMBER + '@s.whatsapp.net', {
+            text: alertMsg
+          });
+        } catch (error) {
+          // Silent fail
+        }
+      }
+    }
+  } catch (error) {
+    console.error(chalk.red('❌ Plugin health check error:'), error.message);
+  }
+}, 30 * 60 * 1000); // Every 30 minutes
+
 // Graceful shutdown handling
 async function gracefulShutdown(signal) {
   console.log(chalk.yellow(`\n🛑 Received ${signal}. Shutting down gracefully...`));
@@ -586,8 +764,15 @@ async function gracefulShutdown(signal) {
     if (sock?.user) {
       // Send offline status
       if (config.OWNER_NUMBER) {
+        const pluginStats = PluginManager.getPluginStats();
         await sock.sendMessage(config.OWNER_NUMBER + '@s.whatsapp.net', {
-          text: `🤖 *${config.BOT_NAME} Shutting Down*\n\n⏰ Time: ${moment().format('DD/MM/YYYY HH:mm:ss')}\n📝 Reason: ${signal} received\n\n👋 Bot will restart automatically if configured.`
+          text: `🤖 *${config.BOT_NAME} Shutting Down*
+
+⏰ Time: ${moment().format('DD/MM/YYYY HH:mm:ss')}
+📝 Reason: ${signal} received
+🔌 Plugins: ${pluginStats.enabled}/${pluginStats.total} were active
+
+👋 Bot will restart automatically if configured.`
         });
       }
       
