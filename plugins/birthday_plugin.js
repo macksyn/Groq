@@ -2,8 +2,6 @@
 import moment from 'moment-timezone';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
 import { isAdmin, isOwner } from '../lib/helpers.js';
-import { config } from '../config/config.js';
-import { logger } from '../utils/logger.js';
 
 // Set Nigeria timezone
 moment.tz.setDefault('Africa/Lagos');
