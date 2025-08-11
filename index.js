@@ -524,8 +524,10 @@ function setupEventHandlers(socket) {
           }
           
           if (messageText && typeof messageText === 'string') {
-            messageText = messageText.replace(/\s+/g, ' ').trim();
-          }
+  messageText = messageText.replace(/\s+/g, ' ').trim();
+} else {
+  messageText = '';
+}
           
         } catch (textError) {
           console.log(chalk.yellow('⚠️ Text extraction error:', textError.message));
