@@ -535,11 +535,6 @@ try {
   messageText = '';
   continue;
 }
-          
-        } catch (textError) {
-          console.log(chalk.yellow('⚠️ Text extraction error:', textError.message));
-          continue;
-        }
       }
       
       if (typeof MessageHandler === 'function') {
