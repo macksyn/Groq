@@ -511,22 +511,29 @@ function setupEventHandlers(socket) {
         }
         
         let messageText = '';
-        
-        try {
-          if (message.message.conversation) {
-            messageText = message.message.conversation;
-          } else if (message.message.extendedTextMessage?.text) {
-            messageText = message.message.extendedTextMessage.text;
-          } else if (message.message.imageMessage?.caption) {
-            messageText = message.message.imageMessage.caption;
-          } else if (message.message.videoMessage?.caption) {
-            messageText = message.message.videoMessage.caption;
-          }
-          
-          if (messageText && typeof messageText === 'string') {
-  messageText = messageText.replace(/\s+/g, ' ').trim();
-} else {
+
+try {
+  if (message.message.conversation) {
+    messageText = message.message.conversation;
+  } else if (message.message.extendedTextMessage?.text) {
+    messageText = message.message.extendedTextMessage.text;
+  } else if (message.message.imageMessage?.caption) {
+    messageText = message.message.imageMessage.caption;
+  } else if (message.message.videoMessage?.caption) {
+    messageText = message.message.videoMessage.caption;
+  }
+  
+  // Safe text processing with null checks
+  if (messageText && typeof messageText === 'string') {
+    messageText = messageText.replace(/\s+/g, ' ').trim();
+  } else {
+    messageText = '';
+  }
+  
+} catch (textError) {
+  console.log(chalk.yellow('⚠️ Text extraction error:', textError.message));
   messageText = '';
+  continue;
 }
           
         } catch (textError) {
