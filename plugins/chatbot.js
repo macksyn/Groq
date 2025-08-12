@@ -239,33 +239,42 @@ function toggleAIMode(userId) {
 
 export default async function groqHandler(m, sock, config) {
   try {
-    // Check if message mentions the bot, is a reply to bot, or uses AI command
+    // Dynamic bot ID detection - collect all possible bot IDs
     const botNumber = sock.user.id.split(':')[0];
-    const botId = botNumber + '@s.whatsapp.net';
-    const botLid = botNumber + '@lid';
+    const primaryBotId = botNumber + '@s.whatsapp.net';
+    const primaryBotLid = botNumber + '@lid';
     
-    const isMentioned = (m.mentions && (
-      m.mentions.includes(botId) || 
-      m.mentions.includes(botLid) ||
-      m.mentions.includes(botNumber + '@s.whatsapp.net') ||
-      m.mentions.includes(botNumber + '@lid')
-    )) || false;
+    // Also check the full user ID in case it's different
+    const fullBotId = sock.user.id;
+    const fullBotFormatted = fullBotId.includes('@') ? fullBotId : fullBotId + '@s.whatsapp.net';
     
-    const isReply = (m.quoted && (
-      m.quoted.sender === botId || 
-      m.quoted.sender === botLid ||
-      m.quoted.sender === botNumber + '@s.whatsapp.net'
-    )) || false;
+    // Create array of all possible bot IDs to check
+    const allBotIds = [
+      primaryBotId,
+      primaryBotLid,
+      fullBotFormatted,
+      fullBotId,
+      botNumber + '@s.whatsapp.net',
+      botNumber + '@lid'
+    ].filter((id, index, array) => array.indexOf(id) === index); // Remove duplicates
+    
+    const isMentioned = (m.mentions && allBotIds.some(botId => m.mentions.includes(botId))) || false;
+    
+    const isReply = (m.quoted && allBotIds.some(botId => m.quoted.sender === botId)) || false;
     
     const isAIMode = isAIModeActive(m.sender);
     
-    // Debug logging for mention detection
+    // Enhanced debug logging
     if (m.mentions && m.mentions.length > 0) {
-      console.log(`🔍 Debug - Bot Number: ${botNumber}`);
-      console.log(`🔍 Debug - Bot ID: ${botId}`);
-      console.log(`🔍 Debug - Bot LID: ${botLid}`);
+      console.log(`🔍 Debug - All Bot IDs: ${JSON.stringify(allBotIds)}`);
       console.log(`🔍 Debug - Mentions found: ${JSON.stringify(m.mentions)}`);
       console.log(`🔍 Debug - Mention match: ${isMentioned}`);
+      
+      // Show which specific ID matched (if any)
+      const matchedId = allBotIds.find(botId => m.mentions.includes(botId));
+      if (matchedId) {
+        console.log(`🎯 Debug - Matched Bot ID: ${matchedId}`);
+      }
     }
     
     let isCommand = false;
