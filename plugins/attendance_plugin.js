@@ -5,7 +5,7 @@
 
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
-import { addMoney, getUserData, updateUserData, initUser, ecoSettings } from './economy_plugin.js';
+import { addMoney, getUserData, updateUserData, initUser, ecoSettings } from './economy_plugin (2).js';
 
 // Plugin information export
 export const info = {
@@ -375,14 +375,9 @@ function validateAttendanceForm(body, hasImg = false) {
 // =======================
 function updateStreak(userData, today) {
   const yesterday = moment.tz('Africa/Lagos').subtract(1, 'day').format('DD-MM-YYYY');
-  if (userData.lastAttendance === yesterday) {
-    userData.streak = (userData.streak || 0) + 1;
-  } else if (userData.lastAttendance !== today) {
-    userData.streak = 1;
-  }
-  if (userData.streak > (userData.longestStreak || 0)) {
-    userData.longestStreak = userData.streak;
-  }
+  const streak = (userData.lastAttendance === yesterday) ? (userData.streak || 0) + 1 : 1;
+  const longestStreak = Math.max(streak, (userData.longestStreak || 0));
+  return { streak, longestStreak };
 }
 
 // =======================
@@ -424,7 +419,7 @@ export async function onMessage(m, sock, config) {
         break;
       case 'testattendance':
       case 'testatt':
-        await handleTestAttendanceCommand(senderId, sock, m, config);
+        await handleTestAttendanceCommand(senderId, sock, m, config, args);
         break;
       case 'mybirthday':
       case 'birthday':
@@ -484,41 +479,42 @@ async function handleAutoAttendance(m, sock, config) {
     const validation = validateAttendanceForm(m.body, hasImg);
     
     if (validation.isValidForm) {
-      updateStreak(user, today);
+      const { streak, longestStreak } = updateStreak(user, today);
       
       let rewardAmount = attendanceSettings.rewardAmount;
-      if (validation.hasImage && attendanceSettings.requireImage) {
+      if (validation.hasImage && attendanceSettings.imageRewardBonus > 0) {
         rewardAmount += attendanceSettings.imageRewardBonus;
       }
-      if (attendanceSettings.enableStreakBonus && user.streak > 1) {
+      if (attendanceSettings.enableStreakBonus && streak > 1) {
         rewardAmount = Math.floor(rewardAmount * attendanceSettings.streakBonusMultiplier);
       }
       
       await addMoney(senderId, rewardAmount, 'Attendance reward');
       
-      user.lastAttendance = today;
-      user.totalAttendances = (user.totalAttendances || 0) + 1;
+      const updates = {
+        lastAttendance: today,
+        totalAttendances: (user.totalAttendances || 0) + 1,
+        streak,
+        longestStreak
+      };
       
-      // Save user data
-      await updateUserData(senderId, user);
+      await updateUserData(senderId, updates);
 
-      // Save attendance record for history
       const attendanceData = {
         date: today,
         extractedData: validation.extractedData,
         hasImage: validation.hasImage,
         reward: rewardAmount,
-        streak: user.streak,
+        streak: streak,
       };
       await saveAttendanceRecord(senderId, attendanceData);
       
-      // Save birthday if provided
       if (validation.extractedData.parsedBirthday) {
         await saveBirthdayData(senderId, validation.extractedData.name, validation.extractedData.parsedBirthday);
       }
       
       const imageStatus = getImageStatus(hasImg, attendanceSettings.requireImage);
-      const streakMessage = user.streak > 1 ? `🔥 *Streak: ${user.streak} days*!` : '';
+      const streakMessage = streak > 1 ? `🔥 *Streak: ${streak} days*!` : '';
       const updatedUser = await getUserData(senderId);
       
       const successMessage = `✅ *Attendance Recorded!*
