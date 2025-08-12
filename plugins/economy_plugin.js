@@ -127,9 +127,10 @@ const defaultSettings = {
     { name: 'Uber Driver', min: 200, max: 800 },
     { name: 'Food Delivery', min: 150, max: 600 },
     { name: 'Freelancer', min: 300, max: 1200 },
-    { name: 'Tutor', min: 250, max: 900 },
-    { name: 'Cleaner', min: 180, max: 500 },
-    { name: 'Mechanic', min: 400, max: 1000 }
+    { name: 'Teacher', min: 250, max: 900 },
+    { name: 'Cleaner', min: 180, max: 350 },
+    { name: 'Mechanic', min: 400, max: 1000 },
+    { name: 'Maid', min: 100, max: 300 }
   ],
   robCooldownMinutes: 60,
   robSuccessRate: 0.7,
