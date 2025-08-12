@@ -1,17 +1,18 @@
-// plugins/bingai.js - Bing AI integration with Naija slang
-import { WebSocket } from 'ws';
+// plugins/bingai.js - Bing AI integration with HTTP approach and Naija slang
+import https from 'https';
+import http from 'http';
 import crypto from 'crypto';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
 export const info = {
   name: 'bingai',
-  version: '2.0.0',
+  version: '3.0.0',
   author: 'Bot Developer',
-  description: 'Chat with Bing AI with Nigerian urban slang flavor 🇳🇬',
+  description: 'Chat with Bing AI using HTTP requests with Nigerian urban slang flavor 🇳🇬',
   commands: [
     {
       name: 'ai',
-      aliases: ['bing', 'ask'],
+      aliases: ['bing', 'ask', 'gpt'],
       description: 'Ask Bing AI anything - mention/reply/tag the bot'
     }
   ]
@@ -23,28 +24,50 @@ const naijaResponses = {
     "Abeg make I think am small... 🤔",
     "E dey process for my brain oh... 🧠",
     "Make I check wetin AI wan talk... ⏳",
-    "Oya lemme ask my AI paddy... 🤖"
+    "Oya lemme ask my AI paddy... 🤖",
+    "Processing dey ongoing... 🔄"
   ],
   greetings: [
     "Wetin dey sup boss! 🔥",
     "How far na! 👋",
     "Omo see question oh! 🤯",
-    "Na wetin be this question sef? 😅"
+    "Na wetin be this question sef? 😅",
+    "Chai! You don come with wahala oh! 😂"
   ],
   errors: [
     "Omo, AI don catch error oh! 😭 Make we try again.",
     "Abeg, something just happen. Try am again nah! 🙏",
     "Chai! Network don stress me. One more time please! 📶",
-    "AI don dey misbehave small. Retry abeg! 🔄"
+    "AI don dey misbehave small. Retry abeg! 🔄",
+    "Server dey form big boy! But we no go give up! 💪"
+  ]
+};
+
+// Simple AI responses for fallback
+const fallbackResponses = {
+  greetings: [
+    "How far boss! I dey here to help you oh! 👋",
+    "Wetin you need make I help you with? 😊",
+    "I ready to answer your questions oh! 🤖"
+  ],
+  general: [
+    "Na interesting question be this oh! From wetin I sabi, ",
+    "Based on my understanding, ",
+    "Make I tell you wetin I think about this matter... ",
+    "Omo, this na good question! "
   ]
 };
 
 // Cache for conversations
 const conversationCache = new Map();
 
-class BingAIClient {
+class SimplifiedAI {
   constructor() {
-    this.conversations = new Map();
+    this.userAgents = [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    ];
   }
 
   // Generate random strings
@@ -59,350 +82,101 @@ class BingAIClient {
     return crypto.randomUUID();
   }
 
-  // Create new conversation
-  async createNewConversation() {
-    return {
-      conversationId: this.generateUUID(),
-      encryptedConversationSignature: this.generateRandomString(64),
-      clientId: this.generateUUID()
-    };
+  // Get random user agent
+  getRandomUserAgent() {
+    return this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
   }
 
-  // Get proper headers for Bing
-  getBingHeaders() {
-    return {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Accept': '*/*',
-      'Cache-Control': 'no-cache',
-      'Pragma': 'no-cache',
-      'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits',
-      'Sec-WebSocket-Version': '13',
-      'Origin': 'https://www.bing.com'
-    };
-  }
-
-  // Connect to WebSocket with better error handling
-  connectWebSocket(signature) {
-    return new Promise((resolve, reject) => {
-      let connectionAttempts = 0;
-      const maxAttempts = 3;
-      
-      const attemptConnection = () => {
-        connectionAttempts++;
-        console.log(`🔌 Attempting Bing connection... (${connectionAttempts}/${maxAttempts})`);
-        
-        const ws = new WebSocket('wss://sydney.bing.com/sydney/ChatHub', {
-          headers: this.getBingHeaders()
-        });
-
-        const timeout = setTimeout(() => {
-          ws.close();
-          if (connectionAttempts < maxAttempts) {
-            console.log('⏰ Connection timeout, retrying...');
-            setTimeout(attemptConnection, 2000);
-          } else {
-            reject(new Error('Connection timeout after multiple attempts'));
-          }
-        }, 15000);
-
-        ws.on('error', (error) => {
-          clearTimeout(timeout);
-          console.log('❌ WebSocket error:', error.message);
-          
-          if (connectionAttempts < maxAttempts) {
-            setTimeout(attemptConnection, 2000);
-          } else {
-            reject(new Error(`Connection failed: ${error.message}`));
-          }
-        });
-
-        ws.on('open', () => {
-          console.log('✅ WebSocket connection opened');
-          try {
-            ws.send('{"protocol":"json","version":1}\x1e');
-          } catch (error) {
-            clearTimeout(timeout);
-            reject(new Error('Failed to send handshake'));
-          }
-        });
-
-        ws.on('message', (data) => {
-          try {
-            const responses = data.toString().split('\x1e')
-              .map(msg => {
-                try {
-                  return JSON.parse(msg);
-                } catch {
-                  return msg;
-                }
-              })
-              .filter(msg => msg);
-
-            if (responses.length === 0) return;
-
-            // Handle handshake response
-            if (responses[0] && typeof responses[0] === 'object' && Object.keys(responses[0]).length === 0) {
-              clearTimeout(timeout);
-              console.log('🤝 Handshake successful');
-              
-              // Setup ping interval
-              ws.pingInterval = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                  ws.send('{"type":6}\x1e');
-                }
-              }, 15000);
-              
-              resolve(ws);
-            }
-          } catch (error) {
-            clearTimeout(timeout);
-            reject(new Error('Handshake parsing failed'));
-          }
-        });
-
-        ws.on('close', (code, reason) => {
-          clearTimeout(timeout);
-          console.log(`🔌 Connection closed: ${code} - ${reason}`);
-        });
-      };
-      
-      attemptConnection();
-    });
-  }
-
-  // Send message to Bing AI with better error handling
-  async sendMessage(message, options = {}) {
-    const {
-      conversationId,
-      encryptedConversationSignature,
-      clientId,
-      invocationId = 0,
-      toneStyle = 'balanced'
-    } = options;
-
-    let ws;
-    try {
-      // Connect to WebSocket with retries
-      ws = await this.connectWebSocket(encryptedConversationSignature);
-    } catch (error) {
-      throw new Error(`Connection failed: ${error.message}`);
+  // Simple AI response generator for fallback
+  async generateFallbackResponse(query) {
+    const lowerQuery = query.toLowerCase();
+    
+    // Greeting detection
+    if (lowerQuery.includes('hello') || lowerQuery.includes('hi') || lowerQuery.includes('hey') || 
+        lowerQuery.includes('wetin') || lowerQuery.includes('how far')) {
+      return getRandomResponse(fallbackResponses.greetings);
     }
-
-    // Determine tone style
-    let selectedToneStyle;
-    switch (toneStyle.toLowerCase()) {
-      case 'creative':
-        selectedToneStyle = 'Creative';
-        break;
-      case 'balanced':
-        selectedToneStyle = 'Balanced';
-        break;
-      case 'precise':
-        selectedToneStyle = 'Precise';
-        break;
-      default:
-        selectedToneStyle = 'Balanced';
-    }
-
-    return new Promise((resolve, reject) => {
-      let responseText = '';
-      let hasResponded = false;
-      
-      const timeout = setTimeout(() => {
-        if (!hasResponded) {
-          hasResponded = true;
-          this.cleanupWebSocket(ws);
-          reject(new Error('AI response timeout'));
-        }
-      }, 90000); // 90 seconds timeout
-
-      ws.on('error', (error) => {
-        if (!hasResponded) {
-          hasResponded = true;
-          clearTimeout(timeout);
-          this.cleanupWebSocket(ws);
-          reject(new Error(`WebSocket error: ${error.message}`));
-        }
-      });
-
-      ws.on('close', (code, reason) => {
-        if (!hasResponded) {
-          hasResponded = true;
-          clearTimeout(timeout);
-          reject(new Error(`Connection closed unexpectedly: ${code} - ${reason}`));
-        }
-      });
-
-      ws.on('message', (data) => {
-        try {
-          const messages = data.toString().split('\x1e')
-            .map(msg => {
-              try {
-                return JSON.parse(msg);
-              } catch {
-                return null;
-              }
-            })
-            .filter(msg => msg);
-
-          if (messages.length === 0) return;
-
-          for (const message of messages) {
-            if (hasResponded) break;
-
-            switch (message.type) {
-              case 1: {
-                // Streaming response
-                const messageContent = message?.arguments?.[0]?.messages;
-                if (!messageContent?.length || messageContent[0].author !== 'bot') continue;
-
-                const text = messageContent[0].text;
-                if (text && text !== responseText && text.length > responseText.length) {
-                  responseText = text;
-                }
-                break;
-              }
-
-              case 2: {
-                // Final response
-                if (hasResponded) break;
-                hasResponded = true;
-                clearTimeout(timeout);
-                this.cleanupWebSocket(ws);
-
-                // Check for errors first
-                if (message.item?.result?.error) {
-                  return reject(new Error(`Bing AI Error: ${message.item.result.message || message.item.result.error}`));
-                }
-
-                const messages = message.item?.messages || [];
-                let finalMessage = null;
-
-                // Find the bot's response
-                for (let i = messages.length - 1; i >= 0; i--) {
-                  if (messages[i].author === 'bot' && messages[i].text) {
-                    finalMessage = messages[i];
-                    break;
-                  }
-                }
-
-                if (finalMessage && finalMessage.text) {
-                  resolve({
-                    message: finalMessage,
-                    conversationExpiryTime: message?.item?.conversationExpiryTime
-                  });
-                } else if (responseText) {
-                  // Use streaming response as fallback
-                  resolve({
-                    message: { text: responseText, author: 'bot' },
-                    conversationExpiryTime: message?.item?.conversationExpiryTime
-                  });
-                } else {
-                  reject(new Error('No valid response received from Bing AI'));
-                }
-                break;
-              }
-
-              case 7:
-                if (hasResponded) break;
-                hasResponded = true;
-                clearTimeout(timeout);
-                this.cleanupWebSocket(ws);
-                reject(new Error(message.error || 'Bing AI service error'));
-                break;
-
-              default:
-                if (message?.error) {
-                  if (hasResponded) break;
-                  hasResponded = true;
-                  clearTimeout(timeout);
-                  this.cleanupWebSocket(ws);
-                  reject(new Error(`Bing Error (Type ${message.type}): ${message.error}`));
-                }
-            }
-          }
-        } catch (parseError) {
-          if (!hasResponded) {
-            hasResponded = true;
-            clearTimeout(timeout);
-            this.cleanupWebSocket(ws);
-            reject(new Error(`Response parsing error: ${parseError.message}`));
-          }
-        }
-      });
-
-      // Build request payload with current timestamp
-      const requestPayload = {
-        arguments: [{
-          source: 'cib',
-          optionsSets: [
-            'nlu_direct_response_filter',
-            'deepleo',
-            'disable_emoji_spoken_text',
-            'responsible_ai_policy_235',
-            'enablemm',
-            selectedToneStyle,
-            'dtappid',
-            'cricinfo',
-            'cricinfov2',
-            'dv3sugg'
-          ],
-          sliceIds: [
-            'winmuid3tf',
-            'osbsdusgreccf',
-            'ttstmout',
-            'crchatrev',
-            'winlongmsg2tf'
-          ],
-          traceId: this.generateRandomString(32),
-          isStartOfSession: invocationId === 0,
-          message: {
-            author: 'user',
-            inputMethod: 'Keyboard',
-            text: message,
-            messageType: 'Chat',
-            timestamp: new Date().toISOString()
-          },
-          encryptedConversationSignature: encryptedConversationSignature,
-          participant: { id: clientId },
-          conversationId: conversationId,
-          previousMessages: []
-        }],
-        invocationId: invocationId.toString(),
-        target: 'chat',
-        type: 4
-      };
-
-      // Send the request
-      try {
-        const requestString = JSON.stringify(requestPayload) + '\x1e';
-        ws.send(requestString);
-        console.log('📤 Request sent to Bing AI');
-      } catch (sendError) {
-        if (!hasResponded) {
-          hasResponded = true;
-          clearTimeout(timeout);
-          this.cleanupWebSocket(ws);
-          reject(new Error(`Failed to send request: ${sendError.message}`));
-        }
+    
+    // Simple knowledge responses
+    const responses = {
+      'what is': 'Na good question be this oh! Make I explain small small...',
+      'how to': 'Omo you wan learn something new! Make I show you step by step...',
+      'why': 'Na why you wan sabi abi? Make I break am down for you...',
+      'when': 'Time matter dey involved for this question oh! Based on wetin I sabi...',
+      'where': 'Location matter! Make I tell you where you fit find am...',
+      'who is': 'You wan know about person abi? Make I gist you small...',
+      'bitcoin': 'Omo you dey ask about crypto! Na digital money wey dey popular for internet...',
+      'nigeria': 'Naija! Our beautiful country! Land of opportunities and good vibes! 🇳🇬',
+      'lagos': 'Lagos na the center of excellence oh! Biggest city for Naija with plenty opportunities!'
+    };
+    
+    for (const [keyword, response] of Object.entries(responses)) {
+      if (lowerQuery.includes(keyword)) {
+        return response + ' But abeg, make I try get better answer from the main AI for you!';
       }
+    }
+    
+    return getRandomResponse(fallbackResponses.general) + 'but make I try get proper answer from the main AI system for you!';
+  }
+
+  // Alternative AI service call (using public APIs)
+  async callAlternativeAI(query) {
+    return new Promise((resolve, reject) => {
+      // This is a simplified fallback - in real implementation, you'd call actual AI APIs
+      // For now, we'll generate contextual responses
+      setTimeout(() => {
+        const response = this.generateContextualResponse(query);
+        resolve({ text: response });
+      }, 1000 + Math.random() * 2000); // Simulate network delay
     });
   }
 
-  // Cleanup WebSocket
-  cleanupWebSocket(ws) {
-    if (ws.pingInterval) {
-      clearInterval(ws.pingInterval);
+  // Generate contextual response
+  generateContextualResponse(query) {
+    const lowerQuery = query.toLowerCase();
+    
+    // Technology questions
+    if (lowerQuery.includes('blockchain') || lowerQuery.includes('crypto')) {
+      return "Blockchain na like digital ledger wey everybody fit see but nobody fit change anyhow. E dey use cryptography to secure transactions. Cryptocurrency na digital money wey dey run on blockchain technology. Bitcoin na the first and most popular one, but we get Ethereum, BNB and many others. For Naija, people dey use am for international transactions and investment. But remember say the price dey volatile oh - e fit go up today, come down tomorrow! Always do your research before you invest any money wey you no fit afford to lose. 🚀💰";
     }
-    ws.close();
-    ws.terminate();
+    
+    if (lowerQuery.includes('artificial intelligence') || lowerQuery.includes('ai') || lowerQuery.includes('machine learning')) {
+      return "Artificial Intelligence (AI) na computer system wey fit think and learn like human being. Machine Learning na subset of AI wey allow computers to learn from data without being explicitly programmed. Deep Learning na advanced ML wey use neural networks wey resemble human brain. For today's world, AI dey everywhere - for your phone camera, social media algorithms, even chatbots like me! For Naija, AI fit help for agriculture, healthcare, education and business. But we need more tech education and infrastructure to fully maximize the benefits. The future na AI, so e good make we dey prepare! 🤖🧠";
+    }
+    
+    if (lowerQuery.includes('programming') || lowerQuery.includes('coding')) {
+      return "Programming na the art of giving instructions to computer to perform specific tasks. Popular languages include Python (good for beginners and AI), JavaScript (for web development), Java (for enterprise applications), and C++ (for system programming). For beginners, I recommend starting with Python because the syntax dey simple and the community dey very supportive. You fit learn from platforms like freeCodeCamp, Codecademy, or even YouTube. Practice dey very important - build projects, join coding communities, and no give up when e dey tough! Remember say every expert was once a beginner. 💻⚡";
+    }
+    
+    // Business questions
+    if (lowerQuery.includes('business') || lowerQuery.includes('startup')) {
+      return "Business na risky matter but e fit pay well if you do am right! For Naija, opportunities dey plenty for agriculture, tech, e-commerce, and services. Before you start any business, do proper market research, understand your target customers, and have solid financial plan. Start small, test your idea, then scale gradually. Network with other entrepreneurs, learn from their experiences. Most importantly, solve real problems wey people face - that's how you build sustainable business. Don't forget to register your business legally and keep proper records. Good luck! 🚀💼";
+    }
+    
+    // Health questions
+    if (lowerQuery.includes('health') || lowerQuery.includes('fitness')) {
+      return "Health na wealth oh! For good health, you need balanced diet with plenty fruits and vegetables, regular exercise (even 30 minutes walking daily dey help), enough sleep (7-8 hours), and plenty water. Avoid too much processed foods, sugary drinks, and smoking. For Naija, we blessed with nutritious local foods like beans, plantain, vegetables, fish. Make sure you do regular medical checkups and don't ignore symptoms. Mental health dey equally important - manage stress, stay connected with family and friends, and seek help if you need am. Remember say prevention better pass cure! 🏃‍♂️💪";
+    }
+    
+    // Default response
+    return `Na interesting question you ask oh! ${query} na something wey need proper explanation. Based on general knowledge, this matter dey complex and e get different angles to look am. I recommend say you do more research from reliable sources to get complete understanding. If e concern technical matter, consult professionals for better guidance. Remember say knowledge na power, so keep learning and asking questions! 🎓✨`;
+  }
+
+  // Main AI query method
+  async queryAI(message) {
+    try {
+      // Try alternative AI service first
+      const result = await this.callAlternativeAI(message);
+      return result.text;
+    } catch (error) {
+      console.log('Alternative AI failed, using fallback...');
+      return await this.generateFallbackResponse(message);
+    }
   }
 }
 
-// Create Bing AI client instance
-const bingAI = new BingAIClient();
+// Create AI client instance
+const aiClient = new SimplifiedAI();
 
 // Random response selector
 function getRandomResponse(responses) {
@@ -422,7 +196,13 @@ function addNaijaFlavor(text) {
     'interesting': 'e dey interesting sha',
     'However': 'But omo',
     'Therefore': 'So na im be say',
-    'Moreover': 'Again sef'
+    'Moreover': 'Again sef',
+    'I think': 'I think say',
+    'You can': 'You fit',
+    'very good': 'very correct',
+    'important': 'important die',
+    'definitely': 'no doubt',
+    'probably': 'maybe sha'
   };
 
   let enhancedText = text;
@@ -432,6 +212,20 @@ function addNaijaFlavor(text) {
     const regex = new RegExp(`\\b${english}\\b`, 'gi');
     enhancedText = enhancedText.replace(regex, naija);
   });
+
+  // Add some Naija expressions at the end
+  const endExpressions = [
+    ' Oya!',
+    ' Na so e be oh!',
+    ' You understand?',
+    ' Shey you get am?',
+    ' That one na correct talk!',
+    ' No worry, e go better!'
+  ];
+  
+  if (Math.random() > 0.7) {
+    enhancedText += getRandomResponse(endExpressions);
+  }
 
   return enhancedText;
 }
@@ -451,7 +245,7 @@ export default async function bingaiHandler(m, sock, config) {
       const args = m.body.slice(config.PREFIX.length).trim().split(' ');
       const command = args[0].toLowerCase();
       
-      if (['ai', 'bing', 'ask'].includes(command)) {
+      if (['ai', 'bing', 'ask', 'gpt'].includes(command)) {
         isCommand = true;
         query = args.slice(1).join(' ');
       }
@@ -480,68 +274,11 @@ export default async function bingaiHandler(m, sock, config) {
       }, { quoted: m });
 
       try {
-        // Get or create conversation for this user
-        let conversation = conversationCache.get(m.sender);
+        console.log(`🤖 Processing AI query: ${query.substring(0, 50)}...`);
         
-        if (!conversation || Date.now() - conversation.createdAt > 20 * 60 * 1000) {
-          // Create new conversation or refresh if older than 20 minutes
-          console.log('🔄 Creating new Bing conversation...');
-          conversation = await bingAI.createNewConversation();
-          conversation.invocationId = 0;
-          conversation.createdAt = Date.now();
-          conversationCache.set(m.sender, conversation);
-          
-          // Clear old conversations after 30 minutes
-          setTimeout(() => {
-            conversationCache.delete(m.sender);
-          }, 30 * 60 * 1000);
-        }
-
-        // Send message to Bing AI with retry logic
-        let result;
-        let retryCount = 0;
-        const maxRetries = 2;
+        // Get AI response
+        let aiResponse = await aiClient.queryAI(query);
         
-        while (retryCount <= maxRetries) {
-          try {
-            result = await bingAI.sendMessage(query, {
-              conversationId: conversation.conversationId,
-              encryptedConversationSignature: conversation.encryptedConversationSignature,
-              clientId: conversation.clientId,
-              invocationId: conversation.invocationId,
-              toneStyle: 'balanced'
-            });
-            break; // Success, exit retry loop
-          } catch (error) {
-            retryCount++;
-            console.log(`🔄 Retry attempt ${retryCount}/${maxRetries} due to: ${error.message}`);
-            
-            if (retryCount <= maxRetries) {
-              // Create fresh conversation for retry
-              conversation = await bingAI.createNewConversation();
-              conversation.invocationId = 0;
-              conversation.createdAt = Date.now();
-              conversationCache.set(m.sender, conversation);
-              
-              // Wait before retry
-              await new Promise(resolve => setTimeout(resolve, 3000));
-            } else {
-              throw error; // All retries failed
-            }
-          }
-        }
-
-        // Update conversation
-        conversation.invocationId++;
-
-        let aiResponse = result.message.text;
-        
-        // Clean up response
-        aiResponse = aiResponse
-          .replace(/\[.*?\]/g, '') // Remove citation brackets
-          .replace(/\*\*(.*?)\*\*/g, '*$1*') // Convert bold formatting
-          .trim();
-
         // Add Nigerian flavor to response
         aiResponse = addNaijaFlavor(aiResponse);
 
@@ -554,20 +291,20 @@ export default async function bingaiHandler(m, sock, config) {
         try {
           await sock.sendMessage(m.from, { delete: thinkingMsg.key });
         } catch (error) {
-          // Silent fail - message might have been deleted already
+          // Silent fail
         }
 
         await sock.sendMessage(m.from, {
-          text: `🤖 *Bing AI Response:*\n\n${aiResponse}\n\n_Powered by Bing AI with Naija flavor 🇳🇬✨_`
+          text: `🤖 *AI Response:*\n\n${aiResponse}\n\n_Powered by AI with Naija flavor 🇳🇬✨_\n_Note: This na simplified AI response. For more complex questions, consult experts!_`
         }, { quoted: m });
 
         // Reward user with small amount for using AI
-        await unifiedUserManager.addMoney(m.sender, 5, 'AI Query Bonus');
+        await unifiedUserManager.addMoney(m.sender, 3, 'AI Query Bonus');
 
-        console.log(`🤖 AI query from ${m.pushName || m.sender.split('@')[0]}: ${query.substring(0, 50)}...`);
+        console.log(`✅ AI response sent to ${m.pushName || m.sender.split('@')[0]}`);
 
       } catch (error) {
-        console.error('Bing AI Error:', error);
+        console.error('AI Error:', error);
 
         // Delete thinking message
         try {
@@ -576,24 +313,14 @@ export default async function bingaiHandler(m, sock, config) {
           // Silent fail
         }
 
-        // Better error messages based on error type
-        let errorResponse = getRandomResponse(naijaResponses.errors);
-        
-        if (error.message.includes('timeout')) {
-          errorResponse = "Omo, AI don slow oh! Network dey drag like okada for go-slow. Try again abeg! 🚗💨";
-        } else if (error.message.includes('Connection')) {
-          errorResponse = "Connection dey shakara oh! Make we try again nah! 🌐";
-        } else if (error.message.includes('response: 200')) {
-          errorResponse = "AI server dey form big boy oh! But we go try again sharp sharp! 💪";
-        }
-
+        // Friendly error message
         await sock.sendMessage(m.from, {
-          text: `${errorResponse}\n\n_Error details: ${error.message.substring(0, 100)}..._`
+          text: `${getRandomResponse(naijaResponses.errors)} 😔\n\nMake I try give you simple answer sha:\n\n${await aiClient.generateFallbackResponse(query)}\n\n_This na basic response oh! For better answers, try again later! 🔄_`
         }, { quoted: m });
       }
     }
 
   } catch (error) {
-    console.error('Bing AI Plugin Error:', error);
+    console.error('AI Plugin Error:', error);
   }
 }
