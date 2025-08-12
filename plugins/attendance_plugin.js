@@ -8,7 +8,7 @@ export const info = {
   name: 'Attendance System',
   version: '2.0.0',
   author: 'Bot Developer',
-  description: 'Advanced attendance system with form validation, streaks, birthday tracking and MongoDB persistence',
+  description: 'Advanced attendance system with form validation, streaks, and MongoDB persistence',
   commands: [
     {
       name: 'attendance',
@@ -24,11 +24,6 @@ export const info = {
       name: 'testattendance',
       aliases: ['testatt'],
       description: 'Test attendance form validation'
-    },
-    {
-      name: 'mybirthday',
-      aliases: ['birthday'],
-      description: 'View your birthday information'
     }
   ]
 };
@@ -279,64 +274,6 @@ function formatBirthday(day, month, year, originalText) {
 // 🗄️ DATABASE FUNCTIONS
 // =======================
 
-// Initialize user in database
-async function initUserLocal(userId) {
-  try {
-    const existingUser = await db.collection(COLLECTIONS.USERS).findOne({ userId });
-    
-    if (!existingUser) {
-      const newUser = {
-        userId,
-        lastAttendance: null,
-        totalAttendances: 0,
-        streak: 0,
-        longestStreak: 0,
-        balance: 0,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-      
-      await db.collection(COLLECTIONS.USERS).insertOne(newUser);
-      return newUser;
-    } else {
-      // Ensure all fields exist for backward compatibility
-      const updates = {};
-      let needsUpdate = false;
-      
-      const requiredFields = {
-        totalAttendances: 0,
-        streak: 0,
-        longestStreak: 0,
-        balance: 0
-      };
-      
-      for (const [field, defaultValue] of Object.entries(requiredFields)) {
-        if (existingUser[field] === undefined) {
-          updates[field] = defaultValue;
-          needsUpdate = true;
-        }
-      }
-      
-      if (!existingUser.updatedAt) {
-        updates.updatedAt = new Date();
-        needsUpdate = true;
-      }
-      
-      if (needsUpdate) {
-        await db.collection(COLLECTIONS.USERS).updateOne(
-          { userId },
-          { $set: updates }
-        );
-      }
-      
-      return existingUser;
-    }
-  } catch (error) {
-    console.error('Error initializing user locally:', error);
-    throw error;
-  }
-}
-
 // Get user data from unified manager
 async function getUserData(userId) {
   try {
@@ -377,16 +314,83 @@ async function addMoney(userId, amount, reason = 'Attendance reward') {
   }
 }
 
-// Save birthday data to database
+// Save birthday data to database (for birthday plugin to use)
 async function saveBirthdayData(userId, name, birthdayData) {
   try {
     if (!birthdayData) return false;
 
+    // Check if user already has birthday data
+    const existingRecord = await db.collection(COLLECTIONS.BIRTHDAYS).findOne({ userId });
+    
+    let updateType = 'new';
+    let finalName = name;
+    
+    if (existingRecord) {
+      // User already has birthday data
+      const existingBirthday = existingRecord.birthday;
+      const newBirthday = birthdayData;
+      
+      // Check if the birthday data is the same (same month and day)
+      const isSameBirthday = existingBirthday.month === newBirthday.month && 
+                            existingBirthday.day === newBirthday.day;
+      
+      if (isSameBirthday) {
+        // Same birthday - just update the name if it's more complete
+        updateType = 'name_update';
+        
+        // Keep the more complete name (longer or has more info)
+        if (name.length > existingRecord.name.length || 
+            (name.includes(' ') && !existingRecord.name.includes(' '))) {
+          finalName = name;
+          console.log(`📝 Updating name from "${existingRecord.name}" to "${name}"`);
+        } else {
+          finalName = existingRecord.name;
+          console.log(`📝 Keeping existing name "${existingRecord.name}"`);
+        }
+        
+        // Keep the year if the existing record has it and new one doesn't
+        if (existingBirthday.year && !newBirthday.year) {
+          birthdayData.year = existingBirthday.year;
+          birthdayData.age = existingBirthday.age;
+          birthdayData.displayDate = existingBirthday.displayDate;
+        }
+      } else {
+        // Different birthday - this might be an error or correction
+        updateType = 'birthday_change';
+        console.log(`⚠️ Birthday change detected for ${existingRecord.name}:`);
+        console.log(`   Old: ${existingBirthday.displayDate}`);
+        console.log(`   New: ${newBirthday.displayDate}`);
+        
+        // Use the new data but keep a record of the change
+        finalName = name;
+      }
+    } else {
+      // New user birthday record
+      updateType = 'new';
+      console.log(`🆕 New birthday record for ${name}`);
+    }
+
     const birthdayRecord = {
       userId,
-      name,
+      name: finalName,
       birthday: birthdayData,
-      lastUpdated: new Date()
+      lastUpdated: new Date(),
+      updateHistory: existingRecord ? [
+        ...(existingRecord.updateHistory || []),
+        {
+          type: updateType,
+          previousName: existingRecord?.name,
+          previousBirthday: existingRecord?.birthday,
+          newName: name,
+          newBirthday: birthdayData,
+          timestamp: new Date()
+        }
+      ] : [{
+        type: 'initial',
+        name: name,
+        birthday: birthdayData,
+        timestamp: new Date()
+      }]
     };
 
     await db.collection(COLLECTIONS.BIRTHDAYS).replaceOne(
@@ -396,33 +400,30 @@ async function saveBirthdayData(userId, name, birthdayData) {
     );
 
     // Also save to user data
-    await updateUserData(userId, { birthdayData });
+    await updateUserData(userId, { 
+      birthdayData,
+      displayName: finalName // Store the most complete name
+    });
 
-    console.log(`✅ Birthday saved for ${name}: ${birthdayData.displayDate}`);
-    return true;
+    let logMessage = '';
+    switch (updateType) {
+      case 'new':
+        logMessage = `✅ Birthday saved for ${finalName}: ${birthdayData.displayDate}`;
+        break;
+      case 'name_update':
+        logMessage = `✅ Birthday updated for ${finalName}: ${birthdayData.displayDate}`;
+        break;
+      case 'birthday_change':
+        logMessage = `⚠️ Birthday changed for ${finalName}: ${birthdayData.displayDate}`;
+        break;
+    }
+    
+    console.log(logMessage);
+    return { success: true, updateType, finalName };
+    
   } catch (error) {
     console.error('Error saving birthday data:', error);
-    return false;
-  }
-}
-
-// Get birthday data from database
-async function getBirthdayData(userId) {
-  try {
-    return await db.collection(COLLECTIONS.BIRTHDAYS).findOne({ userId });
-  } catch (error) {
-    console.error('Error getting birthday data:', error);
-    return null;
-  }
-}
-
-// Get all birthdays from database
-async function getAllBirthdays() {
-  try {
-    return await db.collection(COLLECTIONS.BIRTHDAYS).find({}).toArray();
-  } catch (error) {
-    console.error('Error getting all birthdays:', error);
-    return [];
+    return { success: false, error: error.message };
   }
 }
 
@@ -707,17 +708,28 @@ async function handleAutoAttendance(m, sock, config) {
       longestStreak: userData.longestStreak
     });
     
-    // Save birthday data if extracted successfully
+    // Save birthday data if extracted successfully (for birthday plugin to use)
     let birthdayMessage = '';
     if (validation.extractedData.parsedBirthday && validation.extractedData.name) {
-      const birthdaySaved = await saveBirthdayData(
+      const birthdayResult = await saveBirthdayData(
         senderId, 
         validation.extractedData.name, 
         validation.extractedData.parsedBirthday
       );
       
-      if (birthdaySaved) {
-        birthdayMessage = `\n🎂 Birthday saved: ${validation.extractedData.parsedBirthday.displayDate}`;
+      if (birthdayResult.success) {
+        switch (birthdayResult.updateType) {
+          case 'new':
+            birthdayMessage = `\n🎂 Birthday saved: ${validation.extractedData.parsedBirthday.displayDate}`;
+            break;
+          case 'name_update':
+            birthdayMessage = `\n🎂 Birthday confirmed: ${validation.extractedData.parsedBirthday.displayDate}`;
+            break;
+          case 'birthday_change':
+            birthdayMessage = `\n🎂 Birthday updated: ${validation.extractedData.parsedBirthday.displayDate}`;
+            break;
+        }
+        
         if (validation.extractedData.parsedBirthday.age !== undefined) {
           birthdayMessage += ` (Age: ${validation.extractedData.parsedBirthday.age})`;
         }
@@ -841,11 +853,6 @@ export default async function attendanceHandler(m, sock, config) {
       case 'testatt':
         await handleTest({ m, sock, config, senderId, from, reply }, args.slice(1));
         break;
-        
-      case 'mybirthday':
-      case 'birthday':
-        await handleMyBirthday({ m, sock, config, senderId, from, reply });
-        break;
     }
   } catch (error) {
     console.error('❌ Attendance plugin error:', error);
@@ -867,12 +874,6 @@ async function handleSubCommand(subCommand, args, context) {
     case 'testbirthday':
       await handleTestBirthday(context, args);
       break;
-    case 'mybirthday':
-      await handleMyBirthday(context);
-      break;
-    case 'allbirthdays':
-      await handleAllBirthdays(context);
-      break;
     case 'records':
       await handleAttendanceRecords(context, args);
       break;
@@ -889,13 +890,11 @@ async function showAttendanceMenu(reply, prefix) {
   const menuText = `📋 *ATTENDANCE SYSTEM* 📋\n\n` +
                   `📊 *User Commands:*\n` +
                   `• *stats* - View your attendance stats\n` +
-                  `• *mybirthday* - View your birthday info\n` +
                   `• *test [form]* - Test attendance form\n` +
                   `• *testbirthday [date]* - Test birthday parsing\n` +
                   `• *records* - View your attendance history\n\n` +
                   `👑 *Admin Commands:*\n` +
-                  `• *settings* - View/modify settings\n` +
-                  `• *allbirthdays* - View all member birthdays\n\n` +
+                  `• *settings* - View/modify settings\n\n` +
                   `🤖 *Auto-Detection:*\n` +
                   `Just send your GIST HQ attendance form and it will be automatically processed!\n\n` +
                   `💡 *Usage:* ${prefix}attendance [command]`;
@@ -910,7 +909,6 @@ async function handleStats(context) {
   try {
     await initUser(senderId);
     const userData = await getUserData(senderId);
-    const birthdayData = await getBirthdayData(senderId);
     const today = getCurrentDate();
     
     let statsMessage = `📊 *YOUR ATTENDANCE STATS* 📊\n\n`;
@@ -921,16 +919,6 @@ async function handleStats(context) {
     statsMessage += `✅ Today's status: ${userData.lastAttendance === today ? 'Marked ✅' : 'Not marked ❌'}\n`;
     statsMessage += `💰 Current balance: ₦${(userData.balance || 0).toLocaleString()}\n`;
     statsMessage += `📸 Image required: ${attendanceSettings.requireImage ? 'Yes' : 'No'}\n`;
-    
-    if (birthdayData) {
-      statsMessage += `🎂 Birthday: ${birthdayData.birthday.displayDate}`;
-      if (birthdayData.birthday.age !== undefined) {
-        statsMessage += ` (Age: ${birthdayData.birthday.age})`;
-      }
-      statsMessage += '\n';
-    } else {
-      statsMessage += `🎂 Birthday: Not recorded\n`;
-    }
     
     const streak = userData.streak || 0;
     if (streak >= 7) {
@@ -1123,6 +1111,7 @@ async function handleTest(context, args) {
           if (birthday.age !== undefined) {
             result += `🎈 Age: ${birthday.age} years old\n`;
           }
+          result += `💾 *This data would be saved for the birthday plugin*\n`;
         } else {
           result += `❌ Could not parse birthday\n`;
           result += `💡 Try formats like: Dec 12, 1995 or 12/12/1995\n`;
@@ -1143,7 +1132,7 @@ async function handleTest(context, args) {
         result += `\n💰 *Potential reward: ₦${potentialReward.toLocaleString()}*`;
         
         if (validation.extractedData.parsedBirthday) {
-          result += `\n🎂 *Birthday will be saved: ${validation.extractedData.parsedBirthday.displayDate}*`;
+          result += `\n🎂 *Birthday will be saved/updated for user (prevents duplicates)*`;
         }
       }
     } else {
@@ -1186,7 +1175,7 @@ async function handleTestBirthday(context, args) {
       }
       result += `🔍 Search Key: ${parsed.searchKey}\n`;
       result += `⏰ Parsed At: ${new Date(parsed.parsedAt).toLocaleString()}\n\n`;
-      result += `💾 *This data would be saved to the birthday database.*`;
+      result += `💾 *This data would be saved for the birthday plugin to use.*`;
     } else {
       result += `❌ *Could not parse the date*\n\n`;
       result += `💡 *Supported Formats:*\n`;
@@ -1203,161 +1192,6 @@ async function handleTestBirthday(context, args) {
   } catch (error) {
     await reply('❌ *Error testing birthday parser. Please try again.*');
     console.error('Test birthday error:', error);
-  }
-}
-
-// Handle my birthday command
-async function handleMyBirthday(context) {
-  const { reply, senderId } = context;
-  
-  try {
-    const birthdayData = await getBirthdayData(senderId);
-    
-    if (!birthdayData) {
-      await reply(`🎂 *No Birthday Recorded*\n\nYour birthday hasn't been saved yet. It will be automatically saved when you submit your next attendance form with a valid D.O.B field.\n\n💡 *Make sure to fill your D.O.B correctly in the attendance form!*`);
-      return;
-    }
-    
-    const birthday = birthdayData.birthday;
-    let message = `🎂 *Your Birthday Information* 🎂\n\n`;
-    message += `👤 Name: ${birthdayData.name}\n`;
-    message += `📅 Birthday: ${birthday.displayDate}\n`;
-    message += `📊 Day: ${birthday.day}\n`;
-    message += `📊 Month: ${birthday.monthName}\n`;
-    
-    if (birthday.year) {
-      message += `📊 Year: ${birthday.year}\n`;
-    }
-    
-    if (birthday.age !== undefined) {
-      message += `🎈 Current Age: ${birthday.age} years old\n`;
-    }
-    
-    message += `💾 Last Updated: ${new Date(birthdayData.lastUpdated).toLocaleString()}\n`;
-    message += `📝 Original Text: "${birthday.originalText}"\n\n`;
-    
-    // Calculate days until next birthday
-    const today = new Date();
-    const thisYear = today.getFullYear();
-    const nextBirthday = new Date(thisYear, birthday.month - 1, birthday.day);
-    
-    if (nextBirthday < today) {
-      nextBirthday.setFullYear(thisYear + 1);
-    }
-    
-    const daysUntil = Math.ceil((nextBirthday - today) / (1000 * 60 * 60 * 24));
-    
-    if (daysUntil === 0) {
-      message += `🎉 *IT'S YOUR BIRTHDAY TODAY!* 🎉\n`;
-      message += `🎊 *HAPPY BIRTHDAY!* 🎊`;
-    } else if (daysUntil === 1) {
-      message += `🎂 *Your birthday is TOMORROW!* 🎂`;
-    } else if (daysUntil <= 7) {
-      message += `🗓 *Your birthday is in ${daysUntil} days!*`;
-    } else {
-      message += `📅 Days until next birthday: ${daysUntil}`;
-    }
-    
-    await reply(message);
-  } catch (error) {
-    await reply('❌ *Error loading birthday information. Please try again.*');
-    console.error('My birthday error:', error);
-  }
-}
-
-// Handle all birthdays command (admin only)
-async function handleAllBirthdays(context) {
-  const { reply, senderId, sock, m } = context;
-  
-  const isAdminUser = await isAuthorized(sock, m.key.remoteJid, senderId);
-  if (!isAdminUser) {
-    await reply('🚫 Only admins can view all birthdays.');
-    return;
-  }
-  
-  try {
-    const allBirthdays = await getAllBirthdays();
-    
-    if (allBirthdays.length === 0) {
-      await reply(`🎂 *No Birthdays Recorded*\n\nNo member birthdays have been saved yet. Birthdays are automatically recorded when members submit attendance forms with valid D.O.B information.`);
-      return;
-    }
-    
-    // Sort birthdays by month and day
-    allBirthdays.sort((a, b) => {
-      if (a.birthday.month !== b.birthday.month) {
-        return a.birthday.month - b.birthday.month;
-      }
-      return a.birthday.day - b.birthday.day;
-    });
-    
-    let messageText = `🎂 *ALL MEMBER BIRTHDAYS* 🎂\n\n`;
-    messageText += `📊 Total Members: ${allBirthdays.length}\n\n`;
-    
-    // Group by month
-    let currentMonth = '';
-    allBirthdays.forEach((entry) => {
-      const birthday = entry.birthday;
-      
-      if (currentMonth !== birthday.monthName) {
-        currentMonth = birthday.monthName;
-        messageText += `\n📅 *${currentMonth}*\n`;
-      }
-      
-      messageText += `• ${entry.name} - ${birthday.monthName} ${birthday.day}`;
-      
-      if (birthday.age !== undefined) {
-        messageText += ` (${birthday.age} yrs)`;
-      }
-      
-      messageText += '\n';
-    });
-    
-    // Find upcoming birthdays (next 30 days)
-    const today = new Date();
-    const upcomingBirthdays = [];
-    
-    allBirthdays.forEach(entry => {
-      const birthday = entry.birthday;
-      const thisYear = today.getFullYear();
-      const nextBirthday = new Date(thisYear, birthday.month - 1, birthday.day);
-      
-      if (nextBirthday < today) {
-        nextBirthday.setFullYear(thisYear + 1);
-      }
-      
-      const daysUntil = Math.ceil((nextBirthday - today) / (1000 * 60 * 60 * 24));
-      
-      if (daysUntil <= 30) {
-        upcomingBirthdays.push({
-          name: entry.name,
-          birthday: birthday,
-          daysUntil: daysUntil
-        });
-      }
-    });
-    
-    if (upcomingBirthdays.length > 0) {
-      upcomingBirthdays.sort((a, b) => a.daysUntil - b.daysUntil);
-      
-      messageText += `\n\n🎉 *UPCOMING BIRTHDAYS (Next 30 Days)*\n`;
-      upcomingBirthdays.forEach(upcoming => {
-        if (upcoming.daysUntil === 0) {
-          messageText += `🎊 ${upcoming.name} - TODAY! 🎊\n`;
-        } else if (upcoming.daysUntil === 1) {
-          messageText += `🎂 ${upcoming.name} - Tomorrow\n`;
-        } else {
-          messageText += `📅 ${upcoming.name} - ${upcoming.daysUntil} days\n`;
-        }
-      });
-    }
-    
-    messageText += `\n\n💡 *Use ${context.config.PREFIX}attendance mybirthday to check your own birthday info*`;
-    
-    await reply(messageText);
-  } catch (error) {
-    await reply('❌ *Error loading birthdays. Please try again.*');
-    console.error('All birthdays error:', error);
   }
 }
 
@@ -1403,12 +1237,10 @@ async function handleAttendanceRecords(context, args) {
   }
 }
 
-// Export functions for use by other plugins (like economy)
+// Export functions for use by other plugins (like economy and birthday)
 export { 
   parseBirthday, 
-  saveBirthdayData, 
-  getBirthdayData, 
-  getAllBirthdays, 
+  saveBirthdayData,
   attendanceSettings,
   addMoney,
   getUserData,
