@@ -241,9 +241,16 @@ export default async function groqHandler(m, sock, config) {
   try {
     // Check if message mentions the bot, is a reply to bot, or uses AI command
     const botId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-    const isMentioned = m.mentions?.includes(botId) || false;
-    const isReply = m.quoted && m.quoted.sender === botId;
+    const isMentioned = (m.mentions && m.mentions.includes(botId)) || false;
+    const isReply = (m.quoted && m.quoted.sender === botId) || false;
     const isAIMode = isAIModeActive(m.sender);
+    
+    // Debug logging for mention detection
+    if (m.mentions && m.mentions.length > 0) {
+      console.log(`🔍 Debug - Bot ID: ${botId}`);
+      console.log(`🔍 Debug - Mentions found: ${JSON.stringify(m.mentions)}`);
+      console.log(`🔍 Debug - Mention match: ${m.mentions.includes(botId)}`);
+    }
     
     let isCommand = false;
     let query = '';
