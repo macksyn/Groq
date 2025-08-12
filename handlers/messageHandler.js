@@ -29,28 +29,60 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       await sock.readMessages([m.key]);
     }
 
-    // Permission checks
-    const isOwner = PermissionHelpers.isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net');
+    // FIXED: Safe permission checks with null safety
+    const isOwner = PermissionHelpers.isOwner(m.sender || '', config.OWNER_NUMBER + '@s.whatsapp.net');
+    
+    // FIXED: Check for multiple admin numbers
+    let isAdmin = isOwner;
+    if (config.ADMIN_NUMBERS) {
+      const adminNumbers = Array.isArray(config.ADMIN_NUMBERS) 
+        ? config.ADMIN_NUMBERS 
+        : config.ADMIN_NUMBERS.split(',').map(num => num.trim());
+      
+      const senderNumber = (m.sender || '').replace('@s.whatsapp.net', '');
+      isAdmin = isOwner || adminNumbers.some(adminNum => {
+        const cleanAdminNum = adminNum.replace('@s.whatsapp.net', '');
+        return senderNumber === cleanAdminNum;
+      });
+    }
+    
     const isPublic = config.MODE === 'public';
     
-    if (!isPublic && !isOwner) return;
+    if (!isPublic && !isOwner && !isAdmin) return;
 
-    // Rate limiting check
-    if (RateLimitHelpers.isLimited(m.sender, 'global', 10, 60000)) {
+    // FIXED: Safe rate limiting check with null safety
+    const senderId = m.sender || 'unknown';
+    if (RateLimitHelpers.isLimited(senderId, 'global', 10, 60000)) {
       return; // Silently ignore rate limited users
     }
 
-    // Log incoming message
+    // FIXED: Safe message body extraction and logging
+    let messageBody = '';
+    try {
+      if (m.body && typeof m.body === 'string') {
+        messageBody = m.body.trim();
+      } else {
+        messageBody = '';
+      }
+    } catch (error) {
+      console.log(chalk.yellow('⚠️ Error extracting message body:', error.message));
+      messageBody = '';
+    }
+
+    // Log incoming message with safety checks
     const senderName = m.isGroup 
-      ? `${m.sender.split('@')[0]} in ${m.from.split('@')[0]}` 
-      : m.sender.split('@')[0];
+      ? `${(m.sender || 'unknown').split('@')[0]} in ${(m.from || 'unknown').split('@')[0]}` 
+      : (m.sender || 'unknown').split('@')[0];
     
-    if (m.body && m.body.startsWith(config.PREFIX)) {
-      console.log(chalk.blue(`📨 Command from ${senderName}: ${m.body.substring(0, 50)}${m.body.length > 50 ? '...' : ''}`));
+    if (messageBody && messageBody.startsWith(config.PREFIX)) {
+      const displayMessage = messageBody.length > 50 
+        ? messageBody.substring(0, 50) + '...' 
+        : messageBody;
+      console.log(chalk.blue(`📨 Command from ${senderName}: ${displayMessage}`));
     }
 
     // Auto react to messages (only for non-commands and random chance)
-    if (config.AUTO_REACT && !m.isSelf && !m.body.startsWith(config.PREFIX) && Math.random() < 0.1) {
+    if (config.AUTO_REACT && !m.isSelf && messageBody && !messageBody.startsWith(config.PREFIX) && Math.random() < 0.1) {
       const randomEmoji = reactionEmojis[Math.floor(Math.random() * reactionEmojis.length)];
       try {
         await m.react(randomEmoji);
@@ -59,11 +91,11 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       }
     }
 
-    // Handle antilink protection
-    if (config.ANTILINK && m.isGroup && !isOwner) {
+    // FIXED: Handle antilink protection with better null safety
+    if (config.ANTILINK && m.isGroup && !isOwner && !isAdmin) {
       const linkRegex = /(https?:\/\/[^\s]+)|([a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/gi;
       
-      if (linkRegex.test(m.body)) {
+      if (messageBody && linkRegex.test(messageBody)) {
         try {
           // Check if bot is admin before trying to remove
           const isBotAdmin = await m.isBotAdmin();
@@ -106,7 +138,7 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
   } catch (error) {
     console.error(chalk.red('❌ Message handler error:'), error.message);
     
-    // Optional: Send error notification to owner
+    // Optional: Send error notification to owner (with safety checks)
     if (config.OWNER_NUMBER && error.message) {
       try {
         await sock.sendMessage(config.OWNER_NUMBER + '@s.whatsapp.net', {
