@@ -1,16 +1,16 @@
-// plugins/ai_chat_plugin.js - AI Chatbot plugin using Groq API
+// plugins/ai_chat_plugin.js - AI Chatbot plugin using Groq API, integrated with your system
 import { getSharedDatabase } from '../lib/pluginIntegration.js';
 
 // Plugin information export
 export const info = {
   name: 'AI Chatbot',
-  version: '1.0.1', // Updated version number
+  version: '2.0.0', // Final version number
   author: 'Bot Developer',
   description: 'An AI chatbot that uses the Groq API to respond to user queries.',
   commands: [
     {
       name: 'chat',
-      aliases: ['ai', 'ask', 'groq'],
+      aliases: ['ai', 'askgpt', 'ask', 'groq'], // All command aliases
       description: 'Start a conversation with the AI.',
       usage: '{prefix}chat [your question]'
     }
@@ -20,10 +20,11 @@ export const info = {
 // Main plugin handler function
 export default async function groqChatHandler(m, sock, config) {
   try {
-    // Await for database connection to be ready (if needed for future features)
+    // The shared database is initialized here but not used in this simple version.
+    // It's included to be consistent with your other plugins.
     const db = getSharedDatabase();
 
-    // Ensure the message starts with the command prefix
+    // Check if the message starts with the command prefix
     if (!m.body.startsWith(config.PREFIX)) {
       return;
     }
@@ -34,10 +35,10 @@ export default async function groqChatHandler(m, sock, config) {
     const command = args[0].toLowerCase();
     const prompt = args.slice(1).join(' ');
 
-    // Handle the 'chat' command
-    if (info.commands[0].aliases.includes(command) || info.commands[0].name === command) {
+    // Check if the command is one of our aliases
+    if (info.commands[0].aliases.includes(command)) {
       if (!prompt) {
-        await sock.sendMessage(m.key.remoteJid, { text: 'Hello! How can I help you today? Please provide a question or topic after the command, for example: `!chat What is the capital of France?`' }, { quoted: m });
+        await sock.sendMessage(m.key.remoteJid, { text: `💡 *Usage:*\n${config.PREFIX}${command} What is the capital of France?` }, { quoted: m });
         return;
       }
 
@@ -49,7 +50,7 @@ export default async function groqChatHandler(m, sock, config) {
         return;
       }
 
-      // Show a "typing" indicator to let the user know a response is being generated
+      // Show a "typing" indicator
       await sock.sendPresenceUpdate('composing', m.key.remoteJid);
 
       try {
@@ -61,16 +62,15 @@ export default async function groqChatHandler(m, sock, config) {
           },
           body: JSON.stringify({
             messages: [{ role: "user", content: prompt }],
-            model: "mixtral-8x7b-32768" // You can change this to a different model if you prefer
+            model: "mixtral-8x7b-32768"
           })
         });
 
         if (!response.ok) {
           // Log a more detailed error message if the response is not successful
-          console.error(`❌ Groq API returned an error: ${response.status} ${response.statusText}`);
           const errorData = await response.json().catch(() => ({ message: 'No JSON body in error response' }));
-          console.error('❌ Groq API Error Details:', errorData);
-          throw new Error(`API Error: ${response.status} ${response.statusText}`);
+          console.error(`❌ Groq API Error: ${response.status} ${response.statusText}`, errorData);
+          throw new Error(`API Error: ${errorData.error.message || response.statusText}`);
         }
 
         const data = await response.json();
@@ -81,7 +81,7 @@ export default async function groqChatHandler(m, sock, config) {
       } catch (error) {
         // Log the full error object for better debugging
         console.error('❌ Error calling Groq API:', error);
-        await sock.sendMessage(m.key.remoteJid, { text: '❌ An error occurred while trying to get a response from the AI. Please try again later.' }, { quoted: m });
+        await sock.sendMessage(m.key.remoteJid, { text: `❌ An error occurred while using the AI: ${error.message}` }, { quoted: m });
       } finally {
         // Stop the "typing" indicator
         await sock.sendPresenceUpdate('paused', m.key.remoteJid);
