@@ -1,7 +1,7 @@
 // plugins/bingai_plugin.js - Bing AI plugin compatible with PluginManager
 
 // Plugin information export
-export const info = {
+const info = {
   name: 'Bing AI Chat',
   version: '1.0.0',
   author: 'Gemini',
@@ -34,9 +34,9 @@ const conversationCache = new Map();
 //  These have been extracted and included here to make the plugin
 //  self-contained and easily plug-and-play.
 // =========================================================
-const crypto = await import('crypto');
-const { WebSocket } = await import('ws');
-const https = await import('https');
+import crypto from 'crypto';
+import { WebSocket } from 'ws';
+import https from 'https';
 
 const generateUUID = () => crypto.randomUUID();
 
@@ -405,7 +405,7 @@ const sendMessage = async (message, options = {}, callback) => {
 //  Main plugin run function
 //  This is the entry point for the plugin's commands.
 // =========================================================
-export const run = async (context, args) => {
+const run = async (context, args) => {
   const { from, sender, command, reply } = context;
   const userIdentifier = sender; // Using the sender ID as the user identifier
   const userConversations = conversationCache.get(userIdentifier) || {};
@@ -456,3 +456,6 @@ export const run = async (context, args) => {
     await reply('❌ An error occurred while communicating with Bing AI. Please try again later.');
   }
 };
+
+// Export the single plugin object as the default export
+export default { info, run };
