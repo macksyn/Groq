@@ -293,54 +293,196 @@ class AIChat {
     return 'just now';
   }
 
-  // Query AI with enhanced context
+  // Query AI with multiple API options
   async queryAI(prompt, userId, groupId = null) {
-    try {
-      const context = this.buildContext(userId, groupId, prompt);
-      
-      // Enhanced prompt with Nigerian context
-      const enhancedPrompt = `
-You are a helpful AI assistant with Nigerian urban vibes. You remember conversations and can reference past interactions.
-
-${context}
-
-Current message: ${prompt}
-
-Respond naturally with a mix of good English and casual Nigerian expressions. Be helpful, friendly, and remember what users tell you.`;
-
-      // Try Hugging Face API
-      const response = await fetch('https://api-inference.huggingface.co/models/microsoft/DialoGPT-large', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.HUGGINGFACE_TOKEN || 'hf_demo'}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          inputs: enhancedPrompt,
-          parameters: {
-            max_new_tokens: 200,
-            temperature: 0.8,
-            do_sample: true,
-            return_full_text: false,
-            repetition_penalty: 1.1
-          }
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data[0] && data[0].generated_text) {
-          return data[0].generated_text.trim();
+    const context = this.buildContext(userId, groupId, prompt);
+    
+    // Try multiple AI APIs in order of preference
+    const apiMethods = [
+      () => this.tryHuggingFaceChat(prompt, context),
+      () => this.tryHuggingFaceText(prompt, context),
+      () => this.tryGroqAPI(prompt, context),
+      () => this.tryOpenAICompatible(prompt, context)
+    ];
+    
+    for (const apiMethod of apiMethods) {
+      try {
+        const result = await apiMethod();
+        if (result && result.trim()) {
+          console.log('✅ AI API response received');
+          return result.trim();
         }
+      } catch (error) {
+        console.log('⚠️ AI API attempt failed:', error.message);
+        continue;
       }
-      
-      // Fallback to local response
-      return this.getLocalResponse(prompt, userId, groupId);
-      
-    } catch (error) {
-      console.log('AI API failed:', error.message);
-      return this.getLocalResponse(prompt, userId, groupId);
     }
+    
+    console.log('🔄 All AI APIs failed, using local response');
+    return this.getLocalResponse(prompt, userId, groupId);
+  }
+
+  // Hugging Face Conversational AI
+  async tryHuggingFaceChat(prompt, context) {
+    const fullPrompt = context ? `${context}\n\nHuman: ${prompt}\nAssistant:` : prompt;
+    
+    const response = await fetch('https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        inputs: {
+          past_user_inputs: [prompt],
+          generated_responses: [],
+          text: prompt
+        },
+        parameters: {
+          max_length: 200,
+          temperature: 0.8,
+          do_sample: true,
+          repetition_penalty: 1.2
+        }
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    }
+
+    const data = await response.json();
+    console.log('🤖 HF Chat Response:', data);
+    
+    if (data.generated_text) {
+      return data.generated_text;
+    }
+    
+    throw new Error('No generated_text in response');
+  }
+
+  // Hugging Face Text Generation
+  async tryHuggingFaceText(prompt, context) {
+    const systemPrompt = `You are a friendly AI assistant with Nigerian urban vibes. Respond naturally with good English mixed with casual Naija expressions like "abeg", "wetin", "sha", "my guy". Be helpful and conversational.
+
+${context ? `Context: ${context}\n\n` : ''}Human: ${prompt}
+Assistant:`;
+
+    const response = await fetch('https://api-inference.huggingface.co/models/meta-llama/Llama-2-7b-chat-hf', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.HUGGINGFACE_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        inputs: systemPrompt,
+        parameters: {
+          max_new_tokens: 150,
+          temperature: 0.8,
+          do_sample: true,
+          return_full_text: false,
+          repetition_penalty: 1.1
+        }
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    }
+
+    const data = await response.json();
+    console.log('🤖 HF Text Response:', data);
+    
+    if (data[0] && data[0].generated_text) {
+      // Clean up the response
+      let text = data[0].generated_text.replace(systemPrompt, '').trim();
+      // Remove any "Human:" or "Assistant:" prefixes
+      text = text.replace(/^(Human:|Assistant:)/i, '').trim();
+      return text;
+    }
+    
+    throw new Error('No generated_text in response');
+  }
+
+  // Groq API (Fast and free tier available)
+  async tryGroqAPI(prompt, context) {
+    if (!process.env.GROQ_API_KEY) {
+      throw new Error('No Groq API key');
+    }
+
+    const systemMessage = `You are a helpful AI assistant with Nigerian urban vibes. Mix good English with casual Naija expressions naturally. Be friendly and conversational.${context ? `\n\nContext from previous conversations:\n${context}` : ''}`;
+
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'mixtral-8x7b-32768',
+        messages: [
+          { role: 'system', content: systemMessage },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 150,
+        temperature: 0.8
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log('🤖 Groq Response:', data);
+    
+    if (data.choices && data.choices[0] && data.choices[0].message) {
+      return data.choices[0].message.content;
+    }
+    
+    throw new Error('No message content in response');
+  }
+
+  // OpenAI-compatible API (works with many providers)
+  async tryOpenAICompatible(prompt, context) {
+    const apiUrl = process.env.OPENAI_API_URL || 'https://api.openai.com/v1/chat/completions';
+    const apiKey = process.env.OPENAI_API_KEY;
+    
+    if (!apiKey) {
+      throw new Error('No OpenAI API key');
+    }
+
+    const systemMessage = `You are a helpful AI assistant with Nigerian urban vibes. Respond naturally with good English and casual Naija expressions. Be friendly and remember context.${context ? `\n\nPrevious context:\n${context}` : ''}`;
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: systemMessage },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 150,
+        temperature: 0.8
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log('🤖 OpenAI Response:', data);
+    
+    if (data.choices && data.choices[0] && data.choices[0].message) {
+      return data.choices[0].message.content;
+    }
+    
+    throw new Error('No message content in response');
   }
 
   // Enhanced local responses with memory
@@ -539,6 +681,46 @@ export default async function aiChatHandler(m, sock, config) {
         await aiChat.saveConversation(m.sender, prompt, finalResponse, m.from);
         
         await sock.sendMessage(m.from, { text: finalResponse });
+        return;
+      }
+
+      // Debug command to test AI APIs
+      if (command === 'testai' || command === 'debug') {
+        await sock.sendMessage(m.from, { text: "Testing AI APIs... 🔧" });
+        
+        const testPrompt = "Hello, how are you?";
+        let debugInfo = "🔍 *AI API Debug Results:*\n\n";
+        
+        // Test Hugging Face Token
+        const hfToken = process.env.HUGGINGFACE_TOKEN;
+        debugInfo += `🔑 HF Token: ${hfToken ? 'Present ✅' : 'Missing ❌'}\n`;
+        
+        // Test each API
+        const apis = [
+          { name: 'HF Chat', method: () => aiChat.tryHuggingFaceChat(testPrompt, '') },
+          { name: 'HF Text', method: () => aiChat.tryHuggingFaceText(testPrompt, '') },
+          { name: 'Groq', method: () => aiChat.tryGroqAPI(testPrompt, '') },
+          { name: 'OpenAI', method: () => aiChat.tryOpenAICompatible(testPrompt, '') }
+        ];
+        
+        for (const api of apis) {
+          try {
+            const startTime = Date.now();
+            const result = await api.method();
+            const duration = Date.now() - startTime;
+            
+            if (result && result.trim()) {
+              debugInfo += `${api.name}: ✅ (${duration}ms)\n`;
+              debugInfo += `Response: "${result.substring(0, 50)}..."\n\n`;
+            } else {
+              debugInfo += `${api.name}: ❌ Empty response\n\n`;
+            }
+          } catch (error) {
+            debugInfo += `${api.name}: ❌ ${error.message}\n\n`;
+          }
+        }
+        
+        await sock.sendMessage(m.from, { text: debugInfo });
         return;
       }
     }
