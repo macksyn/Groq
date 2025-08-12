@@ -9,8 +9,8 @@ export const info = {
   description: 'Lightning-fast AI chat powered by Groq with Nigerian Gen-Z vibes 🇳🇬⚡',
   commands: [
     {
-      name: 'ai',
-      aliases: ['groq', 'ask', 'chat', 'gpt'],
+      name: 'groq',
+      aliases: ['@groq', '2348111637463', 'chat', 'gpt'],
       description: 'Chat with Groq AI - mention, reply or use command'
     },
     {
