@@ -4,7 +4,7 @@ import { getSharedDatabase } from '../lib/pluginIntegration.js';
 // Plugin information export
 export const info = {
   name: 'AI Chatbot',
-  version: '1.0.0',
+  version: '1.0.1', // Updated version number
   author: 'Bot Developer',
   description: 'An AI chatbot that uses the Groq API to respond to user queries.',
   commands: [
@@ -66,7 +66,11 @@ export default async function groqChatHandler(m, sock, config) {
         });
 
         if (!response.ok) {
-          throw new Error(`Groq API returned an error: ${response.status} ${response.statusText}`);
+          // Log a more detailed error message if the response is not successful
+          console.error(`❌ Groq API returned an error: ${response.status} ${response.statusText}`);
+          const errorData = await response.json().catch(() => ({ message: 'No JSON body in error response' }));
+          console.error('❌ Groq API Error Details:', errorData);
+          throw new Error(`API Error: ${response.status} ${response.statusText}`);
         }
 
         const data = await response.json();
@@ -75,6 +79,7 @@ export default async function groqChatHandler(m, sock, config) {
         // Send the AI's response back to the user
         await sock.sendMessage(m.key.remoteJid, { text: aiReply }, { quoted: m });
       } catch (error) {
+        // Log the full error object for better debugging
         console.error('❌ Error calling Groq API:', error);
         await sock.sendMessage(m.key.remoteJid, { text: '❌ An error occurred while trying to get a response from the AI. Please try again later.' }, { quoted: m });
       } finally {
@@ -86,5 +91,3 @@ export default async function groqChatHandler(m, sock, config) {
     console.error('❌ Error in Groq chat handler:', error);
   }
 }
-
-    
