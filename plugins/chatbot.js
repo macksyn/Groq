@@ -5,7 +5,10 @@ import crypto from 'crypto';
 import { WebSocket } from 'ws';
 import https from 'https';
 
-// Plugin information export
+// =========================================================
+//  Plugin information export
+//  This is a named export, matching your existing plugins.
+// =========================================================
 export const info = {
   name: 'Bing AI Chat',
   version: '1.0.0',
@@ -438,7 +441,7 @@ const sendMessage = async (message, options = {}, callback) => {
 
 // =========================================================
 //  Main plugin run function
-//  This is the entry point for the plugin's commands.
+//  This is a named export, matching your existing plugins.
 // =========================================================
 export const run = async (context, args) => {
   const { from, sender, command, reply } = context;
