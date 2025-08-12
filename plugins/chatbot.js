@@ -4,7 +4,7 @@ import { getSharedDatabase } from '../lib/pluginIntegration.js';
 // Plugin information export
 export const info = {
   name: 'AI Chatbot',
-  version: '2.0.1', // Updated version number
+  version: '2.0.2', // Updated version number
   author: 'Bot Developer',
   description: 'An AI chatbot that uses the Groq API to respond to user queries.',
   commands: [
@@ -63,7 +63,7 @@ export default async function groqChatHandler(m, sock, config) {
           body: JSON.stringify({
             messages: [{ role: "user", content: prompt }],
             // The model name has been updated here
-            model: "mixtral-8x7b-instruct-v0.1" 
+            model: "llama-3.1-8b-instant" 
           })
         });
 
