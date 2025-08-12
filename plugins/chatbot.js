@@ -237,45 +237,36 @@ function toggleAIMode(userId) {
   return !currentMode;
 }
 
+// Cache bot IDs to avoid repeated calculations
+let cachedBotIds = null;
+let lastBotUserId = null;
+
 export default async function groqHandler(m, sock, config) {
   try {
-    // Dynamic bot ID detection - collect all possible bot IDs
-    const botNumber = sock.user.id.split(':')[0];
-    const primaryBotId = botNumber + '@s.whatsapp.net';
-    const primaryBotLid = botNumber + '@lid';
+    // Optimized bot ID detection with caching
+    const currentBotUserId = sock.user.id;
     
-    // Also check the full user ID in case it's different
-    const fullBotId = sock.user.id;
-    const fullBotFormatted = fullBotId.includes('@') ? fullBotId : fullBotId + '@s.whatsapp.net';
-    
-    // Create array of all possible bot IDs to check
-    const allBotIds = [
-      primaryBotId,
-      primaryBotLid,
-      fullBotFormatted,
-      fullBotId,
-      botNumber + '@s.whatsapp.net',
-      botNumber + '@lid'
-    ].filter((id, index, array) => array.indexOf(id) === index); // Remove duplicates
-    
-    const isMentioned = (m.mentions && allBotIds.some(botId => m.mentions.includes(botId))) || false;
-    
-    const isReply = (m.quoted && allBotIds.some(botId => m.quoted.sender === botId)) || false;
-    
-    const isAIMode = isAIModeActive(m.sender);
-    
-    // Enhanced debug logging
-    if (m.mentions && m.mentions.length > 0) {
-      console.log(`🔍 Debug - All Bot IDs: ${JSON.stringify(allBotIds)}`);
-      console.log(`🔍 Debug - Mentions found: ${JSON.stringify(m.mentions)}`);
-      console.log(`🔍 Debug - Mention match: ${isMentioned}`);
+    // Only recalculate bot IDs if the user ID changed
+    if (!cachedBotIds || lastBotUserId !== currentBotUserId) {
+      const botNumber = currentBotUserId.split(':')[0];
+      const primaryBotId = botNumber + '@s.whatsapp.net';
+      const fullBotFormatted = currentBotUserId.includes('@') ? currentBotUserId : currentBotUserId + '@s.whatsapp.net';
       
-      // Show which specific ID matched (if any)
-      const matchedId = allBotIds.find(botId => m.mentions.includes(botId));
-      if (matchedId) {
-        console.log(`🎯 Debug - Matched Bot ID: ${matchedId}`);
-      }
+      // Create optimized array of unique bot IDs
+      cachedBotIds = [...new Set([
+        primaryBotId,
+        fullBotFormatted,
+        botNumber + '@lid'
+      ])];
+      
+      lastBotUserId = currentBotUserId;
+      console.log(`🔄 Updated cached bot IDs: ${JSON.stringify(cachedBotIds)}`);
     }
+    
+    // Fast mention/reply detection using cached IDs
+    const isMentioned = m.mentions && cachedBotIds.some(botId => m.mentions.includes(botId));
+    const isReply = m.quoted && cachedBotIds.includes(m.quoted.sender);
+    const isAIMode = isAIModeActive(m.sender);
     
     let isCommand = false;
     let query = '';
