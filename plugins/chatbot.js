@@ -140,7 +140,13 @@ Speak like a smart Nigerian youth who's well-educated but still connected to the
     const messages = [
       {
         role: 'system',
-        content: `You are an intelligent AI assistant with a friendly Nigerian personality. You speak naturally with occasional Nigerian expressions but keep it conversational and helpful. You're knowledgeable about both global topics and Nigerian culture. Keep responses concise and practical for WhatsApp chat.`
+        content: `You are Groq, an intelligent AI assistant with a friendly Nigerian personality. You are from GHQ, Lagos, Nigeria. Your developer is Alex Macksyn. You speak naturally with occasional Nigerian expressions but keep it conversational and helpful. You're knowledgeable about both global topics and Nigerian culture. Keep responses concise and practical for WhatsApp chat.
+
+When asked personal questions:
+- Your name is Groq
+- You're from GHQ, Lagos, Nigeria  
+- Your developer is Alex Macksyn
+- You're an AI assistant powered by Groq's lightning-fast infrastructure`
       },
       ...history,
       { role: 'user', content: message }
@@ -234,9 +240,9 @@ function toggleAIMode(userId) {
 export default async function groqHandler(m, sock, config) {
   try {
     // Check if message mentions the bot, is a reply to bot, or uses AI command
-    const botNumber = sock.user.id.split(':')[0];
-    const isMentioned = m.mentionedJid?.includes(`${botNumber}@s.whatsapp.net`);
-    const isReply = m.quoted && m.quoted.participant === `${botNumber}@s.whatsapp.net`;
+    const botId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+    const isMentioned = m.mentions?.includes(botId) || false;
+    const isReply = m.quoted && m.quoted.sender === botId;
     const isAIMode = isAIModeActive(m.sender);
     
     let isCommand = false;
@@ -315,7 +321,11 @@ export default async function groqHandler(m, sock, config) {
     if (shouldRespond) {
       // Get the query
       if (!query) {
-        query = m.body?.replace(`@${botNumber}`, '').trim() || '';
+        query = m.body || '';
+        
+        // Remove bot mention from query if present
+        const botNumber = botId.split('@')[0];
+        query = query.replace(`@${botNumber}`, '').replace(/@\d+/g, '').trim();
       }
 
       // Remove command prefix if it exists
@@ -357,13 +367,14 @@ export default async function groqHandler(m, sock, config) {
 
         // Send AI response
         await sock.sendMessage(m.from, {
-          text: `${finalResponse}\n\n_⚡ Powered by Groq }_`
+          text: `${finalResponse}\n\n_⚡ Powered by Groq ${modelName.toUpperCase()}_`
         }, { quoted: m });
 
         // Reward user with money
         await unifiedUserManager.addMoney(m.sender, 10, 'Groq AI Chat Bonus'); // Increased reward
 
         console.log(`🤖 Groq AI query from ${m.pushName || m.sender.split('@')[0]} using ${modelName}: ${query.substring(0, 50)}...`);
+        console.log(`📍 Response trigger - Mentioned: ${isMentioned}, Reply: ${isReply}, Command: ${isCommand}, AIMode: ${isAIMode}, IsGroup: ${isGroupChat}`);
 
       } catch (error) {
         console.error('Groq AI Error:', error);
