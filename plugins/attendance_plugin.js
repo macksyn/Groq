@@ -5,7 +5,7 @@
 
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
-import { addMoney, getUserData, updateUserData, initUser, ecoSettings } from './economy_plugin (2).js';
+import { addMoney, getUserData, updateUserData, initUser, ecoSettings } from './economy_plugin.js';
 
 // Plugin information export
 export const info = {
