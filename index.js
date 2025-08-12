@@ -525,11 +525,17 @@ function setupEventHandlers(socket) {
           }
           
           // Safe text processing with null checks
-          if (messageText && typeof messageText === 'string') {
-            messageText = messageText.replace(/\s+/g, ' ').trim();
-          } else {
-            messageText = '';
-          }
+          // SAFE VERSION:
+if (messageText && typeof messageText === 'string' && messageText.length > 0) {
+  messageText = messageText.replace(/\s+/g, ' ').trim();
+} else {
+  messageText = ''; // Always string, never null
+}
+
+// Additional safety check
+if (typeof messageText !== 'string') {
+  messageText = '';
+}
           
         } catch (textError) {
           console.log(chalk.yellow('⚠️ Text extraction error:', textError.message));
