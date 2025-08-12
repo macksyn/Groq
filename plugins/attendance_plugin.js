@@ -1,4 +1,3 @@
-
 // plugins/attendance.js - Attendance plugin compatible with PluginManager
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
