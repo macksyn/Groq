@@ -1206,36 +1206,6 @@ async function handleTestBirthday(context, args) {
   }
 }
 
-// Handle my birthday command
-async function handleMyBirthday(context) {
-  const { reply, senderId } = context;
-  
-  try {
-    const birthdayData = await getBirthdayData(senderId);
-    
-    if (!birthdayData) {
-      await reply(`🎂 *No Birthday Recorded*\n\nYour birthday hasn't been saved yet. It will be automatically saved when you submit your next attendance form with a valid D.O.B field.\n\n💡 *Make sure to fill your D.O.B correctly in the attendance form!*`);
-      return;
-    }
-    
-    const birthday = birthdayData.birthday;
-    let message = `🎂 *Your Birthday Information* 🎂\n\n`;
-    message += `👤 Name: ${birthdayData.name}\n`;
-    message += `📅 Birthday: ${birthday.displayDate}\n`;
-    message += `📊 Day: ${birthday.day}\n`;
-    message += `📊 Month: ${birthday.monthName}\n`;
-    
-    if (birthday.year) {
-      message += `📊 Year: ${birthday.year}\n`;
-    }
-    
-    if (birthday.age !== undefined) {
-      message += `🎈 Current Age: ${birthday.age} years old\n`;
-    }
-    
-    message += `💾 Last Updated: ${new Date(birthdayData.lastUpdated).toLocaleString()}\n`;
-    message += `📝 Original Text: "${birthday.originalText}"\n\n`;
-    
     // Calculate days until next birthday
     const today = new Date();
     const thisYear = today.getFullYear();
