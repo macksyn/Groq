@@ -68,58 +68,111 @@ class BingAIClient {
     };
   }
 
-  // Connect to WebSocket
+  // Get proper headers for Bing
+  getBingHeaders() {
+    return {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Accept': '*/*',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits',
+      'Sec-WebSocket-Version': '13',
+      'Origin': 'https://www.bing.com'
+    };
+  }
+
+  // Connect to WebSocket with better error handling
   connectWebSocket(signature) {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket('wss://sydney.bing.com/sydney/ChatHub', {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
-        }
-      });
+      let connectionAttempts = 0;
+      const maxAttempts = 3;
+      
+      const attemptConnection = () => {
+        connectionAttempts++;
+        console.log(`🔌 Attempting Bing connection... (${connectionAttempts}/${maxAttempts})`);
+        
+        const ws = new WebSocket('wss://sydney.bing.com/sydney/ChatHub', {
+          headers: this.getBingHeaders()
+        });
 
-      const timeout = setTimeout(() => {
-        ws.close();
-        reject(new Error('Connection timeout'));
-      }, 10000);
+        const timeout = setTimeout(() => {
+          ws.close();
+          if (connectionAttempts < maxAttempts) {
+            console.log('⏰ Connection timeout, retrying...');
+            setTimeout(attemptConnection, 2000);
+          } else {
+            reject(new Error('Connection timeout after multiple attempts'));
+          }
+        }, 15000);
 
-      ws.on('error', (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      });
-
-      ws.on('open', () => {
-        ws.send('{"protocol":"json","version":1}\x1e');
-      });
-
-      ws.on('message', (data) => {
-        const responses = data.toString().split('\x1e')
-          .map(msg => {
-            try {
-              return JSON.parse(msg);
-            } catch {
-              return msg;
-            }
-          })
-          .filter(msg => msg);
-
-        if (responses.length === 0) return;
-
-        if (responses[0] && typeof responses[0] === 'object' && Object.keys(responses[0]).length === 0) {
+        ws.on('error', (error) => {
           clearTimeout(timeout);
-          // Setup ping interval
-          ws.pingInterval = setInterval(() => {
-            ws.send('{"type":6}\x1e');
-          }, 15000);
-          resolve(ws);
-        }
-      });
+          console.log('❌ WebSocket error:', error.message);
+          
+          if (connectionAttempts < maxAttempts) {
+            setTimeout(attemptConnection, 2000);
+          } else {
+            reject(new Error(`Connection failed: ${error.message}`));
+          }
+        });
+
+        ws.on('open', () => {
+          console.log('✅ WebSocket connection opened');
+          try {
+            ws.send('{"protocol":"json","version":1}\x1e');
+          } catch (error) {
+            clearTimeout(timeout);
+            reject(new Error('Failed to send handshake'));
+          }
+        });
+
+        ws.on('message', (data) => {
+          try {
+            const responses = data.toString().split('\x1e')
+              .map(msg => {
+                try {
+                  return JSON.parse(msg);
+                } catch {
+                  return msg;
+                }
+              })
+              .filter(msg => msg);
+
+            if (responses.length === 0) return;
+
+            // Handle handshake response
+            if (responses[0] && typeof responses[0] === 'object' && Object.keys(responses[0]).length === 0) {
+              clearTimeout(timeout);
+              console.log('🤝 Handshake successful');
+              
+              // Setup ping interval
+              ws.pingInterval = setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send('{"type":6}\x1e');
+                }
+              }, 15000);
+              
+              resolve(ws);
+            }
+          } catch (error) {
+            clearTimeout(timeout);
+            reject(new Error('Handshake parsing failed'));
+          }
+        });
+
+        ws.on('close', (code, reason) => {
+          clearTimeout(timeout);
+          console.log(`🔌 Connection closed: ${code} - ${reason}`);
+        });
+      };
+      
+      attemptConnection();
     });
   }
 
-  // Send message to Bing AI
+  // Send message to Bing AI with better error handling
   async sendMessage(message, options = {}) {
     const {
       conversationId,
@@ -128,6 +181,14 @@ class BingAIClient {
       invocationId = 0,
       toneStyle = 'balanced'
     } = options;
+
+    let ws;
+    try {
+      // Connect to WebSocket with retries
+      ws = await this.connectWebSocket(encryptedConversationSignature);
+    } catch (error) {
+      throw new Error(`Connection failed: ${error.message}`);
+    }
 
     // Determine tone style
     let selectedToneStyle;
@@ -145,84 +206,134 @@ class BingAIClient {
         selectedToneStyle = 'Balanced';
     }
 
-    // Connect to WebSocket
-    const ws = await this.connectWebSocket(encryptedConversationSignature);
-
     return new Promise((resolve, reject) => {
       let responseText = '';
+      let hasResponded = false;
       
       const timeout = setTimeout(() => {
-        this.cleanupWebSocket(ws);
-        reject(new Error('Request timeout'));
-      }, 120000); // 2 minutes timeout
+        if (!hasResponded) {
+          hasResponded = true;
+          this.cleanupWebSocket(ws);
+          reject(new Error('AI response timeout'));
+        }
+      }, 90000); // 90 seconds timeout
 
-      ws.on('message', (data) => {
-        const messages = data.toString().split('\x1e')
-          .map(msg => {
-            try {
-              return JSON.parse(msg);
-            } catch {
-              return msg;
-            }
-          })
-          .filter(msg => msg);
-
-        if (messages.length === 0) return;
-
-        const message = messages[0];
-
-        switch (message.type) {
-          case 1: {
-            // Streaming response
-            const messageContent = message?.arguments?.[0]?.messages;
-            if (!messageContent?.length || messageContent[0].author !== 'bot') return;
-
-            const text = messageContent[0].text;
-            if (!text || text === responseText) return;
-
-            responseText = text;
-            break;
-          }
-
-          case 2: {
-            // Final response
-            clearTimeout(timeout);
-            this.cleanupWebSocket(ws);
-
-            if (message.item?.result?.error) {
-              return reject(new Error(message.item.result.error + ': ' + message.item.result.message));
-            }
-
-            const messages = message.item?.messages || [];
-            const finalMessage = messages.length ? messages[messages.length - 1] : null;
-
-            if (finalMessage) {
-              resolve({
-                message: finalMessage,
-                conversationExpiryTime: message?.item?.conversationExpiryTime
-              });
-            } else {
-              reject(new Error('No response message found'));
-            }
-            break;
-          }
-
-          case 7:
-            clearTimeout(timeout);
-            this.cleanupWebSocket(ws);
-            reject(new Error(message.error || 'Unknown error occurred'));
-            break;
-
-          default:
-            if (message?.error) {
-              clearTimeout(timeout);
-              this.cleanupWebSocket(ws);
-              reject(new Error(`Error type ${message.type}: ${message.error}`));
-            }
+      ws.on('error', (error) => {
+        if (!hasResponded) {
+          hasResponded = true;
+          clearTimeout(timeout);
+          this.cleanupWebSocket(ws);
+          reject(new Error(`WebSocket error: ${error.message}`));
         }
       });
 
-      // Build request payload
+      ws.on('close', (code, reason) => {
+        if (!hasResponded) {
+          hasResponded = true;
+          clearTimeout(timeout);
+          reject(new Error(`Connection closed unexpectedly: ${code} - ${reason}`));
+        }
+      });
+
+      ws.on('message', (data) => {
+        try {
+          const messages = data.toString().split('\x1e')
+            .map(msg => {
+              try {
+                return JSON.parse(msg);
+              } catch {
+                return null;
+              }
+            })
+            .filter(msg => msg);
+
+          if (messages.length === 0) return;
+
+          for (const message of messages) {
+            if (hasResponded) break;
+
+            switch (message.type) {
+              case 1: {
+                // Streaming response
+                const messageContent = message?.arguments?.[0]?.messages;
+                if (!messageContent?.length || messageContent[0].author !== 'bot') continue;
+
+                const text = messageContent[0].text;
+                if (text && text !== responseText && text.length > responseText.length) {
+                  responseText = text;
+                }
+                break;
+              }
+
+              case 2: {
+                // Final response
+                if (hasResponded) break;
+                hasResponded = true;
+                clearTimeout(timeout);
+                this.cleanupWebSocket(ws);
+
+                // Check for errors first
+                if (message.item?.result?.error) {
+                  return reject(new Error(`Bing AI Error: ${message.item.result.message || message.item.result.error}`));
+                }
+
+                const messages = message.item?.messages || [];
+                let finalMessage = null;
+
+                // Find the bot's response
+                for (let i = messages.length - 1; i >= 0; i--) {
+                  if (messages[i].author === 'bot' && messages[i].text) {
+                    finalMessage = messages[i];
+                    break;
+                  }
+                }
+
+                if (finalMessage && finalMessage.text) {
+                  resolve({
+                    message: finalMessage,
+                    conversationExpiryTime: message?.item?.conversationExpiryTime
+                  });
+                } else if (responseText) {
+                  // Use streaming response as fallback
+                  resolve({
+                    message: { text: responseText, author: 'bot' },
+                    conversationExpiryTime: message?.item?.conversationExpiryTime
+                  });
+                } else {
+                  reject(new Error('No valid response received from Bing AI'));
+                }
+                break;
+              }
+
+              case 7:
+                if (hasResponded) break;
+                hasResponded = true;
+                clearTimeout(timeout);
+                this.cleanupWebSocket(ws);
+                reject(new Error(message.error || 'Bing AI service error'));
+                break;
+
+              default:
+                if (message?.error) {
+                  if (hasResponded) break;
+                  hasResponded = true;
+                  clearTimeout(timeout);
+                  this.cleanupWebSocket(ws);
+                  reject(new Error(`Bing Error (Type ${message.type}): ${message.error}`));
+                }
+            }
+          }
+        } catch (parseError) {
+          if (!hasResponded) {
+            hasResponded = true;
+            clearTimeout(timeout);
+            this.cleanupWebSocket(ws);
+            reject(new Error(`Response parsing error: ${parseError.message}`));
+          }
+        }
+      });
+
+      // Build request payload with current timestamp
       const requestPayload = {
         arguments: [{
           source: 'cib',
@@ -236,20 +347,23 @@ class BingAIClient {
             'dtappid',
             'cricinfo',
             'cricinfov2',
-            'dv3sugg',
-            'nojbfedge'
+            'dv3sugg'
           ],
           sliceIds: [
-            'chk1cf',
-            'nopreloadsscf',
+            'winmuid3tf',
+            'osbsdusgreccf',
+            'ttstmout',
+            'crchatrev',
             'winlongmsg2tf'
           ],
           traceId: this.generateRandomString(32),
           isStartOfSession: invocationId === 0,
           message: {
             author: 'user',
+            inputMethod: 'Keyboard',
             text: message,
-            messageType: 'Chat'
+            messageType: 'Chat',
+            timestamp: new Date().toISOString()
           },
           encryptedConversationSignature: encryptedConversationSignature,
           participant: { id: clientId },
@@ -262,7 +376,18 @@ class BingAIClient {
       };
 
       // Send the request
-      ws.send(JSON.stringify(requestPayload) + '\x1e');
+      try {
+        const requestString = JSON.stringify(requestPayload) + '\x1e';
+        ws.send(requestString);
+        console.log('📤 Request sent to Bing AI');
+      } catch (sendError) {
+        if (!hasResponded) {
+          hasResponded = true;
+          clearTimeout(timeout);
+          this.cleanupWebSocket(ws);
+          reject(new Error(`Failed to send request: ${sendError.message}`));
+        }
+      }
     });
   }
 
@@ -358,9 +483,12 @@ export default async function bingaiHandler(m, sock, config) {
         // Get or create conversation for this user
         let conversation = conversationCache.get(m.sender);
         
-        if (!conversation) {
+        if (!conversation || Date.now() - conversation.createdAt > 20 * 60 * 1000) {
+          // Create new conversation or refresh if older than 20 minutes
+          console.log('🔄 Creating new Bing conversation...');
           conversation = await bingAI.createNewConversation();
           conversation.invocationId = 0;
+          conversation.createdAt = Date.now();
           conversationCache.set(m.sender, conversation);
           
           // Clear old conversations after 30 minutes
@@ -369,26 +497,57 @@ export default async function bingaiHandler(m, sock, config) {
           }, 30 * 60 * 1000);
         }
 
-        // Send message to Bing AI
-        const result = await bingAI.sendMessage(query, {
-          conversationId: conversation.conversationId,
-          encryptedConversationSignature: conversation.encryptedConversationSignature,
-          clientId: conversation.clientId,
-          invocationId: conversation.invocationId,
-          toneStyle: 'balanced'
-        });
+        // Send message to Bing AI with retry logic
+        let result;
+        let retryCount = 0;
+        const maxRetries = 2;
+        
+        while (retryCount <= maxRetries) {
+          try {
+            result = await bingAI.sendMessage(query, {
+              conversationId: conversation.conversationId,
+              encryptedConversationSignature: conversation.encryptedConversationSignature,
+              clientId: conversation.clientId,
+              invocationId: conversation.invocationId,
+              toneStyle: 'balanced'
+            });
+            break; // Success, exit retry loop
+          } catch (error) {
+            retryCount++;
+            console.log(`🔄 Retry attempt ${retryCount}/${maxRetries} due to: ${error.message}`);
+            
+            if (retryCount <= maxRetries) {
+              // Create fresh conversation for retry
+              conversation = await bingAI.createNewConversation();
+              conversation.invocationId = 0;
+              conversation.createdAt = Date.now();
+              conversationCache.set(m.sender, conversation);
+              
+              // Wait before retry
+              await new Promise(resolve => setTimeout(resolve, 3000));
+            } else {
+              throw error; // All retries failed
+            }
+          }
+        }
 
         // Update conversation
         conversation.invocationId++;
 
         let aiResponse = result.message.text;
         
+        // Clean up response
+        aiResponse = aiResponse
+          .replace(/\[.*?\]/g, '') // Remove citation brackets
+          .replace(/\*\*(.*?)\*\*/g, '*$1*') // Convert bold formatting
+          .trim();
+
         // Add Nigerian flavor to response
         aiResponse = addNaijaFlavor(aiResponse);
 
         // Limit response length for WhatsApp
-        if (aiResponse.length > 1500) {
-          aiResponse = aiResponse.substring(0, 1500) + '...\n\n_Abeg the response long pass, na summary be this oh! 😅_';
+        if (aiResponse.length > 1800) {
+          aiResponse = aiResponse.substring(0, 1800) + '...\n\n_Abeg the response long pass, na summary be this oh! 😅_';
         }
 
         // Delete thinking message and send AI response
@@ -417,8 +576,19 @@ export default async function bingaiHandler(m, sock, config) {
           // Silent fail
         }
 
+        // Better error messages based on error type
+        let errorResponse = getRandomResponse(naijaResponses.errors);
+        
+        if (error.message.includes('timeout')) {
+          errorResponse = "Omo, AI don slow oh! Network dey drag like okada for go-slow. Try again abeg! 🚗💨";
+        } else if (error.message.includes('Connection')) {
+          errorResponse = "Connection dey shakara oh! Make we try again nah! 🌐";
+        } else if (error.message.includes('response: 200')) {
+          errorResponse = "AI server dey form big boy oh! But we go try again sharp sharp! 💪";
+        }
+
         await sock.sendMessage(m.from, {
-          text: `${getRandomResponse(naijaResponses.errors)} 😔\n\n_Error: ${error.message}_`
+          text: `${errorResponse}\n\n_Error details: ${error.message.substring(0, 100)}..._`
         }, { quoted: m });
       }
     }
