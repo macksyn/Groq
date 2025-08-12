@@ -1,517 +1,429 @@
-// plugins/bingai_plugin.js - Bing AI plugin following economy_plugin structure
-
-import { MongoClient } from 'mongodb';
-import crypto from 'crypto';
+// plugins/bingai.js - Bing AI integration with Naija slang
 import { WebSocket } from 'ws';
-import https from 'https';
+import crypto from 'crypto';
+import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
-// =========================================================
-//  Plugin information export
-//  This is a named export, matching your existing plugins.
-// =========================================================
 export const info = {
-  name: 'Bing AI Chat',
-  version: '1.0.0',
-  author: 'Gemini',
-  description: 'Integrates Bing AI conversational capabilities into the bot with MongoDB persistence.',
+  name: 'bingai',
+  version: '2.0.0',
+  author: 'Bot Developer',
+  description: 'Chat with Bing AI with Nigerian urban slang flavor 🇳🇬',
   commands: [
     {
-      name: 'ask',
-      aliases: ['bing', 'ai'],
-      description: 'Ask Bing AI a question.',
-      usage: '{PREFIX}ask [your question]'
-    },
-    {
-      name: 'reset',
-      aliases: [],
-      description: 'Resets your current Bing AI conversation.',
-      usage: '{PREFIX}reset'
+      name: 'ai',
+      aliases: ['bing', 'ask'],
+      description: 'Ask Bing AI anything - mention/reply/tag the bot'
     }
   ]
 };
 
-// =========================================================
-//  MongoDB Configuration
-//  Using the same URI and a new collection for conversations
-// =========================================================
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-const DATABASE_NAME = 'whatsapp_bot';
-const COLLECTIONS = {
-  CONVERSATIONS: 'bingai_conversations'
+// Nigerian slang responses
+const naijaResponses = {
+  thinking: [
+    "Abeg make I think am small... 🤔",
+    "E dey process for my brain oh... 🧠",
+    "Make I check wetin AI wan talk... ⏳",
+    "Oya lemme ask my AI paddy... 🤖"
+  ],
+  greetings: [
+    "Wetin dey sup boss! 🔥",
+    "How far na! 👋",
+    "Omo see question oh! 🤯",
+    "Na wetin be this question sef? 😅"
+  ],
+  errors: [
+    "Omo, AI don catch error oh! 😭 Make we try again.",
+    "Abeg, something just happen. Try am again nah! 🙏",
+    "Chai! Network don stress me. One more time please! 📶",
+    "AI don dey misbehave small. Retry abeg! 🔄"
+  ]
 };
 
-// Database connection
-let db = null;
-let mongoClient = null;
+// Cache for conversations
+const conversationCache = new Map();
 
-// Initialize MongoDB connection
-async function initDatabase() {
-  if (db) return db;
-  
-  try {
-    mongoClient = new MongoClient(MONGODB_URI);
-    await mongoClient.connect();
-    db = mongoClient.db(DATABASE_NAME);
-    
-    // Create an index on the userId for quick lookups
-    await db.collection(COLLECTIONS.CONVERSATIONS).createIndex({ userId: 1 }, { unique: true });
-    
-    console.log('✅ MongoDB connected successfully for Bing AI plugin');
-    return db;
-  } catch (error) {
-    console.error('❌ MongoDB connection failed for Bing AI plugin:', error);
-    throw error;
-  }
-}
-
-// =========================================================
-//  Utility and core functions from bingai.js
-//  These have been extracted and included here to make the plugin
-//  self-contained and easily plug-and-play.
-// =========================================================
-const generateUUID = () => crypto.randomUUID();
-
-const createNewConversation = () => {
-  return Promise.resolve({
-    conversationId: generateUUID(),
-    encryptedConversationSignature: generateRandomString(64),
-    clientId: generateUUID()
-  });
-};
-
-const generateRandomString = (length) => [
-  ...Array(length)
-].map(() => Math.floor(0x10 * Math.random()).toString(0x10)).join('');
-
-const cleanupWebSocket = (ws) => {
-  clearInterval(ws.pingInterval);
-  ws.close();
-  ws.terminate();
-};
-
-const connectWebSocket = (signature, callback) => new Promise((resolve, reject) => {
-  const ws = new WebSocket('wss://sydney.bing.com/sydney/ChatHub', {
-    headers: callback
-  });
-
-  ws.on('error', reject);
-  ws.on('open', () => {
-    ws.send('{"protocol":"json","version":1}\x1e');
-  });
-  ws.on('close', () => {});
-  ws.on('message', (data) => {
-    const responses = data.toString().split('\x1e').map(msg => {
-      try {
-        return JSON.parse(msg);
-      } catch (error) {
-        return msg;
-      }
-    }).filter(msg => msg);
-
-    if (responses.length === 0) return;
-
-    if (responses[0] && typeof responses[0] === 'object' && Object.keys(responses[0]).length === 0) {
-      ws.pingInterval = setInterval(() => {
-        ws.send('{"type":6}\x1e');
-      }, 15000);
-      resolve(ws);
-    }
-  });
-});
-
-const buildMessageHistory = (messages, parentMessageId) => {
-  const history = [];
-  let currentId = parentMessageId;
-
-  while (currentId) {
-    const message = messages.find(msg => msg.id === currentId);
-    if (!message) break;
-    history.unshift(message);
-    currentId = message.parentMessageId;
-  }
-  return history;
-};
-
-const sendMessage = async (message, options = {}, callback) => {
-  let {
-    jailbreakConversationId = false,
-    conversationId,
-    encryptedConversationSignature,
-    clientId
-  } = options;
-
-  const {
-    toneStyle = 'balanced',
-    invocationId = 0,
-    systemMessage,
-    context,
-    parentMessageId = generateUUID(),
-    abortController = new AbortController()
-  } = options;
-
-  if (!encryptedConversationSignature || !conversationId || !clientId) {
-    const newConversation = await createNewConversation();
-    if (!newConversation.encryptedConversationSignature ||
-        !newConversation.conversationId ||
-        !newConversation.clientId) {
-
-      const errorValue = newConversation.result?.value;
-      if (errorValue) {
-        const error = new Error(newConversation.result.message);
-        error.code = errorValue;
-        throw error;
-      }
-      throw new Error('Failed to create new conversation: ' + JSON.stringify(newConversation, null, 2));
-    }
-    ({ encryptedConversationSignature, conversationId, clientId } = newConversation);
+class BingAIClient {
+  constructor() {
+    this.conversations = new Map();
   }
 
-  let jailbreakPrompt = '';
-  if (jailbreakConversationId) {
-    const conversation = await db.collection(COLLECTIONS.CONVERSATIONS).findOne({ userId: jailbreakConversationId }) || {
-      messages: [],
-      createdAt: Date.now()
+  // Generate random strings
+  generateRandomString(length) {
+    return [...Array(length)]
+      .map(() => Math.floor(0x10 * Math.random()).toString(0x10))
+      .join('');
+  }
+
+  // Generate UUID
+  generateUUID() {
+    return crypto.randomUUID();
+  }
+
+  // Create new conversation
+  async createNewConversation() {
+    return {
+      conversationId: this.generateUUID(),
+      encryptedConversationSignature: this.generateRandomString(64),
+      clientId: this.generateUUID()
     };
-
-    const messages = buildMessageHistory(conversation.messages, parentMessageId).map(msg => ({
-      text: msg.message,
-      author: msg.role === 'user' ? 'user' : 'bot'
-    }));
-
-    const contextMessages = invocationId === 0 ? [{
-      text: systemMessage || 'You are a helpful assistant.',
-      author: 'system'
-    }, ...messages, {
-      text: message,
-      author: 'user'
-    }] : undefined;
-
-    jailbreakPrompt = contextMessages?.map(msg => {
-      switch (msg.author) {
-        case 'user':
-          return `Human: ${msg.text}`;
-        case 'bot':
-          return `Assistant: ${msg.text}`;
-        case 'system':
-          return `System: ${msg.text}`;
-        default:
-          throw new Error(`Unknown author: ${msg.author}`);
-      }
-    }).join('\n\n');
-
-    if (context) {
-      jailbreakPrompt = context + '\n\n' + jailbreakPrompt;
-    }
   }
 
-  const userMessage = {
-    id: generateUUID(),
-    parentMessageId: parentMessageId,
-    role: 'user',
-    message: message
-  };
-
-  if (jailbreakConversationId) {
-    const conversation = await db.collection(COLLECTIONS.CONVERSATIONS).findOne({ userId: jailbreakConversationId });
-    if (conversation) {
-      conversation.messages.push(userMessage);
-      await db.collection(COLLECTIONS.CONVERSATIONS).updateOne(
-        { userId: jailbreakConversationId },
-        { $set: { messages: conversation.messages, updatedAt: new Date() } }
-      );
-    }
-  }
-
-  const ws = await connectWebSocket(encryptedConversationSignature, callback);
-
-  let selectedToneStyle;
-  switch (toneStyle) {
-    case 'creative':
-      selectedToneStyle = 'Creative';
-      break;
-    case 'balanced':
-      selectedToneStyle = 'Balanced';
-      break;
-    case 'precise':
-      selectedToneStyle = 'Precise';
-      break;
-    default:
-      selectedToneStyle = 'Balanced';
-  }
-
-  const requestPayload = {
-    arguments: [{
-      source: 'cib',
-      optionsSets: [
-        'nlu_direct_response_filter',
-        'deepleo',
-        'disable_emoji_spoken_text',
-        'responsible_ai_policy_235',
-        'enablemm',
-        selectedToneStyle,
-        'dtappid',
-        'cricinfo',
-        'cricinfov2',
-        'dv3sugg',
-        'nojbfedge'
-      ],
-      sliceIds: [
-        'chk1cf',
-        'nopreloadsscf',
-        'winlongmsg2tf'
-      ],
-      traceId: generateRandomString(32),
-      isStartOfSession: invocationId === 0,
-      message: {
-        author: 'user',
-        text: jailbreakConversationId ? jailbreakPrompt : message,
-        messageType: jailbreakConversationId ? 'Chat' : 'SearchQuery'
-      },
-      encryptedConversationSignature: encryptedConversationSignature,
-      participant: { id: clientId },
-      conversationId: conversationId,
-      previousMessages: []
-    }],
-    invocationId: invocationId.toString(),
-    target: 'chat',
-    type: 4
-  };
-
-  if (jailbreakPrompt) {
-    requestPayload.arguments[0].previousMessages.push({
-      author: 'user',
-      description: jailbreakPrompt,
-      contextType: 'WebPage',
-      messageType: 'Context',
-      messageId: generateUUID()
-    });
-  }
-
-  if (!jailbreakConversationId && context) {
-    requestPayload.arguments[0].previousMessages.push({
-      author: 'user',
-      description: context,
-      contextType: 'WebPage',
-      messageType: 'Context',
-      messageId: generateUUID()
-    });
-  }
-
-  if (requestPayload.arguments[0].previousMessages.length === 0) {
-    delete requestPayload.arguments[0].previousMessages;
-  }
-
-  const responsePromise = new Promise((resolve, reject) => {
-    let responseText = '';
-    let isComplete = false;
-
-    const timeout = setTimeout(() => {
-      cleanupWebSocket(ws);
-      reject(new Error('Request timeout'));
-    }, 300000);
-
-    abortController.signal.addEventListener('abort', () => {
-      clearTimeout(timeout);
-      cleanupWebSocket(ws);
-      reject(new Error('Request aborted'));
-    });
-
-    ws.on('message', async (data) => {
-      const messages = data.toString().split('\x1e').map(msg => {
-        try {
-          return JSON.parse(msg);
-        } catch (error) {
-          return msg;
+  // Connect to WebSocket
+  connectWebSocket(signature) {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket('wss://sydney.bing.com/sydney/ChatHub', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
         }
-      }).filter(msg => msg);
+      });
 
-      if (messages.length === 0) return;
+      const timeout = setTimeout(() => {
+        ws.close();
+        reject(new Error('Connection timeout'));
+      }, 10000);
 
-      const message = messages[0];
+      ws.on('error', (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
 
-      switch (message.type) {
-        case 1: {
-          if (isComplete) return;
+      ws.on('open', () => {
+        ws.send('{"protocol":"json","version":1}\x1e');
+      });
 
-          const messageContent = message?.arguments?.[0]?.messages;
-          if (!messageContent?.length || messageContent[0].author !== 'bot') return;
-
-          const text = messageContent[0].text;
-          if (!text || text === responseText) return;
-
-          text.startsWith(responseText.length);
-          responseText = text.trim().endsWith('...') ?
-              (isComplete = true, text.replace('...', '').trim()) :
-              text;
-          break;
-        }
-        case 2: {
-          clearTimeout(timeout);
-          cleanupWebSocket(ws);
-
-          if (message.item?.result?.error) {
-            return reject(new Error(message.item.result.error + ': ' + message.item.result.message));
-          }
-
-          const messages = message.item?.messages || [];
-          let finalMessage = messages.length ? messages[messages.length - 1] : null;
-
-          if (message.item?.result?.error) {
-            return reject(new Error(message.item.result.error + ': ' + message.item.result.message));
-          }
-
-          if (finalMessage) {
-            if (jailbreakConversationId && (
-                isComplete ||
-                message.item.messages[0].spokenTextResponse ||
-                message.item.messages[0].author !== 'bot' ||
-                message.item.messages.length > 1 &&
-                message.item.messages[1].contentOrigin === 'Apology'
-            )) {
-              if (!responseText) responseText = 'I understand your request.';
-              finalMessage.spokenTextResponse = responseText;
-              finalMessage.text = responseText;
-              delete finalMessage.contentOrigin;
+      ws.on('message', (data) => {
+        const responses = data.toString().split('\x1e')
+          .map(msg => {
+            try {
+              return JSON.parse(msg);
+            } catch {
+              return msg;
             }
+          })
+          .filter(msg => msg);
 
-            return resolve({
-              message: finalMessage,
-              conversationExpiryTime: message?.item?.conversationExpiryTime
-            });
-          } else {
-            return reject(new Error('No response message found'));
-          }
-        }
-        case 7:
+        if (responses.length === 0) return;
+
+        if (responses[0] && typeof responses[0] === 'object' && Object.keys(responses[0]).length === 0) {
           clearTimeout(timeout);
-          cleanupWebSocket(ws);
-          return reject(new Error(message.error || 'Unknown error occurred'));
-        default:
-          if (message?.error) {
-            clearTimeout(timeout);
-            cleanupWebSocket(ws);
-            return reject(new Error(`Error type ${message.type}: ${message.error}`));
-          }
-      }
+          // Setup ping interval
+          ws.pingInterval = setInterval(() => {
+            ws.send('{"type":6}\x1e');
+          }, 15000);
+          resolve(ws);
+        }
+      });
     });
-  });
-
-  const requestString = JSON.stringify(requestPayload);
-  ws.send(requestString + '\x1e');
-
-  const { message: response, conversationExpiryTime } = await responsePromise;
-
-  const botMessage = {
-    id: generateUUID(),
-    parentMessageId: userMessage.id,
-    role: 'assistant',
-    message: response.text,
-    details: response
-  };
-
-  if (jailbreakConversationId) {
-    const conversation = await db.collection(COLLECTIONS.CONVERSATIONS).findOne({ userId: jailbreakConversationId });
-    if (conversation) {
-      conversation.messages.push(botMessage);
-      await db.collection(COLLECTIONS.CONVERSATIONS).updateOne(
-        { userId: jailbreakConversationId },
-        { $set: { messages: conversation.messages, updatedAt: new Date() } }
-      );
-    }
   }
 
-  const result = {
-    conversationId,
-    encryptedConversationSignature,
-    clientId,
-    invocationId: invocationId + 1,
-    conversationExpiryTime,
-    response: response.text,
-    details: response
-  };
-
-  if (jailbreakConversationId) {
-    result.jailbreakConversationId = jailbreakConversationId;
-    result.parentMessageId = botMessage.parentMessageId;
-    result.messageId = botMessage.id;
-  }
-  return result;
-};
-
-
-// =========================================================
-//  Main plugin run function
-//  This is a named export, matching your existing plugins.
-// =========================================================
-export const run = async (context, args) => {
-  const { from, sender, command, reply } = context;
-  const userIdentifier = sender; 
-
-  // Initialize the database connection first
-  await initDatabase();
-
-  try {
-    if (command === 'reset') {
-      await db.collection(COLLECTIONS.CONVERSATIONS).deleteOne({ userId: userIdentifier });
-      await reply('✅ Your conversation with Bing AI has been reset.');
-      return;
-    }
-
-    if (!args || args.length === 0) {
-      await reply('⚠️ Please provide a message to send to Bing AI. Use `{PREFIX}ask [your question]`.');
-      return;
-    }
-
-    const userMessage = args.join(' ');
-    await reply('Thinking...');
-
-    // Fetch the existing conversation from the database
-    let userConversations = await db.collection(COLLECTIONS.CONVERSATIONS).findOne({ userId: userIdentifier });
-    if (!userConversations) {
-        // If no conversation exists, create a new one in the database
-        userConversations = {
-            userId: userIdentifier,
-            messages: [],
-            createdAt: new Date()
-        };
-        await db.collection(COLLECTIONS.CONVERSATIONS).insertOne(userConversations);
-    }
-
+  // Send message to Bing AI
+  async sendMessage(message, options = {}) {
     const {
       conversationId,
       encryptedConversationSignature,
       clientId,
-      invocationId,
-      response,
-      messageId,
-      parentMessageId
-    } = await sendMessage(userMessage, {
-      jailbreakConversationId: userIdentifier,
-      conversationId: userConversations.conversationId,
-      encryptedConversationSignature: userConversations.encryptedConversationSignature,
-      clientId: userConversations.clientId,
-      invocationId: userConversations.invocationId,
-      parentMessageId: userConversations.parentMessageId
-    });
+      invocationId = 0,
+      toneStyle = 'balanced'
+    } = options;
 
-    // Update the conversation state in the database
-    await db.collection(COLLECTIONS.CONVERSATIONS).updateOne(
-      { userId: userIdentifier },
-      { $set: {
-          conversationId,
-          encryptedConversationSignature,
-          clientId,
-          invocationId,
-          parentMessageId: messageId,
-          updatedAt: new Date()
+    // Determine tone style
+    let selectedToneStyle;
+    switch (toneStyle.toLowerCase()) {
+      case 'creative':
+        selectedToneStyle = 'Creative';
+        break;
+      case 'balanced':
+        selectedToneStyle = 'Balanced';
+        break;
+      case 'precise':
+        selectedToneStyle = 'Precise';
+        break;
+      default:
+        selectedToneStyle = 'Balanced';
+    }
+
+    // Connect to WebSocket
+    const ws = await this.connectWebSocket(encryptedConversationSignature);
+
+    return new Promise((resolve, reject) => {
+      let responseText = '';
+      
+      const timeout = setTimeout(() => {
+        this.cleanupWebSocket(ws);
+        reject(new Error('Request timeout'));
+      }, 120000); // 2 minutes timeout
+
+      ws.on('message', (data) => {
+        const messages = data.toString().split('\x1e')
+          .map(msg => {
+            try {
+              return JSON.parse(msg);
+            } catch {
+              return msg;
+            }
+          })
+          .filter(msg => msg);
+
+        if (messages.length === 0) return;
+
+        const message = messages[0];
+
+        switch (message.type) {
+          case 1: {
+            // Streaming response
+            const messageContent = message?.arguments?.[0]?.messages;
+            if (!messageContent?.length || messageContent[0].author !== 'bot') return;
+
+            const text = messageContent[0].text;
+            if (!text || text === responseText) return;
+
+            responseText = text;
+            break;
+          }
+
+          case 2: {
+            // Final response
+            clearTimeout(timeout);
+            this.cleanupWebSocket(ws);
+
+            if (message.item?.result?.error) {
+              return reject(new Error(message.item.result.error + ': ' + message.item.result.message));
+            }
+
+            const messages = message.item?.messages || [];
+            const finalMessage = messages.length ? messages[messages.length - 1] : null;
+
+            if (finalMessage) {
+              resolve({
+                message: finalMessage,
+                conversationExpiryTime: message?.item?.conversationExpiryTime
+              });
+            } else {
+              reject(new Error('No response message found'));
+            }
+            break;
+          }
+
+          case 7:
+            clearTimeout(timeout);
+            this.cleanupWebSocket(ws);
+            reject(new Error(message.error || 'Unknown error occurred'));
+            break;
+
+          default:
+            if (message?.error) {
+              clearTimeout(timeout);
+              this.cleanupWebSocket(ws);
+              reject(new Error(`Error type ${message.type}: ${message.error}`));
+            }
         }
-      }
-    );
+      });
 
-    await reply(response);
+      // Build request payload
+      const requestPayload = {
+        arguments: [{
+          source: 'cib',
+          optionsSets: [
+            'nlu_direct_response_filter',
+            'deepleo',
+            'disable_emoji_spoken_text',
+            'responsible_ai_policy_235',
+            'enablemm',
+            selectedToneStyle,
+            'dtappid',
+            'cricinfo',
+            'cricinfov2',
+            'dv3sugg',
+            'nojbfedge'
+          ],
+          sliceIds: [
+            'chk1cf',
+            'nopreloadsscf',
+            'winlongmsg2tf'
+          ],
+          traceId: this.generateRandomString(32),
+          isStartOfSession: invocationId === 0,
+          message: {
+            author: 'user',
+            text: message,
+            messageType: 'Chat'
+          },
+          encryptedConversationSignature: encryptedConversationSignature,
+          participant: { id: clientId },
+          conversationId: conversationId,
+          previousMessages: []
+        }],
+        invocationId: invocationId.toString(),
+        target: 'chat',
+        type: 4
+      };
+
+      // Send the request
+      ws.send(JSON.stringify(requestPayload) + '\x1e');
+    });
+  }
+
+  // Cleanup WebSocket
+  cleanupWebSocket(ws) {
+    if (ws.pingInterval) {
+      clearInterval(ws.pingInterval);
+    }
+    ws.close();
+    ws.terminate();
+  }
+}
+
+// Create Bing AI client instance
+const bingAI = new BingAIClient();
+
+// Random response selector
+function getRandomResponse(responses) {
+  return responses[Math.floor(Math.random() * responses.length)];
+}
+
+// Add Nigerian slang to AI response
+function addNaijaFlavor(text) {
+  const naijaWords = {
+    'you know': 'you sabi',
+    'understand': 'understand am',
+    'really': 'for real',
+    'actually': 'omo actually',
+    'awesome': 'mad oh!',
+    'great': 'correct!',
+    'amazing': 'omo see gobe!',
+    'interesting': 'e dey interesting sha',
+    'However': 'But omo',
+    'Therefore': 'So na im be say',
+    'Moreover': 'Again sef'
+  };
+
+  let enhancedText = text;
+  
+  // Replace some words with Naija slang
+  Object.entries(naijaWords).forEach(([english, naija]) => {
+    const regex = new RegExp(`\\b${english}\\b`, 'gi');
+    enhancedText = enhancedText.replace(regex, naija);
+  });
+
+  return enhancedText;
+}
+
+export default async function bingaiHandler(m, sock, config) {
+  try {
+    // Check if message mentions the bot, is a reply to bot, or uses AI command
+    const botNumber = sock.user.id.split(':')[0];
+    const isMentioned = m.mentionedJid?.includes(`${botNumber}@s.whatsapp.net`);
+    const isReply = m.quoted && m.quoted.participant === `${botNumber}@s.whatsapp.net`;
+    
+    let isCommand = false;
+    let query = '';
+
+    // Check for AI commands
+    if (m.body && m.body.startsWith(config.PREFIX)) {
+      const args = m.body.slice(config.PREFIX.length).trim().split(' ');
+      const command = args[0].toLowerCase();
+      
+      if (['ai', 'bing', 'ask'].includes(command)) {
+        isCommand = true;
+        query = args.slice(1).join(' ');
+      }
+    }
+
+    // If mentioned, replied to, or AI command used
+    if (isMentioned || isReply || isCommand) {
+      // Get the query
+      if (!query) {
+        query = m.body?.replace(`@${botNumber}`, '').trim() || '';
+      }
+
+      if (!query) {
+        await sock.sendMessage(m.from, {
+          text: `${getRandomResponse(naijaResponses.greetings)} Wetin you wan ask me? 🤔`
+        }, { quoted: m });
+        return;
+      }
+
+      // Initialize user
+      await unifiedUserManager.initUser(m.sender);
+
+      // Send thinking message
+      const thinkingMsg = await sock.sendMessage(m.from, {
+        text: getRandomResponse(naijaResponses.thinking)
+      }, { quoted: m });
+
+      try {
+        // Get or create conversation for this user
+        let conversation = conversationCache.get(m.sender);
+        
+        if (!conversation) {
+          conversation = await bingAI.createNewConversation();
+          conversation.invocationId = 0;
+          conversationCache.set(m.sender, conversation);
+          
+          // Clear old conversations after 30 minutes
+          setTimeout(() => {
+            conversationCache.delete(m.sender);
+          }, 30 * 60 * 1000);
+        }
+
+        // Send message to Bing AI
+        const result = await bingAI.sendMessage(query, {
+          conversationId: conversation.conversationId,
+          encryptedConversationSignature: conversation.encryptedConversationSignature,
+          clientId: conversation.clientId,
+          invocationId: conversation.invocationId,
+          toneStyle: 'balanced'
+        });
+
+        // Update conversation
+        conversation.invocationId++;
+
+        let aiResponse = result.message.text;
+        
+        // Add Nigerian flavor to response
+        aiResponse = addNaijaFlavor(aiResponse);
+
+        // Limit response length for WhatsApp
+        if (aiResponse.length > 1500) {
+          aiResponse = aiResponse.substring(0, 1500) + '...\n\n_Abeg the response long pass, na summary be this oh! 😅_';
+        }
+
+        // Delete thinking message and send AI response
+        try {
+          await sock.sendMessage(m.from, { delete: thinkingMsg.key });
+        } catch (error) {
+          // Silent fail - message might have been deleted already
+        }
+
+        await sock.sendMessage(m.from, {
+          text: `🤖 *Bing AI Response:*\n\n${aiResponse}\n\n_Powered by Bing AI with Naija flavor 🇳🇬✨_`
+        }, { quoted: m });
+
+        // Reward user with small amount for using AI
+        await unifiedUserManager.addMoney(m.sender, 5, 'AI Query Bonus');
+
+        console.log(`🤖 AI query from ${m.pushName || m.sender.split('@')[0]}: ${query.substring(0, 50)}...`);
+
+      } catch (error) {
+        console.error('Bing AI Error:', error);
+
+        // Delete thinking message
+        try {
+          await sock.sendMessage(m.from, { delete: thinkingMsg.key });
+        } catch (e) {
+          // Silent fail
+        }
+
+        await sock.sendMessage(m.from, {
+          text: `${getRandomResponse(naijaResponses.errors)} 😔\n\n_Error: ${error.message}_`
+        }, { quoted: m });
+      }
+    }
 
   } catch (error) {
-    console.error('Bing AI plugin error:', error);
-    await reply('❌ An error occurred while communicating with Bing AI. Please try again later.');
+    console.error('Bing AI Plugin Error:', error);
   }
-};
+}
