@@ -1,10 +1,10 @@
-// plugins/groq.js - Groq AI integration with Nigerian slang
+// plugins/groq.js - Groq AI integration with Nigerian slang - Updated with latest models
 import axios from 'axios';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
 export const info = {
   name: 'groq',
-  version: '1.0.0',
+  version: '2.0.0',
   author: 'Bot Developer',
   description: 'Lightning-fast AI chat powered by Groq with Nigerian Gen-Z vibes 🇳🇬⚡',
   commands: [
@@ -25,44 +25,31 @@ export const info = {
   ]
 };
 
-// Groq API configuration
+// Groq API configuration with updated models
 const GROQ_CONFIG = {
   API_KEY: process.env.GROQ_API_KEY || '',
   BASE_URL: 'https://api.groq.com/openai/v1/chat/completions',
   MODELS: {
-    'mixtral': 'mixtral-8x7b-32768',
-    'llama': 'llama3-70b-8192',
-    'gemma': 'gemma-7b-it'
+    'llama3.3': 'llama-3.3-70b-versatile',          // Latest Llama 3.3 - Best overall performance
+    'llama3.1': 'llama-3.1-8b-instant',             // Fast and efficient
+    'gemma2': 'gemma2-9b-it',                       // Google's latest Gemma 2
+    'deepseek': 'deepseek-r1-distill-llama-70b',    // DeepSeek reasoning model (preview)
+    'qwen3': 'qwen/qwen3-32b',                       // Alibaba's advanced Qwen 3 (preview)
+    'kimi': 'moonshotai/kimi-k2-instruct'            // Moonshot AI's trillion parameter model (preview)
   }
 };
 
-// Nigerian slang responses
-const naijaResponses = {
-  thinking: [
-    "Abeg make I think this thing well well... 🤔",
-    "Groq dey compute your matter oh... ⚡",
-    "Make I ask my AI brain... 🧠",
-    "Processing at lightning speed... 🚀",
-    "E dey load for my system... 💻"
-  ],
+// Simple responses
+const responses = {
   greetings: [
-    "Wetin dey happen boss! 🔥",
-    "How far na! You get question for me? 👋",
-    "Omo see serious question! 🤯",
-    "You don come with gist oh! 💬",
-    "Na wetin be this your matter sef? 😅"
+    "How can I help you? 🤔",
+    "What's up! What do you need? 👋",
+    "Hey! What's your question? 💬"
   ],
   errors: [
-    "Omo, Groq don catch error small! 😅 Make we try again!",
-    "Network wahala don show face! One more time abeg! 📶",
-    "AI server dey form attitude! But we go retry! 💪",
-    "Something just happen for backend! Try again nah! 🔄"
-  ],
-  success: [
-    "Oya! Groq don answer your question! 🎯",
-    "See am oh! Na this be the correct gist! ✨",
-    "Perfect! Make I break am down for you! 📝",
-    "Groq talk say make I tell you say... 🤖"
+    "Something went wrong! Let's try again 😅",
+    "Network issue! Please retry 📶",
+    "Server error! Try again 🔄"
   ]
 };
 
@@ -73,7 +60,7 @@ const userModels = new Map();
 
 class GroqAI {
   constructor() {
-    this.defaultModel = 'mixtral-8x7b-32768';
+    this.defaultModel = 'llama-3.3-70b-versatile'; // Updated to latest Llama 3.3
     this.rateLimits = new Map();
   }
 
@@ -87,7 +74,7 @@ class GroqAI {
       userLimit.resetTime = now + 60000; // Reset every minute
     }
     
-    if (userLimit.count >= 15) { // Max 15 requests per minute
+    if (userLimit.count >= 20) { // Increased limit since Groq has good rates
       return false;
     }
     
@@ -97,7 +84,7 @@ class GroqAI {
   }
 
   // Get conversation history
-  getConversationHistory(userId, maxMessages = 6) {
+  getConversationHistory(userId, maxMessages = 8) { // Increased context
     const conversation = userConversations.get(userId) || [];
     return conversation.slice(-maxMessages);
   }
@@ -111,61 +98,97 @@ class GroqAI {
       { role: 'assistant', content: aiResponse }
     );
     
-    // Keep only last 20 messages (10 exchanges)
-    if (conversation.length > 20) {
-      conversation = conversation.slice(-20);
+    // Keep only last 24 messages (12 exchanges) - increased for better context
+    if (conversation.length > 24) {
+      conversation = conversation.slice(-24);
     }
     
     userConversations.set(userId, conversation);
     
-    // Auto-cleanup after 2 hours
+    // Auto-cleanup after 3 hours - extended for better user experience
     setTimeout(() => {
       userConversations.delete(userId);
-    }, 2 * 60 * 60 * 1000);
+    }, 3 * 60 * 60 * 1000);
   }
 
   // Send request to Groq API
   async sendMessage(message, userId) {
     if (!this.checkRateLimit(userId)) {
-      throw new Error('Rate limit exceeded - too many requests!');
+      throw new Error('Rate limit exceeded - you don ask too many questions! Wait small abeg! ⏰');
     }
 
     const model = userModels.get(userId) || this.defaultModel;
     const history = this.getConversationHistory(userId);
     
-    // Build messages array with context
+    // Enhanced system prompt for better Nigerian context
+    const systemPrompt = `You are a highly intelligent AI assistant with authentic Nigerian Gen-Z personality. You speak with natural Nigerian urban slang mixed with proper English. You're witty, helpful, streetwise, and knowledgeable about both global topics and Nigerian culture.
+
+Key traits:
+- Use Nigerian expressions naturally (abeg, omo, sha, oh, nah, wetin, how far, etc.)
+- Reference Nigerian context when relevant (economy, culture, challenges, opportunities)
+- Be conversational and engaging, not formal or robotic
+- Give practical advice that works for Nigerian environment
+- Use appropriate emojis but don't overdo it
+- Keep responses WhatsApp-friendly (concise but informative)
+- Be encouraging and positive while being realistic
+- Show understanding of Nigerian youth struggles and aspirations
+- Reference local concepts when explaining global topics
+
+Speak like a smart Nigerian youth who's well-educated but still connected to the streets. Help with any topic but always maintain that authentic Naija vibe! You're knowledgeable about tech, business, relationships, education, and life in Nigeria.`;
+
+    // Build messages array with enhanced context
     const messages = [
       {
         role: 'system',
-        content: `You are an intelligent AI assistant with Nigerian Gen-Z personality. You speak with authentic Nigerian urban slang mixed with proper English. You're witty, helpful, and knowledgeable about both global topics and Nigerian culture. Keep responses conversational, engaging, and not too long for WhatsApp. Use Nigerian expressions naturally but ensure your advice is practical and helpful. You understand Nigerian context, challenges, and opportunities.`
+        content: `You are an intelligent AI assistant with a friendly Nigerian personality. You speak naturally with occasional Nigerian expressions but keep it conversational and helpful. You're knowledgeable about both global topics and Nigerian culture. Keep responses concise and practical for WhatsApp chat.`
       },
       ...history,
       { role: 'user', content: message }
     ];
 
-    const response = await axios.post(
-      GROQ_CONFIG.BASE_URL,
-      {
-        model: model,
-        messages: messages,
-        temperature: 0.8,
-        max_tokens: 1000,
-        top_p: 0.9,
-        stream: false
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
-          'Content-Type': 'application/json'
+    try {
+      const response = await axios.post(
+        GROQ_CONFIG.BASE_URL,
+        {
+          model: model,
+          messages: messages,
+          temperature: 0.8,
+          max_tokens: 1500, // Increased for more detailed responses
+          top_p: 0.9,
+          frequency_penalty: 0.1,
+          presence_penalty: 0.1,
+          stream: false
         },
-        timeout: 30000 // 30 seconds timeout
-      }
-    );
+        {
+          headers: {
+            'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'WhatsApp-Bot/2.0'
+          },
+          timeout: 30000 // 30 seconds timeout
+        }
+      );
 
-    return response.data.choices[0].message.content.trim();
+      if (response.data && response.data.choices && response.data.choices[0]) {
+        return response.data.choices[0].message.content.trim();
+      } else {
+        throw new Error('Invalid response format from Groq API');
+      }
+      
+    } catch (error) {
+      if (error.response) {
+        const status = error.response.status;
+        const message = error.response.data?.error?.message || 'Unknown API error';
+        throw new Error(`Groq API Error ${status}: ${message}`);
+      } else if (error.request) {
+        throw new Error('Network error - no response from Groq servers');
+      } else {
+        throw new Error(`Request setup error: ${error.message}`);
+      }
+    }
   }
 
-  // Get available models
+  // Get available models with updated descriptions
   getAvailableModels() {
     return Object.entries(GROQ_CONFIG.MODELS).map(([name, model]) => ({
       name: name,
@@ -174,12 +197,15 @@ class GroqAI {
     }));
   }
 
-  // Get model description
+  // Updated model descriptions with current models
   getModelDescription(modelName) {
     const descriptions = {
-      'mixtral': '🧠 Mixtral - Best for complex reasoning and detailed explanations',
-      'llama': '🦙 Llama3 - Great for general chat and creative tasks',
-      'gemma': '💎 Gemma - Fast and efficient for quick responses'
+      'llama3.3': '🦙 Llama 3.3 70B - Latest Meta model, best for complex reasoning and detailed responses',
+      'llama3.1': '⚡ Llama 3.1 8B - Fast and efficient, great for quick responses',
+      'gemma2': '💎 Gemma2 9B - Google\'s advanced model, excellent for creative tasks',
+      'deepseek': '🧠 DeepSeek R1 70B - Advanced reasoning model for complex problems (Preview)',
+      'qwen3': '🚀 Qwen 3 32B - Alibaba\'s latest with strong multilingual support (Preview)',
+      'kimi': '🌙 Kimi K2 - Moonshot AI\'s trillion parameter model, most advanced (Preview)'
     };
     return descriptions[modelName] || 'AI Model';
   }
@@ -226,8 +252,8 @@ export default async function groqHandler(m, sock, config) {
         const newMode = toggleAIMode(m.sender);
         const modeText = newMode ? 'ON 🟢' : 'OFF 🔴';
         const modeMsg = newMode 
-          ? "AI mode don dey active! 🤖 Now I go respond to all your messages automatically! Type the command again to turn off."
-          : "AI mode don off! 😴 Now I go only respond when you mention me or use AI commands.";
+          ? "AI mode activated! 🤖 I'll now respond automatically in DMs and when tagged in groups."
+          : "AI mode deactivated! 😴 I'll only respond when tagged/mentioned or with commands.";
           
         await sock.sendMessage(m.from, {
           text: `🔄 *AI Mode: ${modeText}*\n\n${modeMsg}`
@@ -235,19 +261,22 @@ export default async function groqHandler(m, sock, config) {
         return;
       }
       
-      // Model switching
+      // Model switching with updated models
       if (command === 'aimodel') {
         const modelName = args[1]?.toLowerCase();
         
         if (!modelName) {
           const models = groqAI.getAvailableModels();
-          const currentModel = userModels.get(m.sender) || 'mixtral-8x7b-32768';
+          const currentModel = userModels.get(m.sender) || 'llama-3.3-70b-versatile';
           
-          let modelList = '*Available AI Models:*\n\n';
+          let modelList = '*🤖 Available AI Models:*\n\n';
           models.forEach(model => {
             const current = GROQ_CONFIG.MODELS[model.name] === currentModel ? ' ✅' : '';
-            modelList += `${model.description}${current}\nCommand: \`${config.PREFIX}aimodel ${model.name}\`\n\n`;
+            const previewTag = ['deepseek', 'qwen3', 'kimi'].includes(model.name) ? ' 🧪' : '';
+            modelList += `${model.description}${current}${previewTag}\nCommand: \`${config.PREFIX}aimodel ${model.name}\`\n\n`;
           });
+          
+          modelList += '_🧪 Preview models may be discontinued without notice_';
           
           await sock.sendMessage(m.from, { text: modelList }, { quoted: m });
           return;
@@ -274,7 +303,14 @@ export default async function groqHandler(m, sock, config) {
     }
 
     // Determine if should respond to AI
-    const shouldRespond = isMentioned || isReply || isCommand || isAIMode;
+    const isGroupChat = m.from.endsWith('@g.us');
+    const isDM = !isGroupChat;
+    
+    // In groups: only respond when mentioned, replied to, or command
+    // In DMs: respond when AI mode is on or when using commands/mentions
+    const shouldRespond = isCommand || 
+                         (isGroupChat && (isMentioned || isReply)) || 
+                         (isDM && (isAIMode || isMentioned || isReply));
 
     if (shouldRespond) {
       // Get the query
@@ -292,18 +328,13 @@ export default async function groqHandler(m, sock, config) {
 
       if (!query || query.length < 2) {
         await sock.sendMessage(m.from, {
-          text: `${getRandomResponse(naijaResponses.greetings)} Wetin you wan ask me? 🤔\n\n💡 *Quick tips:*\n• Use \`${config.PREFIX}aimode\` to toggle auto-response\n• Use \`${config.PREFIX}aimodel\` to switch AI models`
+          text: `${getRandomResponse(responses.greetings)}\n\n💡 *Quick tips:*\n• Use \`${config.PREFIX}aimode\` to toggle auto-response\n• Use \`${config.PREFIX}aimodel\` to switch AI models`
         }, { quoted: m });
         return;
       }
 
       // Initialize user
       await unifiedUserManager.initUser(m.sender);
-
-      // Send thinking message
-      const thinkingMsg = await sock.sendMessage(m.from, {
-        text: getRandomResponse(naijaResponses.thinking)
-      }, { quoted: m });
 
       try {
         // Get AI response from Groq
@@ -314,56 +345,46 @@ export default async function groqHandler(m, sock, config) {
 
         // Limit response length for WhatsApp
         let finalResponse = aiResponse;
-        if (finalResponse.length > 1800) {
-          finalResponse = finalResponse.substring(0, 1800) + '...\n\n_Abeg the response long pass! For full gist, break your question into smaller parts! 😅_';
+        if (finalResponse.length > 2000) {
+          finalResponse = finalResponse.substring(0, 2000) + '...\n\n_Response too long! Break your question into smaller parts._';
         }
 
-        // Delete thinking message
-        try {
-          await sock.sendMessage(m.from, { delete: thinkingMsg.key });
-        } catch (error) {
-          // Silent fail
-        }
+        // Get current model name for footer
+        const currentModelId = userModels.get(m.sender) || groqAI.defaultModel;
+        const modelName = Object.keys(GROQ_CONFIG.MODELS).find(
+          key => GROQ_CONFIG.MODELS[key] === currentModelId
+        ) || 'llama3.3';
 
         // Send AI response
-        const modelName = Object.keys(GROQ_CONFIG.MODELS).find(
-          key => GROQ_CONFIG.MODELS[key] === (userModels.get(m.sender) || 'mixtral-8x7b-32768')
-        ) || 'mixtral';
-
         await sock.sendMessage(m.from, {
-          text: `${getRandomResponse(naijaResponses.success)}\n\n${finalResponse}\n\n_⚡ Powered by Groq ${modelName.toUpperCase()} | Lightning fast AI! 🇳🇬🤖_`
+          text: `${finalResponse}\n\n_⚡ Powered by Groq }_`
         }, { quoted: m });
 
         // Reward user with money
-        await unifiedUserManager.addMoney(m.sender, 7, 'Groq AI Chat Bonus');
+        await unifiedUserManager.addMoney(m.sender, 10, 'Groq AI Chat Bonus'); // Increased reward
 
-        console.log(`🤖 Groq AI query from ${m.pushName || m.sender.split('@')[0]}: ${query.substring(0, 50)}...`);
+        console.log(`🤖 Groq AI query from ${m.pushName || m.sender.split('@')[0]} using ${modelName}: ${query.substring(0, 50)}...`);
 
       } catch (error) {
         console.error('Groq AI Error:', error);
 
-        // Delete thinking message
-        try {
-          await sock.sendMessage(m.from, { delete: thinkingMsg.key });
-        } catch (e) {
-          // Silent fail
-        }
-
-        // Better error handling
-        let errorMsg = getRandomResponse(naijaResponses.errors);
+        // Enhanced error handling
+        let errorMsg = getRandomResponse(responses.errors);
         
         if (error.message.includes('rate limit') || error.message.includes('429')) {
-          errorMsg = "Omo, too many people dey use AI now! 😅 Wait small make traffic reduce, then try again! ⏰";
+          errorMsg = "Too many requests! Please wait and try again ⏰";
         } else if (error.message.includes('timeout')) {
-          errorMsg = "Network dey slow like snail! 🐌 Make we try again with better connection!";
+          errorMsg = "Network timeout! Try again 🌐";
         } else if (error.message.includes('API key') || error.message.includes('401')) {
-          errorMsg = "API key get problem oh! 🔑 Make admin check the configuration!";
+          errorMsg = "API configuration error! Contact admin 🔑";
         } else if (error.message.includes('exceeded')) {
-          errorMsg = "You don ask me too many questions today! 😴 Try again tomorrow or wait small!";
+          errorMsg = "Daily limit reached! Try again tomorrow 😴";
+        } else if (error.message.includes('model') && error.message.includes('not found')) {
+          errorMsg = "Model unavailable! Try switching with `.aimodel` 🔧";
         }
 
         await sock.sendMessage(m.from, {
-          text: `${errorMsg}\n\n_Error details: ${error.message.substring(0, 100)}..._`
+          text: `${errorMsg}\n\n_Error: ${error.message.substring(0, 100)}..._`
         }, { quoted: m });
       }
     }
@@ -372,128 +393,3 @@ export default async function groqHandler(m, sock, config) {
     console.error('Groq Plugin Error:', error);
   }
 }
-
-// Add Groq methods to the class
-Object.assign(groqAI, {
-  // Send message to Groq API
-  async sendMessage(message, userId) {
-    if (!this.checkRateLimit(userId)) {
-      throw new Error('Rate limit exceeded - you don ask too many questions! Wait small abeg! ⏰');
-    }
-
-    const model = userModels.get(userId) || this.defaultModel;
-    const history = this.getConversationHistory(userId);
-    
-    // Build messages array with Nigerian context
-    const messages = [
-      {
-        role: 'system',
-        content: `You are a highly intelligent AI assistant with authentic Nigerian Gen-Z personality. You speak with natural Nigerian urban slang mixed with proper English. You're witty, helpful, streetwise, and knowledgeable about both global topics and Nigerian culture. 
-
-Key traits:
-- Use Nigerian expressions naturally (abeg, omo, sha, oh, nah, etc.)
-- Reference Nigerian context when relevant (Naija economy, culture, challenges)
-- Be conversational and engaging, not formal or robotic
-- Give practical advice that works for Nigerian environment
-- Use appropriate emojis but don't overdo it
-- Keep responses WhatsApp-friendly (not too long)
-- Be encouraging and positive while being realistic
-
-Speak like a smart Nigerian youth who's well-educated but still connected to the streets. Help with any topic but always maintain that authentic Naija vibe!`
-      },
-      ...history,
-      { role: 'user', content: message }
-    ];
-
-    try {
-      const response = await axios.post(
-        GROQ_CONFIG.BASE_URL,
-        {
-          model: model,
-          messages: messages,
-          temperature: 0.8,
-          max_tokens: 1200,
-          top_p: 0.9,
-          frequency_penalty: 0.1,
-          presence_penalty: 0.1,
-          stream: false
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
-            'Content-Type': 'application/json',
-            'User-Agent': 'WhatsApp-Bot/1.0'
-          },
-          timeout: 25000 // 25 seconds timeout
-        }
-      );
-
-      if (response.data && response.data.choices && response.data.choices[0]) {
-        return response.data.choices[0].message.content.trim();
-      } else {
-        throw new Error('Invalid response format from Groq API');
-      }
-      
-    } catch (error) {
-      if (error.response) {
-        // API error
-        const status = error.response.status;
-        const message = error.response.data?.error?.message || 'Unknown API error';
-        throw new Error(`Groq API Error ${status}: ${message}`);
-      } else if (error.request) {
-        // Network error
-        throw new Error('Network error - no response from Groq servers');
-      } else {
-        // Other error
-        throw new Error(`Request setup error: ${error.message}`);
-      }
-    }
-  },
-
-  // Get conversation history for user
-  getConversationHistory(userId, maxMessages = 6) {
-    const conversation = userConversations.get(userId) || [];
-    return conversation.slice(-maxMessages);
-  },
-
-  // Update conversation history
-  updateConversation(userId, userMessage, aiResponse) {
-    let conversation = userConversations.get(userId) || [];
-    
-    conversation.push(
-      { role: 'user', content: userMessage },
-      { role: 'assistant', content: aiResponse }
-    );
-    
-    // Keep only last 20 messages (10 exchanges)
-    if (conversation.length > 20) {
-      conversation = conversation.slice(-20);
-    }
-    
-    userConversations.set(userId, conversation);
-    
-    // Auto-cleanup after 2 hours
-    setTimeout(() => {
-      userConversations.delete(userId);
-    }, 2 * 60 * 60 * 1000);
-  },
-
-  // Check rate limits
-  checkRateLimit(userId) {
-    const now = Date.now();
-    const userLimit = this.rateLimits.get(userId) || { count: 0, resetTime: now + 60000 };
-    
-    if (now > userLimit.resetTime) {
-      userLimit.count = 0;
-      userLimit.resetTime = now + 60000;
-    }
-    
-    if (userLimit.count >= 20) { // Groq has good limits, so we can be generous
-      return false;
-    }
-    
-    userLimit.count++;
-    this.rateLimits.set(userId, userLimit);
-    return true;
-  }
-});
