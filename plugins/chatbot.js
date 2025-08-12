@@ -1,11 +1,16 @@
-// plugins/bingai_plugin.js - Bing AI plugin compatible with PluginManager
+// plugins/bingai_plugin.js - Bing AI plugin following economy_plugin structure
+
+import { MongoClient } from 'mongodb';
+import crypto from 'crypto';
+import { WebSocket } from 'ws';
+import https from 'https';
 
 // Plugin information export
-const info = {
+export const info = {
   name: 'Bing AI Chat',
   version: '1.0.0',
   author: 'Gemini',
-  description: 'Integrates Bing AI conversational capabilities into the bot.',
+  description: 'Integrates Bing AI conversational capabilities into the bot with MongoDB persistence.',
   commands: [
     {
       name: 'ask',
@@ -23,21 +28,44 @@ const info = {
 };
 
 // =========================================================
-//  In-memory cache for conversations
-//  A more robust implementation might use a database for persistence,
-//  but this is sufficient for a basic plugin.
+//  MongoDB Configuration
+//  Using the same URI and a new collection for conversations
 // =========================================================
-const conversationCache = new Map();
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+const DATABASE_NAME = 'whatsapp_bot';
+const COLLECTIONS = {
+  CONVERSATIONS: 'bingai_conversations'
+};
+
+// Database connection
+let db = null;
+let mongoClient = null;
+
+// Initialize MongoDB connection
+async function initDatabase() {
+  if (db) return db;
+  
+  try {
+    mongoClient = new MongoClient(MONGODB_URI);
+    await mongoClient.connect();
+    db = mongoClient.db(DATABASE_NAME);
+    
+    // Create an index on the userId for quick lookups
+    await db.collection(COLLECTIONS.CONVERSATIONS).createIndex({ userId: 1 }, { unique: true });
+    
+    console.log('✅ MongoDB connected successfully for Bing AI plugin');
+    return db;
+  } catch (error) {
+    console.error('❌ MongoDB connection failed for Bing AI plugin:', error);
+    throw error;
+  }
+}
 
 // =========================================================
 //  Utility and core functions from bingai.js
 //  These have been extracted and included here to make the plugin
 //  self-contained and easily plug-and-play.
 // =========================================================
-import crypto from 'crypto';
-import { WebSocket } from 'ws';
-import https from 'https';
-
 const generateUUID = () => crypto.randomUUID();
 
 const createNewConversation = () => {
@@ -137,7 +165,7 @@ const sendMessage = async (message, options = {}, callback) => {
 
   let jailbreakPrompt = '';
   if (jailbreakConversationId) {
-    const conversation = conversationCache.get(jailbreakConversationId) || {
+    const conversation = await db.collection(COLLECTIONS.CONVERSATIONS).findOne({ userId: jailbreakConversationId }) || {
       messages: [],
       createdAt: Date.now()
     };
@@ -181,9 +209,13 @@ const sendMessage = async (message, options = {}, callback) => {
   };
 
   if (jailbreakConversationId) {
-    const conversation = conversationCache.get(jailbreakConversationId);
+    const conversation = await db.collection(COLLECTIONS.CONVERSATIONS).findOne({ userId: jailbreakConversationId });
     if (conversation) {
-        conversation.messages.push(userMessage);
+      conversation.messages.push(userMessage);
+      await db.collection(COLLECTIONS.CONVERSATIONS).updateOne(
+        { userId: jailbreakConversationId },
+        { $set: { messages: conversation.messages, updatedAt: new Date() } }
+      );
     }
   }
 
@@ -375,10 +407,13 @@ const sendMessage = async (message, options = {}, callback) => {
   };
 
   if (jailbreakConversationId) {
-    const conversation = conversationCache.get(jailbreakConversationId);
+    const conversation = await db.collection(COLLECTIONS.CONVERSATIONS).findOne({ userId: jailbreakConversationId });
     if (conversation) {
-        conversation.messages.push(botMessage);
-        conversationCache.set(jailbreakConversationId, conversation);
+      conversation.messages.push(botMessage);
+      await db.collection(COLLECTIONS.CONVERSATIONS).updateOne(
+        { userId: jailbreakConversationId },
+        { $set: { messages: conversation.messages, updatedAt: new Date() } }
+      );
     }
   }
 
@@ -405,14 +440,16 @@ const sendMessage = async (message, options = {}, callback) => {
 //  Main plugin run function
 //  This is the entry point for the plugin's commands.
 // =========================================================
-const run = async (context, args) => {
+export const run = async (context, args) => {
   const { from, sender, command, reply } = context;
-  const userIdentifier = sender; // Using the sender ID as the user identifier
-  const userConversations = conversationCache.get(userIdentifier) || {};
+  const userIdentifier = sender; 
+
+  // Initialize the database connection first
+  await initDatabase();
 
   try {
     if (command === 'reset') {
-      conversationCache.delete(userIdentifier);
+      await db.collection(COLLECTIONS.CONVERSATIONS).deleteOne({ userId: userIdentifier });
       await reply('✅ Your conversation with Bing AI has been reset.');
       return;
     }
@@ -423,8 +460,19 @@ const run = async (context, args) => {
     }
 
     const userMessage = args.join(' ');
-
     await reply('Thinking...');
+
+    // Fetch the existing conversation from the database
+    let userConversations = await db.collection(COLLECTIONS.CONVERSATIONS).findOne({ userId: userIdentifier });
+    if (!userConversations) {
+        // If no conversation exists, create a new one in the database
+        userConversations = {
+            userId: userIdentifier,
+            messages: [],
+            createdAt: new Date()
+        };
+        await db.collection(COLLECTIONS.CONVERSATIONS).insertOne(userConversations);
+    }
 
     const {
       conversationId,
@@ -436,18 +484,26 @@ const run = async (context, args) => {
       parentMessageId
     } = await sendMessage(userMessage, {
       jailbreakConversationId: userIdentifier,
-      ...userConversations
+      conversationId: userConversations.conversationId,
+      encryptedConversationSignature: userConversations.encryptedConversationSignature,
+      clientId: userConversations.clientId,
+      invocationId: userConversations.invocationId,
+      parentMessageId: userConversations.parentMessageId
     });
 
-    // Update the user's conversation state in the cache
-    conversationCache.set(userIdentifier, {
-      conversationId,
-      encryptedConversationSignature,
-      clientId,
-      invocationId,
-      parentMessageId: messageId,
-      jailbreakConversationId: userIdentifier
-    });
+    // Update the conversation state in the database
+    await db.collection(COLLECTIONS.CONVERSATIONS).updateOne(
+      { userId: userIdentifier },
+      { $set: {
+          conversationId,
+          encryptedConversationSignature,
+          clientId,
+          invocationId,
+          parentMessageId: messageId,
+          updatedAt: new Date()
+        }
+      }
+    );
 
     await reply(response);
 
@@ -456,6 +512,3 @@ const run = async (context, args) => {
     await reply('❌ An error occurred while communicating with Bing AI. Please try again later.');
   }
 };
-
-// Export the single plugin object as the default export
-export default { info, run };
