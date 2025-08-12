@@ -1,470 +1,217 @@
-// plugins/bingai.js - Fixed Bing AI integration with proper session management
-import { WebSocket } from 'ws';
-import crypto from 'crypto';
-import https from 'https';
+// plugins/groq.js - Groq AI integration with Nigerian slang
+import axios from 'axios';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
 export const info = {
-  name: 'bingai',
-  version: '2.1.0',
+  name: 'groq',
+  version: '1.0.0',
   author: 'Bot Developer',
-  description: 'Chat with Bing AI with Nigerian urban slang flavor 🇳🇬',
+  description: 'Lightning-fast AI chat powered by Groq with Nigerian Gen-Z vibes 🇳🇬⚡',
   commands: [
     {
       name: 'ai',
-      aliases: ['bing', 'ask'],
-      description: 'Ask Bing AI anything - mention/reply/tag the bot'
+      aliases: ['groq', 'ask', 'chat', 'gpt'],
+      description: 'Chat with Groq AI - mention, reply or use command'
+    },
+    {
+      name: 'aimode',
+      aliases: ['groqmode'],
+      description: 'Toggle AI mode on/off for automatic responses'
+    },
+    {
+      name: 'aimodel',
+      description: 'Switch between AI models'
     }
   ]
+};
+
+// Groq API configuration
+const GROQ_CONFIG = {
+  API_KEY: process.env.GROQ_API_KEY || '',
+  BASE_URL: 'https://api.groq.com/openai/v1/chat/completions',
+  MODELS: {
+    'mixtral': 'mixtral-8x7b-32768',
+    'llama': 'llama3-70b-8192',
+    'gemma': 'gemma-7b-it'
+  }
 };
 
 // Nigerian slang responses
 const naijaResponses = {
   thinking: [
-    "Abeg make I think am small... 🤔",
-    "E dey process for my brain oh... 🧠",
-    "Make I check wetin AI wan talk... ⏳",
-    "Oya lemme ask my AI paddy... 🤖"
+    "Abeg make I think this thing well well... 🤔",
+    "Groq dey compute your matter oh... ⚡",
+    "Make I ask my AI brain... 🧠",
+    "Processing at lightning speed... 🚀",
+    "E dey load for my system... 💻"
   ],
   greetings: [
-    "Wetin dey sup boss! 🔥",
-    "How far na! 👋",
-    "Omo see question oh! 🤯",
-    "Na wetin be this question sef? 😅"
+    "Wetin dey happen boss! 🔥",
+    "How far na! You get question for me? 👋",
+    "Omo see serious question! 🤯",
+    "You don come with gist oh! 💬",
+    "Na wetin be this your matter sef? 😅"
   ],
   errors: [
-    "Omo, AI don catch error oh! 😭 Make we try again.",
-    "Abeg, something just happen. Try am again nah! 🙏",
-    "Chai! Network don stress me. One more time please! 📶",
-    "AI don dey misbehave small. Retry abeg! 🔄"
+    "Omo, Groq don catch error small! 😅 Make we try again!",
+    "Network wahala don show face! One more time abeg! 📶",
+    "AI server dey form attitude! But we go retry! 💪",
+    "Something just happen for backend! Try again nah! 🔄"
+  ],
+  success: [
+    "Oya! Groq don answer your question! 🎯",
+    "See am oh! Na this be the correct gist! ✨",
+    "Perfect! Make I break am down for you! 📝",
+    "Groq talk say make I tell you say... 🤖"
   ]
 };
 
-// Cache for conversations and sessions
-const conversationCache = new Map();
-let globalSession = null;
+// User AI mode tracking
+const aiModeUsers = new Map();
+const userConversations = new Map();
+const userModels = new Map();
 
-class BingAIClient {
+class GroqAI {
   constructor() {
-    this.conversations = new Map();
-    this.sessionData = null;
+    this.defaultModel = 'mixtral-8x7b-32768';
+    this.rateLimits = new Map();
   }
 
-  // Generate random strings
-  generateRandomString(length) {
-    return [...Array(length)]
-      .map(() => Math.floor(0x10 * Math.random()).toString(0x10))
-      .join('');
+  // Check rate limits (Groq has good limits but let's be safe)
+  checkRateLimit(userId) {
+    const now = Date.now();
+    const userLimit = this.rateLimits.get(userId) || { count: 0, resetTime: now + 60000 };
+    
+    if (now > userLimit.resetTime) {
+      userLimit.count = 0;
+      userLimit.resetTime = now + 60000; // Reset every minute
+    }
+    
+    if (userLimit.count >= 15) { // Max 15 requests per minute
+      return false;
+    }
+    
+    userLimit.count++;
+    this.rateLimits.set(userId, userLimit);
+    return true;
   }
 
-  // Generate UUID
-  generateUUID() {
-    return crypto.randomUUID();
+  // Get conversation history
+  getConversationHistory(userId, maxMessages = 6) {
+    const conversation = userConversations.get(userId) || [];
+    return conversation.slice(-maxMessages);
   }
 
-  // Get proper session data from Bing
-  async getSessionData() {
-    if (this.sessionData && Date.now() - this.sessionData.timestamp < 10 * 60 * 1000) {
-      return this.sessionData;
+  // Update conversation history
+  updateConversation(userId, userMessage, aiResponse) {
+    let conversation = userConversations.get(userId) || [];
+    
+    conversation.push(
+      { role: 'user', content: userMessage },
+      { role: 'assistant', content: aiResponse }
+    );
+    
+    // Keep only last 20 messages (10 exchanges)
+    if (conversation.length > 20) {
+      conversation = conversation.slice(-20);
+    }
+    
+    userConversations.set(userId, conversation);
+    
+    // Auto-cleanup after 2 hours
+    setTimeout(() => {
+      userConversations.delete(userId);
+    }, 2 * 60 * 60 * 1000);
+  }
+
+  // Send request to Groq API
+  async sendMessage(message, userId) {
+    if (!this.checkRateLimit(userId)) {
+      throw new Error('Rate limit exceeded - too many requests!');
     }
 
-    return new Promise((resolve, reject) => {
-      const options = {
-        hostname: 'www.bing.com',
-        port: 443,
-        path: '/chat',
-        method: 'GET',
+    const model = userModels.get(userId) || this.defaultModel;
+    const history = this.getConversationHistory(userId);
+    
+    // Build messages array with context
+    const messages = [
+      {
+        role: 'system',
+        content: `You are an intelligent AI assistant with Nigerian Gen-Z personality. You speak with authentic Nigerian urban slang mixed with proper English. You're witty, helpful, and knowledgeable about both global topics and Nigerian culture. Keep responses conversational, engaging, and not too long for WhatsApp. Use Nigerian expressions naturally but ensure your advice is practical and helpful. You understand Nigerian context, challenges, and opportunities.`
+      },
+      ...history,
+      { role: 'user', content: message }
+    ];
+
+    const response = await axios.post(
+      GROQ_CONFIG.BASE_URL,
+      {
+        model: model,
+        messages: messages,
+        temperature: 0.8,
+        max_tokens: 1000,
+        top_p: 0.9,
+        stream: false
+      },
+      {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Accept-Encoding': 'gzip, deflate, br',
-          'Referer': 'https://www.bing.com/',
-          'Connection': 'keep-alive',
-          'Upgrade-Insecure-Requests': '1',
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-          'Sec-Fetch-Site': 'same-origin'
-        }
-      };
+          'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000 // 30 seconds timeout
+      }
+    );
 
-      const req = https.request(options, (res) => {
-        const cookies = [];
-        if (res.headers['set-cookie']) {
-          res.headers['set-cookie'].forEach(cookie => {
-            cookies.push(cookie.split(';')[0]);
-          });
-        }
-
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          // Extract conversation signature and other needed data
-          const conversationSignatureMatch = data.match(/["']encryptedConversationSignature["']:\s*["']([^"']+)["']/);
-          const conversationIdMatch = data.match(/["']conversationId["']:\s*["']([^"']+)["']/);
-          const clientIdMatch = data.match(/["']clientId["']:\s*["']([^"']+)["']/);
-
-          if (conversationSignatureMatch && conversationIdMatch && clientIdMatch) {
-            this.sessionData = {
-              encryptedConversationSignature: conversationSignatureMatch[1],
-              conversationId: conversationIdMatch[1],
-              clientId: clientIdMatch[1],
-              cookies: cookies.join('; '),
-              timestamp: Date.now()
-            };
-            console.log('✅ Got Bing session data');
-            resolve(this.sessionData);
-          } else {
-            // Create new session data
-            this.sessionData = {
-              encryptedConversationSignature: this.generateRandomString(64),
-              conversationId: this.generateUUID(),
-              clientId: this.generateUUID(),
-              cookies: cookies.join('; '),
-              timestamp: Date.now()
-            };
-            console.log('🔄 Created new session data');
-            resolve(this.sessionData);
-          }
-        });
-      });
-
-      req.on('error', (error) => {
-        console.error('Session request error:', error);
-        // Create fallback session
-        this.sessionData = {
-          encryptedConversationSignature: this.generateRandomString(64),
-          conversationId: this.generateUUID(),
-          clientId: this.generateUUID(),
-          cookies: '',
-          timestamp: Date.now()
-        };
-        resolve(this.sessionData);
-      });
-
-      req.end();
-    });
+    return response.data.choices[0].message.content.trim();
   }
 
-  // Create new conversation with proper session
-  async createNewConversation() {
-    const sessionData = await this.getSessionData();
-    return {
-      conversationId: sessionData.conversationId || this.generateUUID(),
-      encryptedConversationSignature: sessionData.encryptedConversationSignature || this.generateRandomString(64),
-      clientId: sessionData.clientId || this.generateUUID(),
-      cookies: sessionData.cookies || ''
+  // Get available models
+  getAvailableModels() {
+    return Object.entries(GROQ_CONFIG.MODELS).map(([name, model]) => ({
+      name: name,
+      model: model,
+      description: this.getModelDescription(name)
+    }));
+  }
+
+  // Get model description
+  getModelDescription(modelName) {
+    const descriptions = {
+      'mixtral': '🧠 Mixtral - Best for complex reasoning and detailed explanations',
+      'llama': '🦙 Llama3 - Great for general chat and creative tasks',
+      'gemma': '💎 Gemma - Fast and efficient for quick responses'
     };
-  }
-
-  // Connect to WebSocket with proper headers
-  connectWebSocket(conversationData) {
-    return new Promise((resolve, reject) => {
-      const headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-        'Origin': 'https://www.bing.com',
-        'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits',
-        'Sec-WebSocket-Version': '13'
-      };
-
-      if (conversationData.cookies) {
-        headers['Cookie'] = conversationData.cookies;
-      }
-
-      console.log('🔌 Connecting to Bing WebSocket...');
-      const ws = new WebSocket('wss://sydney.bing.com/sydney/ChatHub', {
-        headers: headers
-      });
-
-      const timeout = setTimeout(() => {
-        ws.close();
-        reject(new Error('Connection timeout'));
-      }, 15000);
-
-      ws.on('error', (error) => {
-        clearTimeout(timeout);
-        console.error('❌ WebSocket error:', error.message);
-        reject(error);
-      });
-
-      ws.on('open', () => {
-        console.log('✅ WebSocket connected');
-        ws.send('{"protocol":"json","version":1}\x1e');
-      });
-
-      ws.on('message', (data) => {
-        const responses = data.toString().split('\x1e')
-          .map(msg => {
-            try {
-              return JSON.parse(msg);
-            } catch {
-              return msg;
-            }
-          })
-          .filter(msg => msg);
-
-        if (responses.length === 0) return;
-
-        if (responses[0] && typeof responses[0] === 'object' && Object.keys(responses[0]).length === 0) {
-          clearTimeout(timeout);
-          console.log('🤝 Handshake successful');
-          
-          // Setup ping interval
-          ws.pingInterval = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send('{"type":6}\x1e');
-            }
-          }, 15000);
-          
-          resolve(ws);
-        }
-      });
-
-      ws.on('close', (code, reason) => {
-        clearTimeout(timeout);
-        console.log(`🔌 Connection closed: ${code} - ${reason}`);
-      });
-    });
-  }
-
-  // Send message to Bing AI
-  async sendMessage(message, options = {}) {
-    const {
-      conversationId,
-      encryptedConversationSignature,
-      clientId,
-      cookies,
-      invocationId = 0,
-      toneStyle = 'balanced'
-    } = options;
-
-    const ws = await this.connectWebSocket({
-      conversationId,
-      encryptedConversationSignature,
-      clientId,
-      cookies
-    });
-
-    return new Promise((resolve, reject) => {
-      let responseText = '';
-      let hasResponded = false;
-      
-      const timeout = setTimeout(() => {
-        if (!hasResponded) {
-          hasResponded = true;
-          this.cleanupWebSocket(ws);
-          reject(new Error('AI response timeout'));
-        }
-      }, 120000); // 2 minutes timeout
-
-      ws.on('error', (error) => {
-        if (!hasResponded) {
-          hasResponded = true;
-          clearTimeout(timeout);
-          this.cleanupWebSocket(ws);
-          reject(error);
-        }
-      });
-
-      ws.on('message', (data) => {
-        try {
-          const messages = data.toString().split('\x1e')
-            .map(msg => {
-              try {
-                return JSON.parse(msg);
-              } catch {
-                return null;
-              }
-            })
-            .filter(msg => msg);
-
-          if (messages.length === 0) return;
-
-          for (const message of messages) {
-            if (hasResponded) break;
-
-            switch (message.type) {
-              case 1: {
-                // Streaming response
-                const messageContent = message?.arguments?.[0]?.messages;
-                if (!messageContent?.length || messageContent[0].author !== 'bot') continue;
-
-                const text = messageContent[0].text;
-                if (text && text !== responseText && text.length > responseText.length) {
-                  responseText = text;
-                }
-                break;
-              }
-
-              case 2: {
-                // Final response
-                if (hasResponded) break;
-                hasResponded = true;
-                clearTimeout(timeout);
-                this.cleanupWebSocket(ws);
-
-                if (message.item?.result?.error) {
-                  return reject(new Error(message.item.result.message || message.item.result.error));
-                }
-
-                const messages = message.item?.messages || [];
-                let finalMessage = null;
-
-                // Find the bot's response
-                for (let i = messages.length - 1; i >= 0; i--) {
-                  if (messages[i].author === 'bot' && messages[i].text) {
-                    finalMessage = messages[i];
-                    break;
-                  }
-                }
-
-                if (finalMessage && finalMessage.text) {
-                  resolve({
-                    message: finalMessage,
-                    conversationExpiryTime: message?.item?.conversationExpiryTime
-                  });
-                } else if (responseText) {
-                  resolve({
-                    message: { text: responseText, author: 'bot' },
-                    conversationExpiryTime: message?.item?.conversationExpiryTime
-                  });
-                } else {
-                  reject(new Error('No response received from Bing AI'));
-                }
-                break;
-              }
-
-              case 7:
-                if (hasResponded) break;
-                hasResponded = true;
-                clearTimeout(timeout);
-                this.cleanupWebSocket(ws);
-                reject(new Error(message.error || 'Bing AI service error'));
-                break;
-            }
-          }
-        } catch (parseError) {
-          if (!hasResponded) {
-            console.error('Parse error:', parseError);
-          }
-        }
-      });
-
-      // Build request payload
-      const requestPayload = {
-        arguments: [{
-          source: 'cib',
-          optionsSets: [
-            'nlu_direct_response_filter',
-            'deepleo',
-            'disable_emoji_spoken_text',
-            'responsible_ai_policy_235',
-            'enablemm',
-            toneStyle === 'creative' ? 'Creative' : toneStyle === 'precise' ? 'Precise' : 'Balanced',
-            'dtappid',
-            'cricinfo',
-            'cricinfov2',
-            'dv3sugg'
-          ],
-          sliceIds: [
-            'winmuid3tf',
-            'osbsdusgreccf',
-            'ttstmout',
-            'crchatrev',
-            'winlongmsg2tf'
-          ],
-          traceId: this.generateRandomString(32),
-          isStartOfSession: invocationId === 0,
-          message: {
-            author: 'user',
-            inputMethod: 'Keyboard',
-            text: message,
-            messageType: 'Chat'
-          },
-          encryptedConversationSignature: encryptedConversationSignature,
-          participant: { id: clientId },
-          conversationId: conversationId,
-          previousMessages: []
-        }],
-        invocationId: invocationId.toString(),
-        target: 'chat',
-        type: 4
-      };
-
-      // Send the request
-      try {
-        const requestString = JSON.stringify(requestPayload) + '\x1e';
-        ws.send(requestString);
-        console.log('📤 Request sent to Bing AI');
-      } catch (sendError) {
-        if (!hasResponded) {
-          hasResponded = true;
-          clearTimeout(timeout);
-          this.cleanupWebSocket(ws);
-          reject(new Error(`Failed to send request: ${sendError.message}`));
-        }
-      }
-    });
-  }
-
-  // Cleanup WebSocket
-  cleanupWebSocket(ws) {
-    if (ws.pingInterval) {
-      clearInterval(ws.pingInterval);
-    }
-    try {
-      ws.close();
-      ws.terminate();
-    } catch (error) {
-      // Silent fail
-    }
+    return descriptions[modelName] || 'AI Model';
   }
 }
 
-// Create Bing AI client instance
-const bingAI = new BingAIClient();
+// Create Groq instance
+const groqAI = new GroqAI();
 
 // Random response selector
 function getRandomResponse(responses) {
   return responses[Math.floor(Math.random() * responses.length)];
 }
 
-// Add Nigerian slang to AI response
-function addNaijaFlavor(text) {
-  const naijaWords = {
-    'you know': 'you sabi',
-    'understand': 'understand am',
-    'really': 'for real',
-    'actually': 'omo actually',
-    'awesome': 'mad oh!',
-    'great': 'correct!',
-    'amazing': 'omo see gobe!',
-    'interesting': 'e dey interesting sha',
-    'However': 'But omo',
-    'Therefore': 'So na im be say',
-    'Moreover': 'Again sef'
-  };
-
-  let enhancedText = text;
-  
-  // Replace some words with Naija slang
-  Object.entries(naijaWords).forEach(([english, naija]) => {
-    const regex = new RegExp(`\\b${english}\\b`, 'gi');
-    enhancedText = enhancedText.replace(regex, naija);
-  });
-
-  return enhancedText;
+// Check if user is in AI mode
+function isAIModeActive(userId) {
+  return aiModeUsers.get(userId) || false;
 }
 
-export default async function bingaiHandler(m, sock, config) {
+// Toggle AI mode for user
+function toggleAIMode(userId) {
+  const currentMode = aiModeUsers.get(userId) || false;
+  aiModeUsers.set(userId, !currentMode);
+  return !currentMode;
+}
+
+export default async function groqHandler(m, sock, config) {
   try {
     // Check if message mentions the bot, is a reply to bot, or uses AI command
     const botNumber = sock.user.id.split(':')[0];
     const isMentioned = m.mentionedJid?.includes(`${botNumber}@s.whatsapp.net`);
     const isReply = m.quoted && m.quoted.participant === `${botNumber}@s.whatsapp.net`;
+    const isAIMode = isAIModeActive(m.sender);
     
     let isCommand = false;
     let query = '';
@@ -474,22 +221,78 @@ export default async function bingaiHandler(m, sock, config) {
       const args = m.body.slice(config.PREFIX.length).trim().split(' ');
       const command = args[0].toLowerCase();
       
-      if (['ai', 'bing', 'ask'].includes(command)) {
+      // AI Mode toggle
+      if (['aimode', 'groqmode'].includes(command)) {
+        const newMode = toggleAIMode(m.sender);
+        const modeText = newMode ? 'ON 🟢' : 'OFF 🔴';
+        const modeMsg = newMode 
+          ? "AI mode don dey active! 🤖 Now I go respond to all your messages automatically! Type the command again to turn off."
+          : "AI mode don off! 😴 Now I go only respond when you mention me or use AI commands.";
+          
+        await sock.sendMessage(m.from, {
+          text: `🔄 *AI Mode: ${modeText}*\n\n${modeMsg}`
+        }, { quoted: m });
+        return;
+      }
+      
+      // Model switching
+      if (command === 'aimodel') {
+        const modelName = args[1]?.toLowerCase();
+        
+        if (!modelName) {
+          const models = groqAI.getAvailableModels();
+          const currentModel = userModels.get(m.sender) || 'mixtral-8x7b-32768';
+          
+          let modelList = '*Available AI Models:*\n\n';
+          models.forEach(model => {
+            const current = GROQ_CONFIG.MODELS[model.name] === currentModel ? ' ✅' : '';
+            modelList += `${model.description}${current}\nCommand: \`${config.PREFIX}aimodel ${model.name}\`\n\n`;
+          });
+          
+          await sock.sendMessage(m.from, { text: modelList }, { quoted: m });
+          return;
+        }
+        
+        if (GROQ_CONFIG.MODELS[modelName]) {
+          userModels.set(m.sender, GROQ_CONFIG.MODELS[modelName]);
+          await sock.sendMessage(m.from, {
+            text: `✅ AI model switched to: ${groqAI.getModelDescription(modelName)}\n\nYour next AI chats go use this model!`
+          }, { quoted: m });
+        } else {
+          await sock.sendMessage(m.from, {
+            text: `❌ Invalid model! Use \`${config.PREFIX}aimodel\` to see available options.`
+          }, { quoted: m });
+        }
+        return;
+      }
+      
+      // AI chat commands
+      if (['ai', 'groq', 'ask', 'chat', 'gpt'].includes(command)) {
         isCommand = true;
         query = args.slice(1).join(' ');
       }
     }
 
-    // If mentioned, replied to, or AI command used
-    if (isMentioned || isReply || isCommand) {
+    // Determine if should respond to AI
+    const shouldRespond = isMentioned || isReply || isCommand || isAIMode;
+
+    if (shouldRespond) {
       // Get the query
       if (!query) {
         query = m.body?.replace(`@${botNumber}`, '').trim() || '';
       }
 
-      if (!query) {
+      // Remove command prefix if it exists
+      if (query.startsWith(config.PREFIX)) {
+        const args = query.slice(config.PREFIX.length).trim().split(' ');
+        if (['ai', 'groq', 'ask', 'chat', 'gpt'].includes(args[0].toLowerCase())) {
+          query = args.slice(1).join(' ');
+        }
+      }
+
+      if (!query || query.length < 2) {
         await sock.sendMessage(m.from, {
-          text: `${getRandomResponse(naijaResponses.greetings)} Wetin you wan ask me? 🤔`
+          text: `${getRandomResponse(naijaResponses.greetings)} Wetin you wan ask me? 🤔\n\n💡 *Quick tips:*\n• Use \`${config.PREFIX}aimode\` to toggle auto-response\n• Use \`${config.PREFIX}aimodel\` to switch AI models`
         }, { quoted: m });
         return;
       }
@@ -503,69 +306,41 @@ export default async function bingaiHandler(m, sock, config) {
       }, { quoted: m });
 
       try {
-        // Get or create conversation for this user
-        let conversation = conversationCache.get(m.sender);
+        // Get AI response from Groq
+        const aiResponse = await groqAI.sendMessage(query, m.sender);
         
-        if (!conversation || Date.now() - conversation.createdAt > 20 * 60 * 1000) {
-          console.log('🔄 Creating new Bing conversation...');
-          conversation = await bingAI.createNewConversation();
-          conversation.invocationId = 0;
-          conversation.createdAt = Date.now();
-          conversationCache.set(m.sender, conversation);
-          
-          // Clear old conversations after 30 minutes
-          setTimeout(() => {
-            conversationCache.delete(m.sender);
-          }, 30 * 60 * 1000);
-        }
-
-        // Send message to Bing AI
-        const result = await bingAI.sendMessage(query, {
-          conversationId: conversation.conversationId,
-          encryptedConversationSignature: conversation.encryptedConversationSignature,
-          clientId: conversation.clientId,
-          cookies: conversation.cookies,
-          invocationId: conversation.invocationId,
-          toneStyle: 'balanced'
-        });
-
-        // Update conversation
-        conversation.invocationId++;
-
-        let aiResponse = result.message.text;
-        
-        // Clean up response
-        aiResponse = aiResponse
-          .replace(/\[.*?\]/g, '') // Remove citation brackets
-          .replace(/\*\*(.*?)\*\*/g, '*$1*') // Convert bold formatting
-          .trim();
-
-        // Add Nigerian flavor to response
-        aiResponse = addNaijaFlavor(aiResponse);
+        // Update conversation history
+        groqAI.updateConversation(m.sender, query, aiResponse);
 
         // Limit response length for WhatsApp
-        if (aiResponse.length > 1500) {
-          aiResponse = aiResponse.substring(0, 1500) + '...\n\n_Abeg the response long pass, na summary be this oh! 😅_';
+        let finalResponse = aiResponse;
+        if (finalResponse.length > 1800) {
+          finalResponse = finalResponse.substring(0, 1800) + '...\n\n_Abeg the response long pass! For full gist, break your question into smaller parts! 😅_';
         }
 
-        // Delete thinking message and send AI response
+        // Delete thinking message
         try {
           await sock.sendMessage(m.from, { delete: thinkingMsg.key });
         } catch (error) {
           // Silent fail
         }
 
+        // Send AI response
+        const modelName = Object.keys(GROQ_CONFIG.MODELS).find(
+          key => GROQ_CONFIG.MODELS[key] === (userModels.get(m.sender) || 'mixtral-8x7b-32768')
+        ) || 'mixtral';
+
         await sock.sendMessage(m.from, {
-          text: `🤖 *Bing AI Response:*\n\n${aiResponse}\n\n_Powered by Bing AI with Naija flavor 🇳🇬✨_`
+          text: `${getRandomResponse(naijaResponses.success)}\n\n${finalResponse}\n\n_⚡ Powered by Groq ${modelName.toUpperCase()} | Lightning fast AI! 🇳🇬🤖_`
         }, { quoted: m });
 
-        // Reward user
-        await unifiedUserManager.addMoney(m.sender, 5, 'AI Query Bonus');
+        // Reward user with money
+        await unifiedUserManager.addMoney(m.sender, 7, 'Groq AI Chat Bonus');
 
-        console.log(`🤖 AI query from ${m.pushName || m.sender.split('@')[0]}: ${query.substring(0, 50)}...`);
+        console.log(`🤖 Groq AI query from ${m.pushName || m.sender.split('@')[0]}: ${query.substring(0, 50)}...`);
 
       } catch (error) {
-        console.error('Bing AI Error:', error);
+        console.error('Groq AI Error:', error);
 
         // Delete thinking message
         try {
@@ -574,13 +349,151 @@ export default async function bingaiHandler(m, sock, config) {
           // Silent fail
         }
 
+        // Better error handling
+        let errorMsg = getRandomResponse(naijaResponses.errors);
+        
+        if (error.message.includes('rate limit') || error.message.includes('429')) {
+          errorMsg = "Omo, too many people dey use AI now! 😅 Wait small make traffic reduce, then try again! ⏰";
+        } else if (error.message.includes('timeout')) {
+          errorMsg = "Network dey slow like snail! 🐌 Make we try again with better connection!";
+        } else if (error.message.includes('API key') || error.message.includes('401')) {
+          errorMsg = "API key get problem oh! 🔑 Make admin check the configuration!";
+        } else if (error.message.includes('exceeded')) {
+          errorMsg = "You don ask me too many questions today! 😴 Try again tomorrow or wait small!";
+        }
+
         await sock.sendMessage(m.from, {
-          text: `${getRandomResponse(naijaResponses.errors)} 😔\n\n_Error: ${error.message}_`
+          text: `${errorMsg}\n\n_Error details: ${error.message.substring(0, 100)}..._`
         }, { quoted: m });
       }
     }
 
   } catch (error) {
-    console.error('Bing AI Plugin Error:', error);
+    console.error('Groq Plugin Error:', error);
   }
 }
+
+// Add Groq methods to the class
+Object.assign(groqAI, {
+  // Send message to Groq API
+  async sendMessage(message, userId) {
+    if (!this.checkRateLimit(userId)) {
+      throw new Error('Rate limit exceeded - you don ask too many questions! Wait small abeg! ⏰');
+    }
+
+    const model = userModels.get(userId) || this.defaultModel;
+    const history = this.getConversationHistory(userId);
+    
+    // Build messages array with Nigerian context
+    const messages = [
+      {
+        role: 'system',
+        content: `You are a highly intelligent AI assistant with authentic Nigerian Gen-Z personality. You speak with natural Nigerian urban slang mixed with proper English. You're witty, helpful, streetwise, and knowledgeable about both global topics and Nigerian culture. 
+
+Key traits:
+- Use Nigerian expressions naturally (abeg, omo, sha, oh, nah, etc.)
+- Reference Nigerian context when relevant (Naija economy, culture, challenges)
+- Be conversational and engaging, not formal or robotic
+- Give practical advice that works for Nigerian environment
+- Use appropriate emojis but don't overdo it
+- Keep responses WhatsApp-friendly (not too long)
+- Be encouraging and positive while being realistic
+
+Speak like a smart Nigerian youth who's well-educated but still connected to the streets. Help with any topic but always maintain that authentic Naija vibe!`
+      },
+      ...history,
+      { role: 'user', content: message }
+    ];
+
+    try {
+      const response = await axios.post(
+        GROQ_CONFIG.BASE_URL,
+        {
+          model: model,
+          messages: messages,
+          temperature: 0.8,
+          max_tokens: 1200,
+          top_p: 0.9,
+          frequency_penalty: 0.1,
+          presence_penalty: 0.1,
+          stream: false
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'WhatsApp-Bot/1.0'
+          },
+          timeout: 25000 // 25 seconds timeout
+        }
+      );
+
+      if (response.data && response.data.choices && response.data.choices[0]) {
+        return response.data.choices[0].message.content.trim();
+      } else {
+        throw new Error('Invalid response format from Groq API');
+      }
+      
+    } catch (error) {
+      if (error.response) {
+        // API error
+        const status = error.response.status;
+        const message = error.response.data?.error?.message || 'Unknown API error';
+        throw new Error(`Groq API Error ${status}: ${message}`);
+      } else if (error.request) {
+        // Network error
+        throw new Error('Network error - no response from Groq servers');
+      } else {
+        // Other error
+        throw new Error(`Request setup error: ${error.message}`);
+      }
+    }
+  },
+
+  // Get conversation history for user
+  getConversationHistory(userId, maxMessages = 6) {
+    const conversation = userConversations.get(userId) || [];
+    return conversation.slice(-maxMessages);
+  },
+
+  // Update conversation history
+  updateConversation(userId, userMessage, aiResponse) {
+    let conversation = userConversations.get(userId) || [];
+    
+    conversation.push(
+      { role: 'user', content: userMessage },
+      { role: 'assistant', content: aiResponse }
+    );
+    
+    // Keep only last 20 messages (10 exchanges)
+    if (conversation.length > 20) {
+      conversation = conversation.slice(-20);
+    }
+    
+    userConversations.set(userId, conversation);
+    
+    // Auto-cleanup after 2 hours
+    setTimeout(() => {
+      userConversations.delete(userId);
+    }, 2 * 60 * 60 * 1000);
+  },
+
+  // Check rate limits
+  checkRateLimit(userId) {
+    const now = Date.now();
+    const userLimit = this.rateLimits.get(userId) || { count: 0, resetTime: now + 60000 };
+    
+    if (now > userLimit.resetTime) {
+      userLimit.count = 0;
+      userLimit.resetTime = now + 60000;
+    }
+    
+    if (userLimit.count >= 20) { // Groq has good limits, so we can be generous
+      return false;
+    }
+    
+    userLimit.count++;
+    this.rateLimits.set(userId, userLimit);
+    return true;
+  }
+});
