@@ -1204,7 +1204,6 @@ async function handleTestBirthday(context, args) {
     await reply('❌ *Error testing birthday parser. Please try again.*');
     console.error('Test birthday error:', error);
   }
-}
 
     // Calculate days until next birthday
     const today = new Date();
