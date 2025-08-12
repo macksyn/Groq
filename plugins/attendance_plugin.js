@@ -1,13 +1,13 @@
 // plugins/attendance.js - Attendance plugin compatible with PluginManager
-import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
+import { MongoClient } from 'mongodb';
 
 // Plugin information export
 export const info = {
   name: 'Attendance System',
-  version: '2.0.0',
-  author: 'Bot Developer',
+  version: '2.0.5',
+  author: 'Alex Macksyn',
   description: 'Advanced attendance system with form validation, streaks, birthday tracking and MongoDB persistence',
   commands: [
     {
@@ -37,8 +37,6 @@ export const info = {
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
 const DATABASE_NAME = process.env.DATABASE_NAME || 'whatsapp_bot';
 const COLLECTIONS = {
-  USERS: 'attendance_users',
-  BIRTHDAYS: 'birthdays',
   ATTENDANCE_RECORDS: 'attendance_records',
   SETTINGS: 'attendance_settings'
 };
@@ -57,9 +55,6 @@ async function initDatabase() {
     db = mongoClient.db(DATABASE_NAME);
     
     // Create indexes for better performance
-    await db.collection(COLLECTIONS.USERS).createIndex({ userId: 1 }, { unique: true });
-    await db.collection(COLLECTIONS.BIRTHDAYS).createIndex({ userId: 1 }, { unique: true });
-    await db.collection(COLLECTIONS.BIRTHDAYS).createIndex({ 'birthday.searchKey': 1 });
     await db.collection(COLLECTIONS.ATTENDANCE_RECORDS).createIndex({ userId: 1, date: -1 });
     await db.collection(COLLECTIONS.ATTENDANCE_RECORDS).createIndex({ date: -1 });
     
@@ -279,64 +274,6 @@ function formatBirthday(day, month, year, originalText) {
 // 🗄️ DATABASE FUNCTIONS
 // =======================
 
-// Initialize user in database
-async function initUserLocal(userId) {
-  try {
-    const existingUser = await db.collection(COLLECTIONS.USERS).findOne({ userId });
-    
-    if (!existingUser) {
-      const newUser = {
-        userId,
-        lastAttendance: null,
-        totalAttendances: 0,
-        streak: 0,
-        longestStreak: 0,
-        balance: 0,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-      
-      await db.collection(COLLECTIONS.USERS).insertOne(newUser);
-      return newUser;
-    } else {
-      // Ensure all fields exist for backward compatibility
-      const updates = {};
-      let needsUpdate = false;
-      
-      const requiredFields = {
-        totalAttendances: 0,
-        streak: 0,
-        longestStreak: 0,
-        balance: 0
-      };
-      
-      for (const [field, defaultValue] of Object.entries(requiredFields)) {
-        if (existingUser[field] === undefined) {
-          updates[field] = defaultValue;
-          needsUpdate = true;
-        }
-      }
-      
-      if (!existingUser.updatedAt) {
-        updates.updatedAt = new Date();
-        needsUpdate = true;
-      }
-      
-      if (needsUpdate) {
-        await db.collection(COLLECTIONS.USERS).updateOne(
-          { userId },
-          { $set: updates }
-        );
-      }
-      
-      return existingUser;
-    }
-  } catch (error) {
-    console.error('Error initializing user locally:', error);
-    throw error;
-  }
-}
-
 // Get user data from unified manager
 async function getUserData(userId) {
   try {
@@ -377,26 +314,19 @@ async function addMoney(userId, amount, reason = 'Attendance reward') {
   }
 }
 
-// Save birthday data to database
+// Save birthday data to user's unified data
 async function saveBirthdayData(userId, name, birthdayData) {
   try {
     if (!birthdayData) return false;
 
-    const birthdayRecord = {
-      userId,
-      name,
-      birthday: birthdayData,
-      lastUpdated: new Date()
-    };
-
-    await db.collection(COLLECTIONS.BIRTHDAYS).replaceOne(
-      { userId },
-      birthdayRecord,
-      { upsert: true }
-    );
-
-    // Also save to user data
-    await updateUserData(userId, { birthdayData });
+    // Save birthday to user data via unified manager
+    await updateUserData(userId, { 
+      birthdayData: {
+        name,
+        birthday: birthdayData,
+        lastUpdated: new Date()
+      }
+    });
 
     console.log(`✅ Birthday saved for ${name}: ${birthdayData.displayDate}`);
     return true;
@@ -406,25 +336,31 @@ async function saveBirthdayData(userId, name, birthdayData) {
   }
 }
 
-// Get birthday data from database
+// Get birthday data from user's unified data
 async function getBirthdayData(userId) {
   try {
-    return await db.collection(COLLECTIONS.BIRTHDAYS).findOne({ userId });
+    const userData = await getUserData(userId);
+    return userData.birthdayData || null;
   } catch (error) {
     console.error('Error getting birthday data:', error);
     return null;
   }
 }
 
-// Get all birthdays from database
+// Get all birthdays from unified database
 async function getAllBirthdays() {
   try {
-    return await db.collection(COLLECTIONS.BIRTHDAYS).find({}).toArray();
+    const unifiedDb = await unifiedUserManager.init();
+    return await unifiedDb.collection('unified_users')
+      .find({ 'birthdayData.birthday': { $exists: true } })
+      .project({ userId: 1, name: '$birthdayData.name', birthday: '$birthdayData.birthday', lastUpdated: '$birthdayData.lastUpdated' })
+      .toArray();
   } catch (error) {
     console.error('Error getting all birthdays:', error);
     return [];
   }
 }
+
 
 // Save attendance record to database
 async function saveAttendanceRecord(userId, attendanceData) {
@@ -651,7 +587,7 @@ async function handleAutoAttendance(m, sock, config) {
     
     const today = getCurrentDate();
     
-    // Initialize user
+    // Initialize user and get data from unified manager
     await initUser(senderId);
     const userData = await getUserData(senderId);
     
@@ -699,14 +635,6 @@ async function handleAutoAttendance(m, sock, config) {
     // Update attendance record
     const currentStreak = updateStreak(senderId, userData, today);
     
-    // Update user data with new attendance info
-    await updateUserData(senderId, {
-      lastAttendance: today,
-      totalAttendances: (userData.totalAttendances || 0) + 1,
-      streak: currentStreak,
-      longestStreak: userData.longestStreak
-    });
-    
     // Save birthday data if extracted successfully
     let birthdayMessage = '';
     if (validation.extractedData.parsedBirthday && validation.extractedData.name) {
@@ -740,6 +668,14 @@ async function handleAutoAttendance(m, sock, config) {
     // Add money to user's wallet
     await addMoney(senderId, finalReward, 'Attendance reward');
     
+    // Update user data with new attendance info
+    const updatedUserData = await updateUserData(senderId, {
+      lastAttendance: today,
+      totalAttendances: (userData.totalAttendances || 0) + 1,
+      streak: currentStreak,
+      longestStreak: userData.longestStreak
+    });
+    
     // Save attendance record
     await saveAttendanceRecord(senderId, {
       date: today,
@@ -766,17 +702,17 @@ async function handleAutoAttendance(m, sock, config) {
     }
     
     // Get updated user data for display
-    const updatedUserData = await getUserData(senderId);
+    const finalUserData = await getUserData(senderId);
     
     // Success message
     let successMessage = `✅ *ATTENDANCE APPROVED!* ✅\n\n`;
     successMessage += `📋 Form completed successfully!\n`;
     successMessage += `${getImageStatus(messageHasImage, attendanceSettings.requireImage)}\n`;
     successMessage += rewardBreakdown + '\n';
-    successMessage += `💰 New wallet balance: ₦${(updatedUserData.balance || 0).toLocaleString()}\n`;
+    successMessage += `💰 New wallet balance: ₦${(finalUserData.balance || 0).toLocaleString()}\n`;
     successMessage += `🔥 Current streak: ${currentStreak} days\n`;
-    successMessage += `📊 Total attendances: ${updatedUserData.totalAttendances}\n`;
-    successMessage += `🏆 Longest streak: ${updatedUserData.longestStreak} days`;
+    successMessage += `📊 Total attendances: ${finalUserData.totalAttendances}\n`;
+    successMessage += `🏆 Longest streak: ${finalUserData.longestStreak} days`;
     successMessage += birthdayMessage;
     successMessage += `\n\n🎉 *Thank you for your consistent participation!*\n`;
     successMessage += `🧾 *Keep it up!*`;
@@ -910,7 +846,8 @@ async function handleStats(context) {
   try {
     await initUser(senderId);
     const userData = await getUserData(senderId);
-    const birthdayData = await getBirthdayData(senderId);
+    
+    const birthdayData = userData.birthdayData;
     const today = getCurrentDate();
     
     let statsMessage = `📊 *YOUR ATTENDANCE STATS* 📊\n\n`;
@@ -1211,7 +1148,8 @@ async function handleMyBirthday(context) {
   const { reply, senderId } = context;
   
   try {
-    const birthdayData = await getBirthdayData(senderId);
+    const userData = await getUserData(senderId);
+    const birthdayData = userData.birthdayData;
     
     if (!birthdayData) {
       await reply(`🎂 *No Birthday Recorded*\n\nYour birthday hasn't been saved yet. It will be automatically saved when you submit your next attendance form with a valid D.O.B field.\n\n💡 *Make sure to fill your D.O.B correctly in the attendance form!*`);
