@@ -240,16 +240,32 @@ function toggleAIMode(userId) {
 export default async function groqHandler(m, sock, config) {
   try {
     // Check if message mentions the bot, is a reply to bot, or uses AI command
-    const botId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-    const isMentioned = (m.mentions && m.mentions.includes(botId)) || false;
-    const isReply = (m.quoted && m.quoted.sender === botId) || false;
+    const botNumber = sock.user.id.split(':')[0];
+    const botId = botNumber + '@s.whatsapp.net';
+    const botLid = botNumber + '@lid';
+    
+    const isMentioned = (m.mentions && (
+      m.mentions.includes(botId) || 
+      m.mentions.includes(botLid) ||
+      m.mentions.includes(botNumber + '@s.whatsapp.net') ||
+      m.mentions.includes(botNumber + '@lid')
+    )) || false;
+    
+    const isReply = (m.quoted && (
+      m.quoted.sender === botId || 
+      m.quoted.sender === botLid ||
+      m.quoted.sender === botNumber + '@s.whatsapp.net'
+    )) || false;
+    
     const isAIMode = isAIModeActive(m.sender);
     
     // Debug logging for mention detection
     if (m.mentions && m.mentions.length > 0) {
+      console.log(`🔍 Debug - Bot Number: ${botNumber}`);
       console.log(`🔍 Debug - Bot ID: ${botId}`);
+      console.log(`🔍 Debug - Bot LID: ${botLid}`);
       console.log(`🔍 Debug - Mentions found: ${JSON.stringify(m.mentions)}`);
-      console.log(`🔍 Debug - Mention match: ${m.mentions.includes(botId)}`);
+      console.log(`🔍 Debug - Mention match: ${isMentioned}`);
     }
     
     let isCommand = false;
@@ -331,7 +347,6 @@ export default async function groqHandler(m, sock, config) {
         query = m.body || '';
         
         // Remove bot mention from query if present
-        const botNumber = botId.split('@')[0];
         query = query.replace(`@${botNumber}`, '').replace(/@\d+/g, '').trim();
       }
 
@@ -374,7 +389,7 @@ export default async function groqHandler(m, sock, config) {
 
         // Send AI response
         await sock.sendMessage(m.from, {
-          text: `${finalResponse}\n\n_⚡ Powered by Groq ${modelName.toUpperCase()}_`
+          text: finalResponse
         }, { quoted: m });
 
         // Reward user with money
