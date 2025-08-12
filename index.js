@@ -83,6 +83,7 @@ let connectionAttempts = 0;
 let lastSuccessfulConnection = Date.now();
 let bioUpdateCount = 0;
 let server = null;
+let serverReady = false;
 
 // Constants
 const MAX_CONNECTION_ATTEMPTS = 15;
@@ -512,29 +513,29 @@ function setupEventHandlers(socket) {
         
         let messageText = '';
 
-try {
-  if (message.message.conversation) {
-    messageText = message.message.conversation;
-  } else if (message.message.extendedTextMessage?.text) {
-    messageText = message.message.extendedTextMessage.text;
-  } else if (message.message.imageMessage?.caption) {
-    messageText = message.message.imageMessage.caption;
-  } else if (message.message.videoMessage?.caption) {
-    messageText = message.message.videoMessage.caption;
-  }
-  
-  // Safe text processing with null checks
-  if (messageText && typeof messageText === 'string') {
-    messageText = messageText.replace(/\s+/g, ' ').trim();
-  } else {
-    messageText = '';
-  }
-  
-} catch (textError) {
-  console.log(chalk.yellow('⚠️ Text extraction error:', textError.message));
-  messageText = '';
-  continue;
-}
+        try {
+          if (message.message.conversation) {
+            messageText = message.message.conversation;
+          } else if (message.message.extendedTextMessage?.text) {
+            messageText = message.message.extendedTextMessage.text;
+          } else if (message.message.imageMessage?.caption) {
+            messageText = message.message.imageMessage.caption;
+          } else if (message.message.videoMessage?.caption) {
+            messageText = message.message.videoMessage.caption;
+          }
+          
+          // Safe text processing with null checks
+          if (messageText && typeof messageText === 'string') {
+            messageText = messageText.replace(/\s+/g, ' ').trim();
+          } else {
+            messageText = '';
+          }
+          
+        } catch (textError) {
+          console.log(chalk.yellow('⚠️ Text extraction error:', textError.message));
+          messageText = '';
+          continue;
+        }
       }
       
       if (typeof MessageHandler === 'function') {
@@ -591,7 +592,7 @@ function getPluginStats() {
   }
 }
 
-// Main bot startup function
+// Main bot startup function - DON'T START IMMEDIATELY
 async function startBot() {
   if (isConnecting) {
     console.log(chalk.yellow('⏳ Connection already in progress, skipping...'));
@@ -706,7 +707,7 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Main entry point
+// FIXED: Main entry point - START SERVER FIRST, THEN BOT
 async function main() {
     console.log(chalk.cyan('🎬 Initializing Fresh WhatsApp Bot...'));
     console.log(chalk.blue(`📊 Environment: ${config.NODE_ENV}`));
@@ -724,6 +725,7 @@ async function main() {
           bot: config.BOT_NAME,
           mode: config.MODE,
           owner: config.OWNER_NUMBER,
+          serverReady: serverReady,
           plugins: {
             total: pluginStats.total,
             enabled: pluginStats.enabled,
@@ -737,12 +739,14 @@ async function main() {
       }
     });
     
-    // Health check - Always returns 200 OK for Koyeb
+    // CRITICAL FIX: Health check - ALWAYS returns 200 OK once server is ready
     app.get('/health', (req, res) => {
       try {
         const memUsage = process.memoryUsage();
         const healthData = {
-          status: botStatus === 'running' ? 'healthy' : botStatus,
+          status: 'healthy', // ALWAYS healthy once server starts
+          serverReady: serverReady,
+          botStatus: botStatus,
           connected: botStatus === 'running',
           socketState: sock?.readyState || 'unknown',
           uptime: process.uptime(),
@@ -751,16 +755,19 @@ async function main() {
           timeSinceLastConnection: Math.round((Date.now() - lastSuccessfulConnection) / 1000),
           isConnecting,
           memory: {
-            heapUsed: memUsage.heapUsed,
-            heapTotal: memUsage.heapTotal,
-            external: memUsage.external
+            heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024), // MB
+            heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024), // MB
+            external: Math.round(memUsage.external / 1024 / 1024) // MB
           },
           timestamp: new Date().toISOString()
         };
+        
+        // ALWAYS return 200 - server is healthy if it can respond
         res.status(200).json(healthData);
       } catch (error) {
+        // Even on error, return 200 with error info
         res.status(200).json({
-          status: 'error',
+          status: 'server_healthy',
           error: error.message,
           uptime: process.uptime(),
           timestamp: new Date().toISOString()
@@ -768,14 +775,19 @@ async function main() {
       }
     });
     
-    // Readiness check
+    // Readiness check - only ready when bot is connected
     app.get('/ready', (req, res) => {
       try {
-        const isReady = sock?.user && botStatus === 'running';
+        const isReady = serverReady && sock?.user && botStatus === 'running';
         if (isReady) {
-          res.status(200).json({ status: 'ready', connected: true });
+          res.status(200).json({ status: 'ready', connected: true, serverReady: true });
         } else {
-          res.status(503).json({ status: 'not ready', connected: false });
+          res.status(503).json({ 
+            status: 'not ready', 
+            connected: false, 
+            serverReady: serverReady,
+            botStatus: botStatus 
+          });
         }
       } catch (error) {
         res.status(503).json({ status: 'error', error: error.message });
@@ -787,7 +799,8 @@ async function main() {
       res.status(200).json({
         status: 'pong',
         timestamp: new Date().toISOString(),
-        uptime: process.uptime()
+        uptime: process.uptime(),
+        serverReady: serverReady
       });
     });
     
@@ -907,6 +920,7 @@ async function main() {
           mode: config.MODE,
           prefix: config.PREFIX,
           ownerNumber: config.OWNER_NUMBER,
+          serverReady: serverReady,
           features: {
             autoRead: config.AUTO_READ,
             autoReact: config.AUTO_REACT,
@@ -918,8 +932,8 @@ async function main() {
           plugins: pluginStats,
           uptime: process.uptime(),
           memory: {
-            heapUsed: memUsage.heapUsed,
-            heapTotal: memUsage.heapTotal
+            heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024), // MB
+            heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024) // MB
           },
           lastConnection: new Date(lastSuccessfulConnection).toISOString(),
           connectionAttempts,
@@ -940,7 +954,7 @@ async function main() {
       }
     });
 
-    // Start Express server
+    // CRITICAL CHANGE: Start Express server FIRST, mark as ready, THEN start bot
     server = app.listen(config.PORT, '0.0.0.0', () => {
       console.log(chalk.blue(`🌐 Server running on port ${config.PORT}`));
       console.log(chalk.cyan(`🔗 Health check: http://localhost:${config.PORT}/health`));
@@ -948,10 +962,15 @@ async function main() {
       console.log(chalk.cyan(`🔌 Plugin API: http://localhost:${config.PORT}/plugins`));
       console.log(chalk.cyan(`🌍 Web Interface: http://localhost:${config.PORT}/`));
       
-      // Start the bot connection after server is ready
+      // MARK SERVER AS READY IMMEDIATELY
+      serverReady = true;
+      console.log(chalk.green('✅ Server marked as ready for health checks'));
+      
+      // DELAY bot startup to ensure server is fully ready
       setTimeout(() => {
+        console.log(chalk.blue('🤖 Starting WhatsApp bot connection...'));
         startBot();
-      }, 2000);
+      }, 3000); // 3 second delay
     });
 
     // Server error handling
@@ -963,16 +982,21 @@ async function main() {
       }
     });
 
-    // Keep-alive mechanism for cloud deployments
+    // Keep-alive mechanism for cloud deployments - ONLY after server is ready
     if (config.NODE_ENV === 'production') {
-      // Send periodic keep-alive requests to self (prevents sleeping)
-      setInterval(async () => {
-        try {
-          await axios.get(`http://localhost:${config.PORT}/ping`, { timeout: 5000 });
-        } catch (error) {
-          // Ignore keep-alive errors
-        }
-      }, 5 * 60 * 1000); // Every 5 minutes
+      setTimeout(() => {
+        // Send periodic keep-alive requests to self (prevents sleeping)
+        setInterval(async () => {
+          try {
+            await axios.get(`http://localhost:${config.PORT}/ping`, { 
+              timeout: 5000,
+              headers: { 'User-Agent': 'KeepAlive-Bot' }
+            });
+          } catch (error) {
+            // Ignore keep-alive errors
+          }
+        }, 5 * 60 * 1000); // Every 5 minutes
+      }, 30000); // Start keep-alive after 30 seconds
     }
 
     // Memory monitoring and cleanup
@@ -991,20 +1015,22 @@ async function main() {
       }
     }, 2 * 60 * 1000); // Every 2 minutes
 
-    // Connection health monitoring
-    setInterval(() => {
-      const timeSinceLastConnection = Date.now() - lastSuccessfulConnection;
-      const hoursOffline = timeSinceLastConnection / (1000 * 60 * 60);
-      
-      if (hoursOffline > 2 && botStatus !== 'running' && !isConnecting) {
-        console.log(chalk.yellow(`⚠️ Bot has been offline for ${Math.round(hoursOffline)} hours`));
-        console.log(chalk.blue('🔄 Attempting to restart connection...'));
+    // Connection health monitoring - only start after bot initialization
+    setTimeout(() => {
+      setInterval(() => {
+        const timeSinceLastConnection = Date.now() - lastSuccessfulConnection;
+        const hoursOffline = timeSinceLastConnection / (1000 * 60 * 60);
         
-        // Reset connection attempts and try to reconnect
-        connectionAttempts = Math.floor(connectionAttempts / 2);
-        startBot();
-      }
-    }, 30 * 60 * 1000); // Every 30 minutes
+        if (hoursOffline > 2 && botStatus !== 'running' && !isConnecting) {
+          console.log(chalk.yellow(`⚠️ Bot has been offline for ${Math.round(hoursOffline)} hours`));
+          console.log(chalk.blue('🔄 Attempting to restart connection...'));
+          
+          // Reset connection attempts and try to reconnect
+          connectionAttempts = Math.floor(connectionAttempts / 2);
+          startBot();
+        }
+      }, 30 * 60 * 1000); // Every 30 minutes
+    }, 60000); // Start monitoring after 1 minute
 
     console.log(chalk.green('✅ Application initialized successfully!'));
     console.log(chalk.blue('🔥 Ready to serve WhatsApp bot requests'));
