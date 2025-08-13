@@ -11,8 +11,8 @@ export const info = {
       description: 'Show all available commands'
     },
     {
-      name: 'plugins',
-      aliases: ['plugin'],
+      name: 'myplugins',
+      aliases: ['allplugin'],
       description: 'Show plugin information'
     }
   ]
