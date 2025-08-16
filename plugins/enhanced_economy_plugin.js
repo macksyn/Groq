@@ -1632,10 +1632,10 @@ async function handleDice(context, args) {
     let winType = '';
     
     if (roll === guess) {
-      multiplier = 6;
+      multiplier = 3;
       winType = 'EXACT MATCH!';
     } else if (Math.abs(roll - guess) === 1) {
-      multiplier = 2;
+      multiplier = 1.3;
       winType = 'CLOSE GUESS!';
     }
     
