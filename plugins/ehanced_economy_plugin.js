@@ -264,14 +264,14 @@ async function handleCrypto(context, args) {
     
     switch (action) {
       case 'list':
-        const cryptos = await db.collection(COLLECTIONS.CRYPTO).find().toArray();
-        if (cryptos.length === 0) {
+        const availableCryptos = await db.collection(COLLECTIONS.CRYPTO).find().toArray();
+        if (availableCryptos.length === 0) {
           await reply('📊 *No cryptocurrencies available at the moment*');
           return;
         }
         
         let listText = '🪙 *CRYPTO MARKET* 🪙\n\n';
-        cryptos.forEach(crypto => {
+        availableCryptos.forEach(crypto => {
           const change = (Math.random() - 0.5) * 10; // Mock daily change
           const color = change >= 0 ? '🟢' : '🔴';
           listText += `${color} *${crypto.symbol}* - ${crypto.name}\n`;
@@ -293,11 +293,11 @@ async function handleCrypto(context, args) {
         let portfolioText = '🪙 *YOUR CRYPTO PORTFOLIO* 🪙\n\n';
         let totalValue = 0;
         
-        const cryptos = await db.collection(COLLECTIONS.CRYPTO).find().toArray();
+        const marketCryptos = await db.collection(COLLECTIONS.CRYPTO).find().toArray();
         
         for (const [symbol, amount] of Object.entries(portfolio)) {
           if (amount > 0) {
-            const crypto = cryptos.find(c => c.symbol === symbol);
+            const crypto = marketCryptos.find(c => c.symbol === symbol);
             if (crypto) {
               const value = amount * crypto.price;
               totalValue += value;
@@ -2298,17 +2298,17 @@ async function updateMarket(sock, from) {
     };
     
     // Get cryptos from DB (overhauled)
-    let cryptos = await db.collection(COLLECTIONS.CRYPTO).find().toArray();
-    if (cryptos.length === 0) {
+    let cryptoList = await db.collection(COLLECTIONS.CRYPTO).find().toArray();
+    if (cryptoList.length === 0) {
       // Seed default cryptos
-      cryptos = [
+      cryptoList = [
         { symbol: 'BTC', name: 'Bitcoin', price: 60000, volatility: ecoSettings.cryptoVolatility },
         { symbol: 'ETH', name: 'Ethereum', price: 4000, volatility: ecoSettings.cryptoVolatility },
         { symbol: 'SOL', name: 'Solana', price: 200, volatility: ecoSettings.cryptoVolatility },
         { symbol: 'ADA', name: 'Cardano', price: 1.5, volatility: ecoSettings.cryptoVolatility },
         { symbol: 'DOGE', name: 'Dogecoin', price: 0.25, volatility: ecoSettings.cryptoVolatility * 1.5 } // Higher volatility
       ];
-      await db.collection(COLLECTIONS.CRYPTO).insertMany(cryptos);
+      await db.collection(COLLECTIONS.CRYPTO).insertMany(cryptoList);
     }
     
     // Businesses overhaul - fixed businesses with levels
@@ -2337,7 +2337,7 @@ async function updateMarket(sock, from) {
       
       // Update cryptos
       const cryptoChanges = {};
-      for (let crypto of cryptos) {
+      for (let crypto of cryptoList) {
         const change = (Math.random() - 0.5) * crypto.volatility * crypto.price;
         crypto.price += change;
         crypto.price = Math.max(0.01, crypto.price);
@@ -2369,7 +2369,7 @@ async function updateMarket(sock, from) {
     if (needsWeeklyUpdate) {
       // Weekly summaries
       let weeklyCrypto = '📅 *WEEKLY CRYPTO SUMMARY* 📅\n\n';
-      cryptos.forEach(crypto => {
+      cryptoList.forEach(crypto => {
         // Assume history in DB, but for simplicity, fake
         const weeklyChange = (Math.random() - 0.5) * 20;
         const color = weeklyChange >= 0 ? '🟢' : '🔴';
@@ -2424,8 +2424,8 @@ async function getNewsMentions(mode) {
 async function calculateCryptoValue(portfolio) {
   try {
     let value = 0;
-    const cryptos = await db.collection(COLLECTIONS.CRYPTO).find().toArray();
-    cryptos.forEach(crypto => {
+    const cryptoData = await db.collection(COLLECTIONS.CRYPTO).find().toArray();
+    cryptoData.forEach(crypto => {
       if (portfolio[crypto.symbol]) {
         value += portfolio[crypto.symbol] * crypto.price;
       }
