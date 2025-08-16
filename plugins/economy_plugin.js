@@ -1508,7 +1508,7 @@ async function handleShop(context, args) {
         return;
       }
       
-      const itemId = args[1].toLowerCase();
+      const itemId = getItemId(args[1]);
       const item = SHOP_ITEMS[itemId];
       
       if (!item) {
@@ -1654,7 +1654,7 @@ async function handleVault(context, args) {
       return;
     }
     
-    const action = args[0].toLowerCase();
+    const itemId = getItemId(args[0]);
     const amount = parseInt(args[1]);
     
     if (isNaN(amount) || amount <= 0) {
