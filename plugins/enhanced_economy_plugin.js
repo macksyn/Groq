@@ -2691,53 +2691,137 @@ async function handleAdminSettings(context, args) {
         
         // NEWS ADMIN SWITCH COMMAND
 
-              case 'news':
-        if (args.length < 3) {
-          await reply(`📰 *News Admin Commands:*\n• *enable/disable* - Toggle news system\n• *groups add [group_id]* - Add target group\n• *groups remove [group_id]* - Remove target group\n• *groups list* - View target groups\n• *frequency [number]* - Set daily news frequency\n• *send crypto/business* - Manual news\n• *settings* - View current settings`);
-          return;
-        }
-        
-        const newsAction = args[2].toLowerCase();
-        
-        switch (newsAction) {
-          case 'enable':
-            newsSettings.enabled = true;
-            await saveNewsSettings();
-            await reply('📰 *News system enabled*');
-            break;
-            
-          case 'disable':
-            newsSettings.enabled = false;
-            await saveNewsSettings();
-            await reply('📰 *News system disabled*');
-            break;
-            
-          case 'settings':
-            const settingsText = `📰 *NEWS SYSTEM SETTINGS* 📰\n\n` +
-                                `🔘 *Status:* ${newsSettings.enabled ? '✅ Enabled' : '❌ Disabled'}\n` +
-                                `📊 *Frequency:* ${newsSettings.frequency} per day\n` +
-                                `🎯 *Target Groups:* ${newsSettings.targetGroups.length}\n` +
-                                `💥 *Crypto Impact:* ${(newsSettings.cryptoImpactRange.min * 100).toFixed(0)}-${(newsSettings.cryptoImpactRange.max * 100).toFixed(0)}%\n` +
-                                `🏢 *Business Impact:* ${(newsSettings.businessImpactRange.min * 100).toFixed(0)}-${(newsSettings.businessImpactRange.max * 100).toFixed(0)}%\n` +
-                                `⏰ *Last News:* ${newsSettings.lastNewsTime ? new Date(newsSettings.lastNewsTime).toLocaleString() : 'Never'}`;
-            
-            await reply(settingsText);
-            break;
-            
-          default:
-            await reply('❓ *Unknown news command*');
-        }
-        break;
-
-      default:
-        await reply('❓ *Unknown admin command*');
-    }
-  } catch (error) {
-    await reply('❌ *Error processing admin command. Please try again.*');
-    console.error('Admin settings error:', error);
+       case 'news':
+  if (args.length < 3) {
+    await reply(`📰 *News Admin Commands:*\n• *enable/disable* - Toggle news system\n• *groups add* - Add this group as news target\n• *groups remove* - Remove this group from news targets\n• *groups list* - View target groups\n• *frequency [number]* - Set daily news frequency\n• *send crypto/business* - Manual news\n• *settings* - View current settings`);
+    return;
   }
-}
-
+  
+  const newsAction = args[2].toLowerCase();
+  
+  switch (newsAction) {
+    case 'enable':
+      newsSettings.enabled = true;
+      await saveNewsSettings();
+      await reply('📰 *News system enabled*');
+      break;
+      
+    case 'disable':
+      newsSettings.enabled = false;
+      await saveNewsSettings();
+      await reply('📰 *News system disabled*');
+      break;
+      
+    case 'groups':
+      if (args.length < 4) {
+        await reply('⚠️ *Usage: news groups [add/remove/list] [group_id]*');
+        return;
+      }
+      
+      const groupAction = args[3].toLowerCase();
+      
+      switch (groupAction) {
+        case 'add':
+  // Use current group/chat ID
+  const currentGroupId = context.from;
+  
+  if (!newsSettings.targetGroups.includes(currentGroupId)) {
+    newsSettings.targetGroups.push(currentGroupId);
+    await saveNewsSettings();
+    await reply(`✅ *Added this group to news targets*\n\n📰 *Group ID:* ${currentGroupId}\n🎯 *This group will now receive news flashes!*`);
+  } else {
+    await reply('⚠️ *This group is already in the news target list*');
+  }
+  break;
+          
+        case 'remove':
+  // Use current group/chat ID  
+  const currentGroupIdRemove = context.from;
+  const index = newsSettings.targetGroups.indexOf(currentGroupIdRemove);
+  
+  if (index > -1) {
+    newsSettings.targetGroups.splice(index, 1);
+    await saveNewsSettings();
+    await reply(`✅ *Removed this group from news targets*\n\n📰 *Group ID:* ${currentGroupIdRemove}\n🚫 *This group will no longer receive news flashes*`);
+  } else {
+    await reply('⚠️ *This group is not in the news target list*');
+  }
+  break;
+          
+        case 'list':
+          if (newsSettings.targetGroups.length === 0) {
+            await reply('📰 *No target groups configured*');
+          } else {
+            const groupList = newsSettings.targetGroups.join('\n• ');
+            await reply(`📰 *News Target Groups:*\n• ${groupList}`);
+          }
+          break;
+          
+        default:
+          await reply('❓ *Unknown groups command*');
+      }
+      break;
+      
+    case 'frequency':
+      if (args.length < 4) {
+        await reply('⚠️ *Usage: economy admin news frequency [1-10]*');
+        return;
+      }
+      
+      const freq = parseInt(args[3]);
+      if (isNaN(freq) || freq < 1 || freq > 10) {
+        await reply('⚠️ *Frequency must be between 1-10 news per day*');
+        return;
+      }
+      
+      newsSettings.frequency = freq;
+      await saveNewsSettings();
+      await reply(`📰 *News frequency set to ${freq} per day*`);
+      break;
+      
+    case 'send':
+      if (args.length < 4) {
+        await reply('⚠️ *Usage: economy admin news send [crypto/business]*');
+        return;
+      }
+      
+      const sendType = args[3].toLowerCase();
+      let manualNews;
+      
+      if (sendType === 'crypto') {
+        manualNews = await generateCryptoNews();
+      } else if (sendType === 'business') {
+        manualNews = await generateBusinessNews();
+      } else {
+        await reply('⚠️ *Type must be crypto or business*');
+        return;
+      }
+      
+      if (manualNews) {
+        await broadcastNews(manualNews, context.sock);
+        await reply('📰 *Manual news sent to all target groups*');
+      } else {
+        await reply('❌ *Error generating news*');
+      }
+      break;
+      
+    case 'settings':
+      const settingsText = `📰 *NEWS SYSTEM SETTINGS* 📰\n\n` +
+                          `🔘 *Status:* ${newsSettings.enabled ? '✅ Enabled' : '❌ Disabled'}\n` +
+                          `📊 *Frequency:* ${newsSettings.frequency} per day\n` +
+                          `🎯 *Target Groups:* ${newsSettings.targetGroups.length}\n` +
+                          `💥 *Crypto Impact:* ${(newsSettings.cryptoImpactRange.min * 100).toFixed(0)}-${(newsSettings.cryptoImpactRange.max * 100).toFixed(0)}%\n` +
+                          `🏢 *Business Impact:* ${(newsSettings.businessImpactRange.min * 100).toFixed(0)}-${(newsSettings.businessImpactRange.max * 100).toFixed(0)}%\n` +
+                          `⏰ *Last News:* ${newsSettings.lastNewsTime ? new Date(newsSettings.lastNewsTime).toLocaleString() : 'Never'}`;
+      
+      await reply(settingsText);
+      break;
+      
+    default:
+      await reply(`❓ *Unknown news command: ${newsAction}*\n\nUse *${context.config.PREFIX}economy admin news* to see available commands.`);
+  }
+  break;
+        
 // Handle subcommands for the main economy command
 async function handleSubCommand(subCommand, args, context) {
   try {
