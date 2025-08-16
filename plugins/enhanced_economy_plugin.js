@@ -2689,15 +2689,13 @@ async function handleAdminSettings(context, args) {
         });
         break;
         
-        // NEWS ADMIN SWITCH COMMAND
-
        case 'news':
-  if (args.length < 3) {
-    await reply(`📰 *News Admin Commands:*\n• *enable/disable* - Toggle news system\n• *groups add* - Add this group as news target\n• *groups remove* - Remove this group from news targets\n• *groups list* - View target groups\n• *frequency [number]* - Set daily news frequency\n• *send crypto/business* - Manual news\n• *settings* - View current settings`);
+  if (args.length < 2) {
+    await reply(`📰 *News Admin Commands:*\n• *enable/disable* - Toggle news system\n• *groups add [group_id]* - Add target group\n• *groups remove [group_id]* - Remove target group\n• *groups list* - View target groups\n• *frequency [number]* - Set daily news frequency\n• *send crypto/business* - Manual news\n• *settings* - View current settings`);
     return;
   }
   
-  const newsAction = args[2].toLowerCase();
+  const newsAction = args[1].toLowerCase();
   
   switch (newsAction) {
     case 'enable':
@@ -2713,40 +2711,46 @@ async function handleAdminSettings(context, args) {
       break;
       
     case 'groups':
-      if (args.length < 4) {
+      if (args.length < 3) {
         await reply('⚠️ *Usage: news groups [add/remove/list] [group_id]*');
         return;
       }
       
-      const groupAction = args[3].toLowerCase();
+      const groupAction = args[2].toLowerCase();
       
       switch (groupAction) {
         case 'add':
-  // Use current group/chat ID
-  const currentGroupId = context.from;
-  
-  if (!newsSettings.targetGroups.includes(currentGroupId)) {
-    newsSettings.targetGroups.push(currentGroupId);
-    await saveNewsSettings();
-    await reply(`✅ *Added this group to news targets*\n\n📰 *Group ID:* ${currentGroupId}\n🎯 *This group will now receive news flashes!*`);
-  } else {
-    await reply('⚠️ *This group is already in the news target list*');
-  }
-  break;
+          if (args.length < 4) {
+            await reply('⚠️ *Usage: news groups add [group_id]*');
+            return;
+          }
+          
+          const addGroupId = args[3];
+          if (!newsSettings.targetGroups.includes(addGroupId)) {
+            newsSettings.targetGroups.push(addGroupId);
+            await saveNewsSettings();
+            await reply(`✅ *Added group ${addGroupId} to news targets*`);
+          } else {
+            await reply('⚠️ *Group already in target list*');
+          }
+          break;
           
         case 'remove':
-  // Use current group/chat ID  
-  const currentGroupIdRemove = context.from;
-  const index = newsSettings.targetGroups.indexOf(currentGroupIdRemove);
-  
-  if (index > -1) {
-    newsSettings.targetGroups.splice(index, 1);
-    await saveNewsSettings();
-    await reply(`✅ *Removed this group from news targets*\n\n📰 *Group ID:* ${currentGroupIdRemove}\n🚫 *This group will no longer receive news flashes*`);
-  } else {
-    await reply('⚠️ *This group is not in the news target list*');
-  }
-  break;
+          if (args.length < 4) {
+            await reply('⚠️ *Usage: news groups remove [group_id]*');
+            return;
+          }
+          
+          const removeGroupId = args[3];
+          const index = newsSettings.targetGroups.indexOf(removeGroupId);
+          if (index > -1) {
+            newsSettings.targetGroups.splice(index, 1);
+            await saveNewsSettings();
+            await reply(`✅ *Removed group ${removeGroupId} from news targets*`);
+          } else {
+            await reply('⚠️ *Group not in target list*');
+          }
+          break;
           
         case 'list':
           if (newsSettings.targetGroups.length === 0) {
@@ -2756,19 +2760,16 @@ async function handleAdminSettings(context, args) {
             await reply(`📰 *News Target Groups:*\n• ${groupList}`);
           }
           break;
-          
-        default:
-          await reply('❓ *Unknown groups command*');
       }
       break;
       
     case 'frequency':
-      if (args.length < 4) {
-        await reply('⚠️ *Usage: economy admin news frequency [1-10]*');
+      if (args.length < 3) {
+        await reply('⚠️ *Usage: news frequency [1-10]*');
         return;
       }
       
-      const freq = parseInt(args[3]);
+      const freq = parseInt(args[2]);
       if (isNaN(freq) || freq < 1 || freq > 10) {
         await reply('⚠️ *Frequency must be between 1-10 news per day*');
         return;
@@ -2780,12 +2781,12 @@ async function handleAdminSettings(context, args) {
       break;
       
     case 'send':
-      if (args.length < 4) {
-        await reply('⚠️ *Usage: economy admin news send [crypto/business]*');
+      if (args.length < 3) {
+        await reply('⚠️ *Usage: news send [crypto/business]*');
         return;
       }
       
-      const sendType = args[3].toLowerCase();
+      const sendType = args[2].toLowerCase();
       let manualNews;
       
       if (sendType === 'crypto') {
@@ -2818,7 +2819,7 @@ async function handleAdminSettings(context, args) {
       break;
       
     default:
-      await reply(`❓ *Unknown news command: ${newsAction}*\n\nUse *${context.config.PREFIX}economy admin news* to see available commands.`);
+      await reply('❓ *Unknown news command*');
   }
   break;
         
