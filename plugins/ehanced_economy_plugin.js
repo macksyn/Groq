@@ -90,6 +90,8 @@ async function initDatabase() {
     // Add after the existing indexes
 await loadCryptoPrices();
 console.log('✅ Crypto prices loaded');
+    await loadNewsSettings();
+console.log('✅ News system loaded');
 
 // Start auto-updates
 setTimeout(() => {
@@ -498,6 +500,270 @@ let businessData = {
   barbershop: { name: "Barber Shop", price: 20000, roi: 0.11, description: "Hair cutting service income" }
 };
 
+// News Flash System
+const newsAgencies = ['CNN', 'Sky News', 'BBC', 'Al Jazeera', 'Reuters', 'Bloomberg', 'Financial Times'];
+
+let newsSettings = {
+  enabled: true,
+  targetGroups: [], // Admin configurable groups
+  frequency: 3, // News per day
+  cryptoImpactRange: { min: 0.05, max: 0.20 }, // 5-20% price impact
+  businessImpactRange: { min: 0.02, max: 0.08 }, // 2-8% ROI impact
+  lastNewsTime: null
+};
+
+// News templates
+const newsTemplates = {
+  crypto: {
+    crash: [
+      "🚨 {agency} BREAKING: {coin} plummets {percent}% amid regulatory concerns",
+      "📉 {agency}: Major sell-off hits {coin}, down {percent}% in 24 hours",
+      "⚠️ {agency} ALERT: {coin} crashes {percent}% following market uncertainty",
+      "🔴 {agency}: Crypto bloodbath continues as {coin} drops {percent}%"
+    ],
+    boom: [
+      "🚀 {agency} BREAKING: {coin} surges {percent}% on institutional adoption",
+      "📈 {agency}: {coin} rockets {percent}% higher on positive news",
+      "💚 {agency}: Massive rally sends {coin} up {percent}% overnight",
+      "🎯 {agency} REPORT: {coin} explodes {percent}% on breakthrough technology"
+    ],
+    listing: [
+      "🆕 {agency}: New cryptocurrency {coin} launches on major exchanges",
+      "📢 {agency}: {coin} debuts with strong investor interest",
+      "🎉 {agency}: Latest crypto {coin} sees explosive trading volume"
+    ],
+    regulation: [
+      "📜 {agency}: New crypto regulations affect {coin} trading",
+      "⚖️ {agency}: Government policy changes impact {coin} markets",
+      "🏛️ {agency}: Central bank statements move {coin} significantly"
+    ]
+  },
+  business: {
+    growth: [
+      "📈 {agency}: {business} sector sees {percent}% ROI increase this quarter",
+      "🏢 {agency} REPORT: {business} industry experiences unprecedented growth of {percent}%",
+      "💼 {agency}: Economic boom lifts {business} returns by {percent}%",
+      "📊 {agency}: {business} businesses report {percent}% profit surge"
+    ],
+    decline: [
+      "📉 {agency}: {business} sector faces {percent}% ROI decline amid challenges",
+      "⚠️ {agency} ALERT: {business} industry struggles with {percent}% drop in returns",
+      "🔻 {agency}: Economic headwinds hit {business} businesses, down {percent}%",
+      "📰 {agency}: {business} sector experiences {percent}% profitability decline"
+    ],
+    opportunity: [
+      "🚀 {agency}: New {business} investment opportunities emerge",
+      "💡 {agency} INSIGHT: {business} sector poised for major expansion",
+      "🎯 {agency}: Market analysts bullish on {business} industry outlook"
+    ],
+    crisis: [
+      "🚨 {agency}: Supply chain issues affect {business} operations",
+      "⚠️ {agency} BREAKING: {business} industry faces regulatory challenges",
+      "🔴 {agency}: Economic pressures impact {business} sector performance"
+    ]
+  }
+};
+
+// Load news settings
+async function loadNewsSettings() {
+  try {
+    const settings = await db.collection(COLLECTIONS.SETTINGS).findOne({ type: 'news_settings' });
+    if (settings) {
+      newsSettings = { ...newsSettings, ...settings.data };
+    }
+  } catch (error) {
+    console.error('Error loading news settings:', error);
+  }
+}
+
+// Save news settings
+async function saveNewsSettings() {
+  try {
+    await db.collection(COLLECTIONS.SETTINGS).replaceOne(
+      { type: 'news_settings' },
+      { type: 'news_settings', data: newsSettings, updatedAt: new Date() },
+      { upsert: true }
+    );
+  } catch (error) {
+    console.error('Error saving news settings:', error);
+  }
+}
+
+// Generate crypto news and apply market impact
+async function generateCryptoNews() {
+  try {
+    if (!newsSettings.enabled || newsSettings.targetGroups.length === 0) return;
+
+    const cryptoSymbols = Object.keys(cryptoData);
+    const selectedCrypto = cryptoSymbols[Math.floor(Math.random() * cryptoSymbols.length)];
+    const crypto = cryptoData[selectedCrypto];
+    
+    // Determine news type and impact
+    const newsTypes = ['crash', 'boom', 'regulation'];
+    const newsType = newsTypes[Math.floor(Math.random() * newsTypes.length)];
+    
+    let impactMultiplier;
+    switch (newsType) {
+      case 'crash':
+        impactMultiplier = -(Math.random() * (newsSettings.cryptoImpactRange.max - newsSettings.cryptoImpactRange.min) + newsSettings.cryptoImpactRange.min);
+        break;
+      case 'boom':
+        impactMultiplier = Math.random() * (newsSettings.cryptoImpactRange.max - newsSettings.cryptoImpactRange.min) + newsSettings.cryptoImpactRange.min;
+        break;
+      case 'regulation':
+        impactMultiplier = (Math.random() - 0.5) * newsSettings.cryptoImpactRange.max;
+        break;
+    }
+    
+    // Apply price impact
+    const oldPrice = crypto.price;
+    const newPrice = Math.max(oldPrice * (1 + impactMultiplier), oldPrice * 0.1);
+    cryptoData[selectedCrypto].price = parseFloat(newPrice.toFixed(selectedCrypto === 'SHIB' ? 8 : 2));
+    
+    // Generate news message
+    const templates = newsTemplates.crypto[newsType];
+    const template = templates[Math.floor(Math.random() * templates.length)];
+    const agency = newsAgencies[Math.floor(Math.random() * newsAgencies.length)];
+    const percent = Math.abs(impactMultiplier * 100).toFixed(1);
+    
+    const newsMessage = template
+      .replace('{agency}', agency)
+      .replace('{coin}', `${crypto.name} (${selectedCrypto})`)
+      .replace('{percent}', percent);
+    
+    const fullNews = `📰 *CRYPTO NEWS FLASH* 📰\n\n${newsMessage}\n\n💰 *Price Impact:*\n${selectedCrypto}: ${ecoSettings.currency}${oldPrice.toLocaleString()} → ${ecoSettings.currency}${newPrice.toLocaleString()}\n\n⚡ *Market reacting in real-time!*`;
+    
+    // Save updated prices
+    await db.collection(COLLECTIONS.SETTINGS).replaceOne(
+      { type: 'crypto_prices' },
+      { type: 'crypto_prices', data: cryptoData, updatedAt: new Date() },
+      { upsert: true }
+    );
+    
+    return { message: fullNews, groups: newsSettings.targetGroups };
+  } catch (error) {
+    console.error('Error generating crypto news:', error);
+    return null;
+  }
+}
+
+// Generate business news and apply ROI impact
+async function generateBusinessNews() {
+  try {
+    if (!newsSettings.enabled || newsSettings.targetGroups.length === 0) return;
+
+    const businessIds = Object.keys(businessData);
+    const selectedBusinessId = businessIds[Math.floor(Math.random() * businessIds.length)];
+    const business = businessData[selectedBusinessId];
+    
+    // Determine news type and impact
+    const newsTypes = ['growth', 'decline', 'opportunity', 'crisis'];
+    const newsType = newsTypes[Math.floor(Math.random() * newsTypes.length)];
+    
+    let impactMultiplier;
+    switch (newsType) {
+      case 'growth':
+      case 'opportunity':
+        impactMultiplier = Math.random() * (newsSettings.businessImpactRange.max - newsSettings.businessImpactRange.min) + newsSettings.businessImpactRange.min;
+        break;
+      case 'decline':
+      case 'crisis':
+        impactMultiplier = -(Math.random() * (newsSettings.businessImpactRange.max - newsSettings.businessImpactRange.min) + newsSettings.businessImpactRange.min);
+        break;
+    }
+    
+    // Apply ROI impact
+    const oldROI = business.roi;
+    const newROI = Math.max(business.roi + impactMultiplier, 0.01); // Minimum 1% ROI
+    businessData[selectedBusinessId].roi = parseFloat(newROI.toFixed(3));
+    
+    // Generate news message
+    const templates = newsTemplates.business[newsType];
+    const template = templates[Math.floor(Math.random() * templates.length)];
+    const agency = newsAgencies[Math.floor(Math.random() * newsAgencies.length)];
+    const percent = Math.abs(impactMultiplier * 100).toFixed(1);
+    
+    const newsMessage = template
+      .replace('{agency}', agency)
+      .replace('{business}', business.name)
+      .replace('{percent}', percent);
+    
+    const fullNews = `📰 *BUSINESS NEWS FLASH* 📰\n\n${newsMessage}\n\n📊 *ROI Impact:*\n${business.name}: ${(oldROI * 100).toFixed(1)}% → ${(newROI * 100).toFixed(1)}%\n\n🏢 *Affecting all ${business.name.toLowerCase()} investments!*`;
+    
+    // Save updated business data
+    await db.collection(COLLECTIONS.SETTINGS).replaceOne(
+      { type: 'business_data' },
+      { type: 'business_data', data: businessData, updatedAt: new Date() },
+      { upsert: true }
+    );
+    
+    return { message: fullNews, groups: newsSettings.targetGroups };
+  } catch (error) {
+    console.error('Error generating business news:', error);
+    return null;
+  }
+}
+
+// Send news to target groups
+async function broadcastNews(newsData, sock) {
+  try {
+    if (!newsData || !newsData.groups || newsData.groups.length === 0) return;
+    
+    for (const groupId of newsData.groups) {
+      try {
+        await sock.sendMessage(groupId, { text: newsData.message });
+        console.log(`📰 News sent to group: ${groupId}`);
+      } catch (error) {
+        console.error(`Error sending news to group ${groupId}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Error broadcasting news:', error);
+  }
+}
+
+// Auto news generation
+async function autoGenerateNews(sock) {
+  try {
+    const now = Date.now();
+    const lastNews = newsSettings.lastNewsTime || 0;
+    const timeSinceLastNews = now - lastNews;
+    const newsInterval = (24 * 60 * 60 * 1000) / newsSettings.frequency; // Distribute throughout day
+    
+    if (timeSinceLastNews >= newsInterval) {
+      const newsType = Math.random() < 0.6 ? 'crypto' : 'business'; // 60% crypto, 40% business
+      
+      let newsData;
+      if (newsType === 'crypto') {
+        newsData = await generateCryptoNews();
+      } else {
+        newsData = await generateBusinessNews();
+      }
+      
+      if (newsData) {
+        await broadcastNews(newsData, sock);
+        newsSettings.lastNewsTime = now;
+        await saveNewsSettings();
+      }
+    }
+  } catch (error) {
+    console.error('Error in auto news generation:', error);
+  }
+}
+
+// Start auto news system
+function startNewsSystem(sock) {
+  // Check for news every hour
+  setInterval(() => {
+    autoGenerateNews(sock);
+  }, 60 * 60 * 1000);
+  
+  // Initial check after 5 minutes
+  setTimeout(() => {
+    autoGenerateNews(sock);
+  }, 5 * 60 * 1000);
+}
+
 // Auto-update prices daily
 async function updateCryptoPrices() {
   try {
@@ -516,6 +782,270 @@ async function updateCryptoPrices() {
   } catch (error) {
     console.error('Error updating crypto prices:', error);
   }
+}
+
+// News Flash System
+const newsAgencies = ['CNN', 'Sky News', 'BBC', 'Al Jazeera', 'Reuters', 'Bloomberg', 'Financial Times'];
+
+let newsSettings = {
+  enabled: true,
+  targetGroups: [], // Admin configurable groups
+  frequency: 3, // News per day
+  cryptoImpactRange: { min: 0.05, max: 0.20 }, // 5-20% price impact
+  businessImpactRange: { min: 0.02, max: 0.08 }, // 2-8% ROI impact
+  lastNewsTime: null
+};
+
+// News templates
+const newsTemplates = {
+  crypto: {
+    crash: [
+      "🚨 {agency} BREAKING: {coin} plummets {percent}% amid regulatory concerns",
+      "📉 {agency}: Major sell-off hits {coin}, down {percent}% in 24 hours",
+      "⚠️ {agency} ALERT: {coin} crashes {percent}% following market uncertainty",
+      "🔴 {agency}: Crypto bloodbath continues as {coin} drops {percent}%"
+    ],
+    boom: [
+      "🚀 {agency} BREAKING: {coin} surges {percent}% on institutional adoption",
+      "📈 {agency}: {coin} rockets {percent}% higher on positive news",
+      "💚 {agency}: Massive rally sends {coin} up {percent}% overnight",
+      "🎯 {agency} REPORT: {coin} explodes {percent}% on breakthrough technology"
+    ],
+    listing: [
+      "🆕 {agency}: New cryptocurrency {coin} launches on major exchanges",
+      "📢 {agency}: {coin} debuts with strong investor interest",
+      "🎉 {agency}: Latest crypto {coin} sees explosive trading volume"
+    ],
+    regulation: [
+      "📜 {agency}: New crypto regulations affect {coin} trading",
+      "⚖️ {agency}: Government policy changes impact {coin} markets",
+      "🏛️ {agency}: Central bank statements move {coin} significantly"
+    ]
+  },
+  business: {
+    growth: [
+      "📈 {agency}: {business} sector sees {percent}% ROI increase this quarter",
+      "🏢 {agency} REPORT: {business} industry experiences unprecedented growth of {percent}%",
+      "💼 {agency}: Economic boom lifts {business} returns by {percent}%",
+      "📊 {agency}: {business} businesses report {percent}% profit surge"
+    ],
+    decline: [
+      "📉 {agency}: {business} sector faces {percent}% ROI decline amid challenges",
+      "⚠️ {agency} ALERT: {business} industry struggles with {percent}% drop in returns",
+      "🔻 {agency}: Economic headwinds hit {business} businesses, down {percent}%",
+      "📰 {agency}: {business} sector experiences {percent}% profitability decline"
+    ],
+    opportunity: [
+      "🚀 {agency}: New {business} investment opportunities emerge",
+      "💡 {agency} INSIGHT: {business} sector poised for major expansion",
+      "🎯 {agency}: Market analysts bullish on {business} industry outlook"
+    ],
+    crisis: [
+      "🚨 {agency}: Supply chain issues affect {business} operations",
+      "⚠️ {agency} BREAKING: {business} industry faces regulatory challenges",
+      "🔴 {agency}: Economic pressures impact {business} sector performance"
+    ]
+  }
+};
+
+// Load news settings
+async function loadNewsSettings() {
+  try {
+    const settings = await db.collection(COLLECTIONS.SETTINGS).findOne({ type: 'news_settings' });
+    if (settings) {
+      newsSettings = { ...newsSettings, ...settings.data };
+    }
+  } catch (error) {
+    console.error('Error loading news settings:', error);
+  }
+}
+
+// Save news settings
+async function saveNewsSettings() {
+  try {
+    await db.collection(COLLECTIONS.SETTINGS).replaceOne(
+      { type: 'news_settings' },
+      { type: 'news_settings', data: newsSettings, updatedAt: new Date() },
+      { upsert: true }
+    );
+  } catch (error) {
+    console.error('Error saving news settings:', error);
+  }
+}
+
+// Generate crypto news and apply market impact
+async function generateCryptoNews() {
+  try {
+    if (!newsSettings.enabled || newsSettings.targetGroups.length === 0) return;
+
+    const cryptoSymbols = Object.keys(cryptoData);
+    const selectedCrypto = cryptoSymbols[Math.floor(Math.random() * cryptoSymbols.length)];
+    const crypto = cryptoData[selectedCrypto];
+    
+    // Determine news type and impact
+    const newsTypes = ['crash', 'boom', 'regulation'];
+    const newsType = newsTypes[Math.floor(Math.random() * newsTypes.length)];
+    
+    let impactMultiplier;
+    switch (newsType) {
+      case 'crash':
+        impactMultiplier = -(Math.random() * (newsSettings.cryptoImpactRange.max - newsSettings.cryptoImpactRange.min) + newsSettings.cryptoImpactRange.min);
+        break;
+      case 'boom':
+        impactMultiplier = Math.random() * (newsSettings.cryptoImpactRange.max - newsSettings.cryptoImpactRange.min) + newsSettings.cryptoImpactRange.min;
+        break;
+      case 'regulation':
+        impactMultiplier = (Math.random() - 0.5) * newsSettings.cryptoImpactRange.max;
+        break;
+    }
+    
+    // Apply price impact
+    const oldPrice = crypto.price;
+    const newPrice = Math.max(oldPrice * (1 + impactMultiplier), oldPrice * 0.1);
+    cryptoData[selectedCrypto].price = parseFloat(newPrice.toFixed(selectedCrypto === 'SHIB' ? 8 : 2));
+    
+    // Generate news message
+    const templates = newsTemplates.crypto[newsType];
+    const template = templates[Math.floor(Math.random() * templates.length)];
+    const agency = newsAgencies[Math.floor(Math.random() * newsAgencies.length)];
+    const percent = Math.abs(impactMultiplier * 100).toFixed(1);
+    
+    const newsMessage = template
+      .replace('{agency}', agency)
+      .replace('{coin}', `${crypto.name} (${selectedCrypto})`)
+      .replace('{percent}', percent);
+    
+    const fullNews = `📰 *CRYPTO NEWS FLASH* 📰\n\n${newsMessage}\n\n💰 *Price Impact:*\n${selectedCrypto}: ${ecoSettings.currency}${oldPrice.toLocaleString()} → ${ecoSettings.currency}${newPrice.toLocaleString()}\n\n⚡ *Market reacting in real-time!*`;
+    
+    // Save updated prices
+    await db.collection(COLLECTIONS.SETTINGS).replaceOne(
+      { type: 'crypto_prices' },
+      { type: 'crypto_prices', data: cryptoData, updatedAt: new Date() },
+      { upsert: true }
+    );
+    
+    return { message: fullNews, groups: newsSettings.targetGroups };
+  } catch (error) {
+    console.error('Error generating crypto news:', error);
+    return null;
+  }
+}
+
+// Generate business news and apply ROI impact
+async function generateBusinessNews() {
+  try {
+    if (!newsSettings.enabled || newsSettings.targetGroups.length === 0) return;
+
+    const businessIds = Object.keys(businessData);
+    const selectedBusinessId = businessIds[Math.floor(Math.random() * businessIds.length)];
+    const business = businessData[selectedBusinessId];
+    
+    // Determine news type and impact
+    const newsTypes = ['growth', 'decline', 'opportunity', 'crisis'];
+    const newsType = newsTypes[Math.floor(Math.random() * newsTypes.length)];
+    
+    let impactMultiplier;
+    switch (newsType) {
+      case 'growth':
+      case 'opportunity':
+        impactMultiplier = Math.random() * (newsSettings.businessImpactRange.max - newsSettings.businessImpactRange.min) + newsSettings.businessImpactRange.min;
+        break;
+      case 'decline':
+      case 'crisis':
+        impactMultiplier = -(Math.random() * (newsSettings.businessImpactRange.max - newsSettings.businessImpactRange.min) + newsSettings.businessImpactRange.min);
+        break;
+    }
+    
+    // Apply ROI impact
+    const oldROI = business.roi;
+    const newROI = Math.max(business.roi + impactMultiplier, 0.01); // Minimum 1% ROI
+    businessData[selectedBusinessId].roi = parseFloat(newROI.toFixed(3));
+    
+    // Generate news message
+    const templates = newsTemplates.business[newsType];
+    const template = templates[Math.floor(Math.random() * templates.length)];
+    const agency = newsAgencies[Math.floor(Math.random() * newsAgencies.length)];
+    const percent = Math.abs(impactMultiplier * 100).toFixed(1);
+    
+    const newsMessage = template
+      .replace('{agency}', agency)
+      .replace('{business}', business.name)
+      .replace('{percent}', percent);
+    
+    const fullNews = `📰 *BUSINESS NEWS FLASH* 📰\n\n${newsMessage}\n\n📊 *ROI Impact:*\n${business.name}: ${(oldROI * 100).toFixed(1)}% → ${(newROI * 100).toFixed(1)}%\n\n🏢 *Affecting all ${business.name.toLowerCase()} investments!*`;
+    
+    // Save updated business data
+    await db.collection(COLLECTIONS.SETTINGS).replaceOne(
+      { type: 'business_data' },
+      { type: 'business_data', data: businessData, updatedAt: new Date() },
+      { upsert: true }
+    );
+    
+    return { message: fullNews, groups: newsSettings.targetGroups };
+  } catch (error) {
+    console.error('Error generating business news:', error);
+    return null;
+  }
+}
+
+// Send news to target groups
+async function broadcastNews(newsData, sock) {
+  try {
+    if (!newsData || !newsData.groups || newsData.groups.length === 0) return;
+    
+    for (const groupId of newsData.groups) {
+      try {
+        await sock.sendMessage(groupId, { text: newsData.message });
+        console.log(`📰 News sent to group: ${groupId}`);
+      } catch (error) {
+        console.error(`Error sending news to group ${groupId}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Error broadcasting news:', error);
+  }
+}
+
+// Auto news generation
+async function autoGenerateNews(sock) {
+  try {
+    const now = Date.now();
+    const lastNews = newsSettings.lastNewsTime || 0;
+    const timeSinceLastNews = now - lastNews;
+    const newsInterval = (24 * 60 * 60 * 1000) / newsSettings.frequency; // Distribute throughout day
+    
+    if (timeSinceLastNews >= newsInterval) {
+      const newsType = Math.random() < 0.6 ? 'crypto' : 'business'; // 60% crypto, 40% business
+      
+      let newsData;
+      if (newsType === 'crypto') {
+        newsData = await generateCryptoNews();
+      } else {
+        newsData = await generateBusinessNews();
+      }
+      
+      if (newsData) {
+        await broadcastNews(newsData, sock);
+        newsSettings.lastNewsTime = now;
+        await saveNewsSettings();
+      }
+    }
+  } catch (error) {
+    console.error('Error in auto news generation:', error);
+  }
+}
+
+// Start auto news system
+function startNewsSystem(sock) {
+  // Check for news every hour
+  setInterval(() => {
+    autoGenerateNews(sock);
+  }, 60 * 60 * 1000);
+  
+  // Initial check after 5 minutes
+  setTimeout(() => {
+    autoGenerateNews(sock);
+  }, 5 * 60 * 1000);
 }
 
 // Load crypto prices from database
@@ -992,6 +1522,11 @@ export default async function economyHandler(m, sock, config) {
       await initDatabase();
       await loadSettings();
     }
+    if (!global.newsSystemStarted) {
+  startNewsSystem(sock);
+  global.newsSystemStarted = true;
+  console.log('✅ News system started');
+}
     
     await initUser(senderId);
     await cleanupExpiredEffects(senderId);
@@ -1189,7 +1724,7 @@ async function showEconomyMenu(reply, prefix) {
                     `• *leaderboard* - Top players\n` +
                     `• *clan* - Clan system\n\n` +
                     `🎉 *Events:* ${prefix}events\n` +
-                    `⚙️ *Admin:* ${prefix}economy admin (admin only)`;
+                    `⚙️ *Admin:* ${prefix}economy admin (admin only)\n📰 *News:* ${prefix}economy admin news (admin only)`;
     
     await reply(menuText);
   } catch (error) {
@@ -2507,6 +3042,139 @@ async function handleSubCommand(subCommand, args, context) {
       case 'business':
         await handleBusiness(context, args);
         break;
+        case 'news':
+  if (args.length < 2) {
+    await reply(`📰 *News Admin Commands:*\n• *enable/disable* - Toggle news system\n• *groups add [group_id]* - Add target group\n• *groups remove [group_id]* - Remove target group\n• *groups list* - View target groups\n• *frequency [number]* - Set daily news frequency\n• *send crypto/business* - Manual news\n• *settings* - View current settings`);
+    return;
+  }
+  
+  const newsAction = args[1].toLowerCase();
+  
+  switch (newsAction) {
+    case 'enable':
+      newsSettings.enabled = true;
+      await saveNewsSettings();
+      await reply('📰 *News system enabled*');
+      break;
+      
+    case 'disable':
+      newsSettings.enabled = false;
+      await saveNewsSettings();
+      await reply('📰 *News system disabled*');
+      break;
+      
+    case 'groups':
+      if (args.length < 3) {
+        await reply('⚠️ *Usage: news groups [add/remove/list] [group_id]*');
+        return;
+      }
+      
+      const groupAction = args[2].toLowerCase();
+      
+      switch (groupAction) {
+        case 'add':
+          if (args.length < 4) {
+            await reply('⚠️ *Usage: news groups add [group_id]*');
+            return;
+          }
+          
+          const addGroupId = args[3];
+          if (!newsSettings.targetGroups.includes(addGroupId)) {
+            newsSettings.targetGroups.push(addGroupId);
+            await saveNewsSettings();
+            await reply(`✅ *Added group ${addGroupId} to news targets*`);
+          } else {
+            await reply('⚠️ *Group already in target list*');
+          }
+          break;
+          
+        case 'remove':
+          if (args.length < 4) {
+            await reply('⚠️ *Usage: news groups remove [group_id]*');
+            return;
+          }
+          
+          const removeGroupId = args[3];
+          const index = newsSettings.targetGroups.indexOf(removeGroupId);
+          if (index > -1) {
+            newsSettings.targetGroups.splice(index, 1);
+            await saveNewsSettings();
+            await reply(`✅ *Removed group ${removeGroupId} from news targets*`);
+          } else {
+            await reply('⚠️ *Group not in target list*');
+          }
+          break;
+          
+        case 'list':
+          if (newsSettings.targetGroups.length === 0) {
+            await reply('📰 *No target groups configured*');
+          } else {
+            const groupList = newsSettings.targetGroups.join('\n• ');
+            await reply(`📰 *News Target Groups:*\n• ${groupList}`);
+          }
+          break;
+      }
+      break;
+      
+    case 'frequency':
+      if (args.length < 3) {
+        await reply('⚠️ *Usage: news frequency [1-10]*');
+        return;
+      }
+      
+      const freq = parseInt(args[2]);
+      if (isNaN(freq) || freq < 1 || freq > 10) {
+        await reply('⚠️ *Frequency must be between 1-10 news per day*');
+        return;
+      }
+      
+      newsSettings.frequency = freq;
+      await saveNewsSettings();
+      await reply(`📰 *News frequency set to ${freq} per day*`);
+      break;
+      
+    case 'send':
+      if (args.length < 3) {
+        await reply('⚠️ *Usage: news send [crypto/business]*');
+        return;
+      }
+      
+      const sendType = args[2].toLowerCase();
+      let manualNews;
+      
+      if (sendType === 'crypto') {
+        manualNews = await generateCryptoNews();
+      } else if (sendType === 'business') {
+        manualNews = await generateBusinessNews();
+      } else {
+        await reply('⚠️ *Type must be crypto or business*');
+        return;
+      }
+      
+      if (manualNews) {
+        await broadcastNews(manualNews, context.sock);
+        await reply('📰 *Manual news sent to all target groups*');
+      } else {
+        await reply('❌ *Error generating news*');
+      }
+      break;
+      
+    case 'settings':
+      const settingsText = `📰 *NEWS SYSTEM SETTINGS* 📰\n\n` +
+                          `🔘 *Status:* ${newsSettings.enabled ? '✅ Enabled' : '❌ Disabled'}\n` +
+                          `📊 *Frequency:* ${newsSettings.frequency} per day\n` +
+                          `🎯 *Target Groups:* ${newsSettings.targetGroups.length}\n` +
+                          `💥 *Crypto Impact:* ${(newsSettings.cryptoImpactRange.min * 100).toFixed(0)}-${(newsSettings.cryptoImpactRange.max * 100).toFixed(0)}%\n` +
+                          `🏢 *Business Impact:* ${(newsSettings.businessImpactRange.min * 100).toFixed(0)}-${(newsSettings.businessImpactRange.max * 100).toFixed(0)}%\n` +
+                          `⏰ *Last News:* ${newsSettings.lastNewsTime ? new Date(newsSettings.lastNewsTime).toLocaleString() : 'Never'}`;
+      
+      await reply(settingsText);
+      break;
+      
+    default:
+      await reply('❓ *Unknown news command*');
+  }
+  break;
         
       // Social
       case 'profile':
