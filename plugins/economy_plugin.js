@@ -445,6 +445,26 @@ const SHOP_ITEMS = {
   }
 };
 
+// Helper function to map lowercase item IDs to camelCase
+function getItemId(inputId) {
+  const itemMapping = {
+    'workboost': 'workBoost',
+    'robprotection': 'robProtection', 
+    'dailyboost': 'dailyBoost',
+    'gamblingluck': 'gamblingLuck',
+    'vipstatus': 'vipStatus',
+    'privatevault': 'privateVault',
+    'lockpicks': 'lockpicks',
+    'businesssuit': 'businessSuit',
+    'goldencrown': 'goldenCrown',
+    'customtitle': 'customTitle',
+    'heistplans': 'heistPlans',
+    'markettip': 'marketTip'
+  };
+  
+  return itemMapping[inputId.toLowerCase()] || inputId;
+}
+
 // Achievement definitions
 const ACHIEVEMENTS = {
   firstDaily: {
