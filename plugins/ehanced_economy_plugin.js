@@ -2261,7 +2261,7 @@ async function handleUse(context, args) {
       return;
     }
     
-    const itemId = args[0].toLowerCase();
+    const itemId = getItemId(args[0]);
     const result = await useItem(senderId, itemId);
     
     if (result.success) {
