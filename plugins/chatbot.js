@@ -235,13 +235,22 @@ function getBotIds(sock) {
     botNumber = botUserId.split('@')[0];
   }
   
-  // Generate all possible bot ID formats
-  return [
+  // Generate all possible bot ID formats including your specific bot ID
+  const botIds = [
     `${botNumber}@s.whatsapp.net`,
     `${botNumber}@c.us`,
+    `${botNumber}@lid`,
     botUserId,
-    botNumber
+    botNumber,
+    // Add your specific bot ID
+    '19851909324808@s.whatsapp.net',
+    '19851909324808@c.us',
+    '19851909324808@lid',
+    '19851909324808'
   ];
+  
+  // Remove duplicates and return
+  return [...new Set(botIds)];
 }
 
 // Check if bot is mentioned
@@ -250,9 +259,20 @@ function isBotMentioned(mentions, botIds) {
     return false;
   }
   
+  console.log(`🔍 Checking mentions: ${JSON.stringify(mentions)} against bot IDs: ${JSON.stringify(botIds)}`);
+  
   return mentions.some(mention => {
     return botIds.some(botId => {
-      return mention === botId || mention.includes(botId.split('@')[0]);
+      // Check exact match
+      if (mention === botId) return true;
+      
+      // Check if mention contains bot number
+      const mentionNumber = mention.split('@')[0];
+      const botNumber = botId.split('@')[0];
+      
+      return mentionNumber === botNumber || 
+             mentionNumber === '19851909324808' || 
+             botNumber === '19851909324808';
     });
   });
 }
@@ -263,9 +283,19 @@ function isReplyToBot(quotedMessage, botIds) {
     return false;
   }
   
+  console.log(`🔍 Checking reply participant: ${quotedMessage.participant} against bot IDs: ${JSON.stringify(botIds)}`);
+  
   return botIds.some(botId => {
-    return quotedMessage.participant === botId || 
-           quotedMessage.participant.includes(botId.split('@')[0]);
+    // Check exact match
+    if (quotedMessage.participant === botId) return true;
+    
+    // Check if participant contains bot number
+    const participantNumber = quotedMessage.participant.split('@')[0];
+    const botNumber = botId.split('@')[0];
+    
+    return participantNumber === botNumber || 
+           participantNumber === '19851909324808' || 
+           botNumber === '19851909324808';
   });
 }
 
@@ -374,6 +404,9 @@ export default async function groqHandler(m, sock, config) {
         
         // Clean up the query by removing mentions
         if (botIds.length > 0) {
+          // Remove all possible bot number mentions
+          query = query.replace(new RegExp(`@19851909324808`, 'g'), '').trim();
+          
           botIds.forEach(botId => {
             const botNumber = botId.split('@')[0];
             query = query.replace(new RegExp(`@${botNumber}`, 'g'), '').trim();
