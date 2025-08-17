@@ -82,8 +82,8 @@ moment.tz.setDefault('Africa/Lagos');
 
 // Default Twitter settings
 const defaultSettings = {
-  checkInterval: 300000, // 5 minutes
-  maxTweetsPerCheck: 10,
+  checkInterval: 900000, // 15 minutes (safer for rate limits)
+  maxTweetsPerCheck: 5, // Reduced to avoid rate limits
   includeReplies: false,
   includeRetweets: true,
   messageTemplate: '🐦 *New tweet from @{username}*\n\n{content}\n\n🔗 {url}',
@@ -92,7 +92,9 @@ const defaultSettings = {
   maxMessageLength: 1000,
   enableFilters: true,
   adminOnly: true,
-  rateLimitDelay: 1000 // 1 second between API calls
+  rateLimitDelay: 5000, // 5 seconds between API calls
+  retryDelay: 60000, // 1 minute retry delay on rate limit
+  maxRetries: 3
 };
 
 // Load settings from database
@@ -126,36 +128,66 @@ async function saveSettings() {
 // 🐦 TWITTER API FUNCTIONS
 // =======================
 
-// Make authenticated request to Twitter API
+// Make authenticated request to Twitter API with retry logic
 async function makeTwitterRequest(endpoint, params = {}) {
-  try {
-    if (!TWITTER_CONFIG.bearerToken) {
-      throw new Error('Twitter Bearer Token not configured');
-    }
-
-    const url = new URL(`${TWITTER_CONFIG.baseUrl}${endpoint}`);
-    Object.keys(params).forEach(key => {
-      if (params[key] !== undefined && params[key] !== null) {
-        url.searchParams.append(key, params[key]);
+  let retries = 0;
+  
+  while (retries <= twitterSettings.maxRetries) {
+    try {
+      if (!TWITTER_CONFIG.bearerToken) {
+        throw new Error('Twitter Bearer Token not configured');
       }
-    });
 
-    const response = await fetch(url.toString(), {
-      headers: {
-        'Authorization': `Bearer ${TWITTER_CONFIG.bearerToken}`,
-        'Content-Type': 'application/json'
+      const url = new URL(`${TWITTER_CONFIG.baseUrl}${endpoint}`);
+      Object.keys(params).forEach(key => {
+        if (params[key] !== undefined && params[key] !== null) {
+          url.searchParams.append(key, params[key]);
+        }
+      });
+
+      const response = await fetch(url.toString(), {
+        headers: {
+          'Authorization': `Bearer ${TWITTER_CONFIG.bearerToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.status === 429) {
+        // Rate limited - check reset time from headers
+        const resetTime = response.headers.get('x-rate-limit-reset');
+        const resetMs = resetTime ? (parseInt(resetTime) * 1000) - Date.now() : twitterSettings.retryDelay;
+        const waitTime = Math.max(resetMs, twitterSettings.retryDelay);
+        
+        console.log(`⏰ Rate limited. Waiting ${Math.ceil(waitTime / 1000)}s before retry ${retries + 1}/${twitterSettings.maxRetries}`);
+        
+        if (retries < twitterSettings.maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          retries++;
+          continue;
+        } else {
+          throw new Error(`Rate limit exceeded. Max retries (${twitterSettings.maxRetries}) reached.`);
+        }
       }
-    });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(`Twitter API Error: ${response.status} - ${errorData.detail || response.statusText}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`Twitter API Error: ${response.status} - ${errorData.detail || response.statusText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      if (error.message.includes('Rate limit exceeded') || retries >= twitterSettings.maxRetries) {
+        throw error;
+      }
+      
+      console.error(`Twitter API request failed (attempt ${retries + 1}):`, error.message);
+      retries++;
+      
+      if (retries <= twitterSettings.maxRetries) {
+        console.log(`⏳ Retrying in ${twitterSettings.retryDelay / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, twitterSettings.retryDelay));
+      }
     }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Twitter API request failed:', error);
-    throw error;
   }
 }
 
@@ -419,10 +451,15 @@ async function checkForNewTweets(sock) {
 
     for (const account of accounts) {
       try {
+        // Longer delay between accounts to respect rate limits
         await new Promise(resolve => setTimeout(resolve, twitterSettings.rateLimitDelay));
         await checkAccountTweets(sock, account);
       } catch (error) {
-        console.error(`Error checking tweets for @${account.username}:`, error);
+        if (error.message.includes('Rate limit exceeded')) {
+          console.error(`🚫 Rate limit hit while checking @${account.username}. Skipping remaining accounts for this cycle.`);
+          break; // Stop checking other accounts this cycle
+        }
+        console.error(`Error checking tweets for @${account.username}:`, error.message);
         continue;
       }
     }
@@ -828,11 +865,11 @@ async function handleSettings(context, args) {
     switch (setting) {
       case 'interval':
         if (!value || isNaN(value)) {
-          responseText = `⚠️ Invalid interval. Use: ${context.config.PREFIX}twitter settings interval 300`;
+          responseText = `⚠️ Invalid interval. Use: ${context.config.PREFIX}twitter settings interval 900`;
         } else {
           const seconds = parseInt(value);
-          if (seconds < 60) {
-            responseText = `⚠️ Minimum interval is 60 seconds to avoid rate limits.`;
+          if (seconds < 300) {
+            responseText = `⚠️ Minimum interval is 300 seconds (5 minutes) to avoid rate limits. Recommended: 900s (15 min).`;
           } else {
             twitterSettings.checkInterval = seconds * 1000;
             await saveSettings();
