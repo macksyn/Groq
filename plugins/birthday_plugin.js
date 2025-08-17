@@ -185,18 +185,18 @@ async function getUpcomingBirthdays(daysAhead) {
   }
 }
 
-// Generate birthday wish message
+// Generate birthday wish message (without specific names - uses mentions)
 function getBirthdayWishMessage(birthdayPerson) {
   const wishes = [
-    `🎉🎂 HAPPY BIRTHDAY ${birthdayPerson.name.toUpperCase()}! 🎂🎉\n\nWishing you a day filled with happiness and a year filled with joy! 🎈✨`,
+    `🎉🎂 HAPPY BIRTHDAY! 🎂🎉\n\nWishing you a day filled with happiness and a year filled with joy! 🎈✨`,
     
-    `🎊 Happy Birthday to our amazing ${birthdayPerson.name}! 🎊\n\nMay your special day be surrounded with happiness, filled with laughter, wrapped with pleasure and painted with fun! 🎨🎁`,
+    `🎊 Happy Birthday to our amazing member! 🎊\n\nMay your special day be surrounded with happiness, filled with laughter, wrapped with pleasure and painted with fun! 🎨🎁`,
     
-    `🌟 It's ${birthdayPerson.name}'s Birthday! 🌟\n\n🎂 Another year older, another year wiser, another year more awesome! May all your dreams come true! ✨🎉`,
+    `🌟 It's someone's Birthday! 🌟\n\n🎂 Another year older, another year wiser, another year more awesome! May all your dreams come true! ✨🎉`,
     
-    `🎈 BIRTHDAY ALERT! 🎈\n\nIt's ${birthdayPerson.name}'s special day! 🎂 Let's celebrate this wonderful person who brings joy to our group! 🎊🎉`,
+    `🎈 BIRTHDAY ALERT! 🎈\n\nIt's someone's special day! 🎂 Let's celebrate this wonderful person who brings joy to our group! 🎊🎉`,
     
-    `🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday dear ${birthdayPerson.name}! 🎵\n🎵 Happy Birthday to you! 🎵\n\n🎂 Hope your day is as special as you are! 🌟`
+    `🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday dear friend! 🎵\n🎵 Happy Birthday to you! 🎵\n\n🎂 Hope your day is as special as you are! 🌟`
   ];
   
   const randomWish = wishes[Math.floor(Math.random() * wishes.length)];
@@ -213,14 +213,14 @@ function getBirthdayWishMessage(birthdayPerson) {
   return message;
 }
 
-// Generate reminder message
+// Generate reminder message (without specific names - uses mentions)
 function getReminderMessage(birthdayPerson, daysUntil) {
   let message;
   
   if (daysUntil === 1) {
-    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 Tomorrow is ${birthdayPerson.name}'s birthday!\n\n🎁 Don't forget to wish them well! 🎉`;
+    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 Tomorrow is someone's birthday!\n\n🎁 Don't forget to wish them well! 🎉`;
   } else {
-    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 ${birthdayPerson.name}'s birthday is in ${daysUntil} days!\n\n🗓️ Mark your calendar: ${birthdayPerson.birthday.displayDate} 🎉`;
+    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 Someone's birthday is in ${daysUntil} days!\n\n🗓️ Mark your calendar: ${birthdayPerson.birthday.displayDate} 🎉`;
   }
   
   if (birthdayPerson.birthday.age !== undefined) {
@@ -252,7 +252,7 @@ async function sendBirthdayWishes(sock) {
       // Send private wish to the birthday person
       if (birthdaySettings.enablePrivateReminders) {
         await sock.sendMessage(birthdayPerson.userId, {
-          text: `🎉 *HAPPY BIRTHDAY!* 🎉\n\n${birthdayPerson.name}, today is your special day! 🎂\n\nWishing you all the happiness in the world! ✨🎈\n\nEnjoy your celebration! 🎊`
+          text: `🎉 *HAPPY BIRTHDAY!* 🎉\n\nToday is your special day! 🎂\n\nWishing you all the happiness in the world! ✨🎈\n\nEnjoy your celebration! 🎊`
         });
         
         console.log(`✅ Sent private birthday wish to ${birthdayPerson.name}`);
@@ -551,27 +551,29 @@ async function showBirthdayMenu(reply, prefix) {
 
 // Handle today's birthdays
 async function handleToday(context) {
-  const { reply, sock, m } = context;
+  const { sock, m } = context;
   
   const todaysBirthdays = await getTodaysBirthdays();
   
   if (todaysBirthdays.length === 0) {
-    await reply(`🎂 *No birthdays today*\n\n📅 Check upcoming birthdays with *${context.config.PREFIX}birthday upcoming*`);
+    await sock.sendMessage(m.key.remoteJid, {
+      text: `🎂 *No birthdays today*\n\n📅 Check upcoming birthdays with *${context.config.PREFIX}birthday upcoming*`
+    });
     return;
   }
   
   let message = `🎉 *TODAY'S BIRTHDAYS* 🎉\n\n`;
+  const mentions = [];
   
   todaysBirthdays.forEach(person => {
-    message += `🎂 **${person.name}**\n`;
+    mentions.push(person.userId);
+    message += `🎂 @${person.userId.split('@')[0]}\n`;
     if (person.birthday.age !== undefined) {
       message += `   🎈 Turning ${person.birthday.age} today!\n`;
     }
   });
   
   message += `\n🎊 *Let's wish them a happy birthday!* 🎊`;
-  
-  const mentions = todaysBirthdays.map(person => person.userId);
   
   await sock.sendMessage(m.key.remoteJid, {
     text: message,
@@ -581,11 +583,13 @@ async function handleToday(context) {
 
 // Handle upcoming birthdays
 async function handleUpcoming(context, args) {
-  const { reply } = context;
+  const { sock, m } = context;
   
   const days = args.length > 0 ? parseInt(args[0]) : 7;
   if (isNaN(days) || days < 1 || days > 365) {
-    await reply('⚠️ *Please provide a valid number of days (1-365)*');
+    await sock.sendMessage(m.key.remoteJid, {
+      text: '⚠️ *Please provide a valid number of days (1-365)*'
+    });
     return;
   }
   
@@ -614,21 +618,26 @@ async function handleUpcoming(context, args) {
   });
   
   if (upcomingBirthdays.length === 0) {
-    await reply(`📅 *No birthdays in the next ${days} days*\n\nTry checking a longer period or use *${context.config.PREFIX}birthday thismonth*`);
+    await sock.sendMessage(m.key.remoteJid, {
+      text: `📅 *No birthdays in the next ${days} days*\n\nTry checking a longer period or use *${context.config.PREFIX}birthday thismonth*`
+    });
     return;
   }
   
   upcomingBirthdays.sort((a, b) => a.daysUntil - b.daysUntil);
   
   let message = `📅 *UPCOMING BIRTHDAYS (Next ${days} days)* 📅\n\n`;
+  const mentions = [];
   
   upcomingBirthdays.forEach(upcoming => {
+    mentions.push(upcoming.userId);
+    
     if (upcoming.daysUntil === 0) {
-      message += `🎊 **${upcoming.name}** - TODAY! 🎊\n`;
+      message += `🎊 @${upcoming.userId.split('@')[0]} - TODAY! 🎊\n`;
     } else if (upcoming.daysUntil === 1) {
-      message += `🎂 **${upcoming.name}** - Tomorrow\n`;
+      message += `🎂 @${upcoming.userId.split('@')[0]} - Tomorrow\n`;
     } else {
-      message += `📌 **${upcoming.name}** - ${upcoming.daysUntil} days (${upcoming.birthday.monthName} ${upcoming.birthday.day})\n`;
+      message += `📌 @${upcoming.userId.split('@')[0]} - ${upcoming.daysUntil} days (${upcoming.birthday.monthName} ${upcoming.birthday.day})\n`;
     }
     
     if (upcoming.birthday.age !== undefined) {
@@ -639,12 +648,15 @@ async function handleUpcoming(context, args) {
     message += '\n';
   });
   
-  await reply(message);
+  await sock.sendMessage(m.key.remoteJid, {
+    text: message,
+    mentions: mentions
+  });
 }
 
 // Handle this month's birthdays
 async function handleThisMonth(context) {
-  const { reply } = context;
+  const { sock, m } = context;
   
   const currentMonth = moment.tz('Africa/Lagos').month() + 1; // moment months are 0-indexed
   const allBirthdays = await getAllBirthdays();
@@ -658,7 +670,9 @@ async function handleThisMonth(context) {
   
   if (thisMonthBirthdays.length === 0) {
     const monthName = moment.tz('Africa/Lagos').format('MMMM');
-    await reply(`📅 *No birthdays in ${monthName}*\n\nUse *${context.config.PREFIX}birthday all* to see all recorded birthdays`);
+    await sock.sendMessage(m.key.remoteJid, {
+      text: `📅 *No birthdays in ${monthName}*\n\nUse *${context.config.PREFIX}birthday all* to see all recorded birthdays`
+    });
     return;
   }
   
@@ -667,9 +681,11 @@ async function handleThisMonth(context) {
   
   const monthName = moment.tz('Africa/Lagos').format('MMMM YYYY');
   let message = `📅 *${monthName.toUpperCase()} BIRTHDAYS* 📅\n\n`;
+  const mentions = [];
   
   thisMonthBirthdays.forEach(person => {
-    message += `🎂 **${person.name}** - ${person.birthday.monthName} ${person.birthday.day}`;
+    mentions.push(person.userId);
+    message += `🎂 @${person.userId.split('@')[0]} - ${person.birthday.monthName} ${person.birthday.day}`;
     
     if (person.birthday.age !== undefined) {
       message += ` (${person.birthday.age} years old)`;
@@ -691,15 +707,20 @@ async function handleThisMonth(context) {
     message += '\n';
   });
   
-  await reply(message);
+  await sock.sendMessage(m.key.remoteJid, {
+    text: message,
+    mentions: mentions
+  });
 }
 
 // Handle all birthdays (admin only)
 async function handleAll(context) {
-  const { reply, senderId } = context;
+  const { sock, m, senderId } = context;
   
   if (!isAuthorized(senderId)) {
-    await reply('🚫 Only admins can view all birthdays.');
+    await sock.sendMessage(m.key.remoteJid, {
+      text: '🚫 Only admins can view all birthdays.'
+    });
     return;
   }
   
@@ -707,7 +728,9 @@ async function handleAll(context) {
   const birthdayEntries = Object.values(allBirthdays);
   
   if (birthdayEntries.length === 0) {
-    await reply(`🎂 *No birthdays recorded*\n\nBirthdays are automatically saved when members submit attendance forms with valid D.O.B information.`);
+    await sock.sendMessage(m.key.remoteJid, {
+      text: `🎂 *No birthdays recorded*\n\nBirthdays are automatically saved when members submit attendance forms with valid D.O.B information.`
+    });
     return;
   }
   
@@ -720,17 +743,20 @@ async function handleAll(context) {
   });
   
   let message = `🎂 *ALL BIRTHDAYS* 🎂\n\n📊 Total: ${birthdayEntries.length} members\n\n`;
+  const mentions = [];
   
   let currentMonth = null;
   
   birthdayEntries.forEach(person => {
+    mentions.push(person.userId);
+    
     // Add month header
     if (currentMonth !== person.birthday.month) {
       currentMonth = person.birthday.month;
       message += `\n📅 *${person.birthday.monthName.toUpperCase()}*\n`;
     }
     
-    message += `🎂 ${person.name} - ${person.birthday.day}`;
+    message += `🎂 @${person.userId.split('@')[0]} - ${person.birthday.day}`;
     
     if (person.birthday.age !== undefined) {
       message += ` (${person.birthday.age} years old)`;
@@ -739,7 +765,10 @@ async function handleAll(context) {
     message += '\n';
   });
   
-  await reply(message);
+  await sock.sendMessage(m.key.remoteJid, {
+    text: message,
+    mentions: mentions
+  });
 }
 
 // Handle my birthday command
