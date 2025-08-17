@@ -253,6 +253,38 @@ function getBotIds(sock) {
   return [...new Set(botIds)];
 }
 
+// Check if bot is mentioned in text (fallback method)
+function isTextMention(messageBody, botIds) {
+  if (!messageBody || typeof messageBody !== 'string') {
+    return false;
+  }
+  
+  // Check for @19851909324808 specifically in the text
+  if (messageBody.includes('@19851909324808')) {
+    console.log(`✅ Found text mention: @19851909324808`);
+    return true;
+  }
+  
+  // Check for other bot ID formats in text
+  return botIds.some(botId => {
+    const botNumber = botId.split('@')[0];
+    const patterns = [
+      `@${botNumber}`,
+      `@${botNumber} `,
+      ` @${botNumber}`,
+      `@${botNumber}\n`
+    ];
+    
+    return patterns.some(pattern => {
+      if (messageBody.includes(pattern)) {
+        console.log(`✅ Found text mention pattern: ${pattern}`);
+        return true;
+      }
+      return false;
+    });
+  });
+}
+
 // Check if bot is mentioned
 function isBotMentioned(mentions, botIds) {
   if (!mentions || !Array.isArray(mentions) || mentions.length === 0) {
@@ -304,23 +336,28 @@ export default async function groqHandler(m, sock, config) {
     // Get bot IDs for mention detection
     const botIds = getBotIds(sock);
     
-    // Enhanced mention and reply detection
-    const isMentioned = isBotMentioned(m.mentions, botIds);
+    // Multiple mention detection methods
+    const isMentioned = isBotMentioned(m.mentions, botIds) || isTextMention(m.body, botIds);
     const isReply = isReplyToBot(m.quoted, botIds);
     const isAIMode = isAIModeActive(m.sender);
     
     let isCommand = false;
     let query = '';
 
-    // Debug logging
-    console.log(`🔍 Debug Info:
+    // Enhanced debug logging
+    console.log(`🔍 Enhanced Debug Info:
     - Bot IDs: ${JSON.stringify(botIds)}
-    - Mentions: ${JSON.stringify(m.mentions)}
-    - Is Mentioned: ${isMentioned}
+    - Raw Mentions Array: ${JSON.stringify(m.mentions)}
+    - Message Body: "${m.body}"
+    - Text Contains @19851909324808: ${m.body && m.body.includes('@19851909324808')}
+    - Is Mentioned (array): ${isBotMentioned(m.mentions, botIds)}
+    - Is Mentioned (text): ${isTextMention(m.body, botIds)}
+    - Final Is Mentioned: ${isMentioned}
     - Is Reply: ${isReply}
     - AI Mode: ${isAIMode}
     - Quoted: ${m.quoted ? 'Yes' : 'No'}
-    - From Group: ${m.from.endsWith('@g.us')}`);
+    - From Group: ${m.from.endsWith('@g.us')}
+    - Message Type: ${m.type || 'text'}`);
 
     // Check for AI commands
     if (m.body && m.body.startsWith(config.PREFIX)) {
@@ -402,15 +439,18 @@ export default async function groqHandler(m, sock, config) {
       if (!query) {
         query = m.body || '';
         
-        // Clean up the query by removing mentions
+        // Clean up the query by removing mentions (both from array and text)
         if (botIds.length > 0) {
-          // Remove all possible bot number mentions
-          query = query.replace(new RegExp(`@19851909324808`, 'g'), '').trim();
+          // Remove all possible bot number mentions from text
+          query = query.replace(new RegExp(`@19851909324808\\s*`, 'g'), '').trim();
           
           botIds.forEach(botId => {
             const botNumber = botId.split('@')[0];
-            query = query.replace(new RegExp(`@${botNumber}`, 'g'), '').trim();
+            query = query.replace(new RegExp(`@${botNumber}\\s*`, 'g'), '').trim();
           });
+          
+          // Also remove any @mention followed by space/newline
+          query = query.replace(/^@\w+\s*/, '').trim();
         }
       }
 
