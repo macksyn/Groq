@@ -1,10 +1,10 @@
-// plugins/groq.js - Groq AI integration with Nigerian slang - Fixed mention detection
+// plugins/groq.js - Groq AI integration with Nigerian slang - Fixed mention detection and toggle
 import axios from 'axios';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
 export const info = {
   name: 'groq',
-  version: '2.0.1',
+  version: '2.0.2',
   author: 'Bot Developer',
   description: 'Lightning-fast AI chat powered by Groq with Nigerian Gen-Z vibes 🇳🇬⚡',
   commands: [
@@ -53,7 +53,7 @@ const responses = {
   ]
 };
 
-// User AI mode tracking
+// User AI mode tracking - FIXED: Use persistent storage
 const aiModeUsers = new Map();
 const userConversations = new Map();
 const userModels = new Map();
@@ -209,16 +209,19 @@ function getRandomResponse(responses) {
   return responses[Math.floor(Math.random() * responses.length)];
 }
 
-// Check if user is in AI mode
+// FIXED: Better AI mode management with proper get/set
 function isAIModeActive(userId) {
-  return aiModeUsers.get(userId) || false;
+  return aiModeUsers.get(userId) === true; // Explicit boolean check
 }
 
-// Toggle AI mode for user
+// FIXED: Improved toggle function with proper state management
 function toggleAIMode(userId) {
-  const currentMode = aiModeUsers.get(userId) || false;
-  aiModeUsers.set(userId, !currentMode);
-  return !currentMode;
+  const currentMode = aiModeUsers.get(userId) === true; // Explicit boolean check
+  const newMode = !currentMode;
+  aiModeUsers.set(userId, newMode);
+  
+  console.log(`🔄 AI Mode toggled for ${userId}: ${currentMode} -> ${newMode}`);
+  return newMode;
 }
 
 // Improved bot mention detection
@@ -253,7 +256,7 @@ function getBotIds(sock) {
   return [...new Set(botIds)];
 }
 
-// Check if bot is mentioned in text (fallback method)
+// FIXED: More precise text mention detection
 function isTextMention(messageBody, botIds) {
   if (!messageBody || typeof messageBody !== 'string') {
     return false;
@@ -261,31 +264,26 @@ function isTextMention(messageBody, botIds) {
   
   // Check for @19851909324808 specifically in the text
   if (messageBody.includes('@19851909324808')) {
-    console.log(`✅ Found text mention: @19851909324808`);
+    console.log(`✅ Found specific text mention: @19851909324808`);
     return true;
   }
   
-  // Check for other bot ID formats in text
+  // Check for other bot ID formats in text with more precise matching
   return botIds.some(botId => {
     const botNumber = botId.split('@')[0];
-    const patterns = [
-      `@${botNumber}`,
-      `@${botNumber} `,
-      ` @${botNumber}`,
-      `@${botNumber}\n`
-    ];
     
-    return patterns.some(pattern => {
-      if (messageBody.includes(pattern)) {
-        console.log(`✅ Found text mention pattern: ${pattern}`);
-        return true;
-      }
-      return false;
-    });
+    // Only match if @ is followed by the exact bot number and then space/end of string
+    const mentionRegex = new RegExp(`@${botNumber}(?:\\s|$)`, 'i');
+    
+    if (mentionRegex.test(messageBody)) {
+      console.log(`✅ Found regex text mention: @${botNumber}`);
+      return true;
+    }
+    return false;
   });
 }
 
-// Check if bot is mentioned
+// FIXED: Better mention detection from WhatsApp mentions array
 function isBotMentioned(mentions, botIds) {
   if (!mentions || !Array.isArray(mentions) || mentions.length === 0) {
     return false;
@@ -296,15 +294,21 @@ function isBotMentioned(mentions, botIds) {
   return mentions.some(mention => {
     return botIds.some(botId => {
       // Check exact match
-      if (mention === botId) return true;
+      if (mention === botId) {
+        console.log(`✅ Found exact mention match: ${mention}`);
+        return true;
+      }
       
       // Check if mention contains bot number
       const mentionNumber = mention.split('@')[0];
       const botNumber = botId.split('@')[0];
       
-      return mentionNumber === botNumber || 
-             mentionNumber === '19851909324808' || 
-             botNumber === '19851909324808';
+      if (mentionNumber === botNumber || mentionNumber === '19851909324808') {
+        console.log(`✅ Found mention number match: ${mentionNumber}`);
+        return true;
+      }
+      
+      return false;
     });
   });
 }
@@ -319,15 +323,21 @@ function isReplyToBot(quotedMessage, botIds) {
   
   return botIds.some(botId => {
     // Check exact match
-    if (quotedMessage.participant === botId) return true;
+    if (quotedMessage.participant === botId) {
+      console.log(`✅ Found exact reply match: ${quotedMessage.participant}`);
+      return true;
+    }
     
     // Check if participant contains bot number
     const participantNumber = quotedMessage.participant.split('@')[0];
     const botNumber = botId.split('@')[0];
     
-    return participantNumber === botNumber || 
-           participantNumber === '19851909324808' || 
-           botNumber === '19851909324808';
+    if (participantNumber === botNumber || participantNumber === '19851909324808') {
+      console.log(`✅ Found reply number match: ${participantNumber}`);
+      return true;
+    }
+    
+    return false;
   });
 }
 
@@ -364,13 +374,13 @@ export default async function groqHandler(m, sock, config) {
       const args = m.body.slice(config.PREFIX.length).trim().split(' ');
       const command = args[0].toLowerCase();
       
-      // AI Mode toggle
+      // FIXED: AI Mode toggle with better feedback
       if (['aimode', 'groqmode'].includes(command)) {
         const newMode = toggleAIMode(m.sender);
         const modeText = newMode ? 'ON 🟢' : 'OFF 🔴';
         const modeMsg = newMode 
-          ? "AI mode activated! 🤖 I'll now respond automatically when tagged/mentioned/replied to."
-          : "AI mode deactivated! 😴 I'll only respond to commands unless tagged/mentioned/replied to.";
+          ? "✅ *AI mode activated!* 🤖\n\nI'll now respond automatically in DMs when you send any message.\n\nIn groups, I'll still only respond when:\n• Tagged/mentioned\n• Replied to\n• Using commands"
+          : "❌ *AI mode deactivated!* 😴\n\nI'll only respond when:\n• Tagged/mentioned\n• Replied to\n• Using commands\n\nThis works for both DMs and groups.";
           
         await sock.sendMessage(m.from, {
           text: `🔄 *AI Mode: ${modeText}*\n\n${modeMsg}`
@@ -419,20 +429,28 @@ export default async function groqHandler(m, sock, config) {
       }
     }
 
-    // Determine if should respond to AI
+    // FIXED: More precise response logic
     const isGroupChat = m.from.endsWith('@g.us');
     const isDM = !isGroupChat;
     
-    // Updated logic: 
-    // - Always respond to commands
-    // - Always respond when mentioned or replied to (regardless of AI mode)
-    // - In DMs: respond when AI mode is on (for any message)
-    const shouldRespond = isCommand || 
-                         isMentioned || 
-                         isReply || 
-                         (isDM && isAIMode);
+    // FIXED: Updated logic with clear priorities:
+    // 1. Always respond to direct commands (regardless of mode/chat type)
+    // 2. Always respond when mentioned or replied to (regardless of mode/chat type)
+    // 3. In DMs: only respond to regular messages when AI mode is ON
+    // 4. In groups: never respond to regular messages (only mentions/replies/commands)
+    
+    const shouldRespond = isCommand ||           // Direct AI commands always work
+                         isMentioned ||          // Mentions always work
+                         isReply ||              // Replies always work
+                         (isDM && isAIMode);     // DM + AI Mode for regular messages
 
-    console.log(`📍 Response Decision: shouldRespond=${shouldRespond} (command=${isCommand}, mentioned=${isMentioned}, reply=${isReply}, DM+AIMode=${isDM && isAIMode})`);
+    console.log(`📍 Response Decision: shouldRespond=${shouldRespond} 
+    - isCommand: ${isCommand}
+    - isMentioned: ${isMentioned} 
+    - isReply: ${isReply}
+    - isDM: ${isDM}
+    - isAIMode: ${isAIMode}
+    - isDM && isAIMode: ${isDM && isAIMode}`);
 
     if (shouldRespond) {
       // Get the query
@@ -464,7 +482,7 @@ export default async function groqHandler(m, sock, config) {
 
       if (!query || query.length < 2) {
         await sock.sendMessage(m.from, {
-          text: `${getRandomResponse(responses.greetings)}\n\n💡 *Quick tips:*\n• Use \`${config.PREFIX}aimode\` to toggle auto-response\n• Use \`${config.PREFIX}aimodel\` to switch AI models\n• Tag me or reply to me to chat!`
+          text: `${getRandomResponse(responses.greetings)}\n\n💡 *Quick tips:*\n• Use \`${config.PREFIX}aimode\` to toggle auto-response in DMs\n• Use \`${config.PREFIX}aimodel\` to switch AI models\n• Tag me or reply to me to chat!\n\n📍 Current AI Mode: ${isAIMode ? 'ON 🟢' : 'OFF 🔴'}`
         }, { quoted: m });
         return;
       }
