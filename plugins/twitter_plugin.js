@@ -337,8 +337,8 @@ function formatTweetMessage(tweet, username, userDisplayName, media = []) {
       content = content.substring(0, twitterSettings.maxMessageLength - 3) + '...';
     }
 
-    // Create tweet URL
-    const tweetUrl = `https://twitter.com/${username}/status/${tweet.id}`;
+    // Create tweet URL - using x.com now
+    const tweetUrl = `https://x.com/${username}/status/${tweet.id}`;
 
     // Format message using template
     let message = twitterSettings.messageTemplate
@@ -370,7 +370,7 @@ function formatTweetMessage(tweet, username, userDisplayName, media = []) {
     return message;
   } catch (error) {
     console.error('Error formatting tweet message:', error);
-    return `🐦 New tweet from @${username}\n\n${tweet.text}\n\nhttps://twitter.com/${username}/status/${tweet.id}`;
+    return `🐦 New tweet from @${username}\n\n${tweet.text}\n\nhttps://x.com/${username}/status/${tweet.id}`;
   }
 }
 
@@ -602,6 +602,229 @@ export default async function twitterHandler(m, sock, config) {
     };
     
     // Handle different commands
+    switch (command) {
+      case 'twitter':
+      case 'tw':
+      case 'x':
+        if (args.length === 1) {
+          await showTwitterMenu(reply, config.PREFIX);
+        } else {
+          await handleSubCommand(args[1], args.slice(2), { m, sock, config, senderId, from, reply });
+        }
+        break;
+        
+      case 'twitteradd':
+      case 'twadd':
+        await handleAddAccount({ m, sock, config, senderId, from, reply }, args.slice(1));
+        break;
+        
+      case 'twitterremove':
+      case 'twremove':
+        await handleRemoveAccount({ m, sock, config, senderId, from, reply }, args.slice(1));
+        break;
+        
+      case 'twitterlist':
+      case 'twlist':
+        await handleListAccounts({ m, sock, config, senderId, from, reply });
+        break;
+    }
+  } catch (error) {
+    console.error('❌ Twitter plugin error:', error);
+  }
+}
+
+// Handle subcommands for the main twitter command
+async function handleSubCommand(subCommand, args, context) {
+  switch (subCommand.toLowerCase()) {
+    case 'add':
+      await handleAddAccount(context, args);
+      break;
+    case 'remove':
+    case 'delete':
+      await handleRemoveAccount(context, args);
+      break;
+    case 'list':
+      await handleListAccounts(context);
+      break;
+    case 'settings':
+      await handleSettings(context, args);
+      break;
+    case 'status':
+      await handleStatus(context);
+      break;
+    case 'test':
+      await handleTest(context, args);
+      break;
+    case 'help':
+      await showTwitterMenu(context.reply, context.config.PREFIX);
+      break;
+    default:
+      await context.reply(`❓ Unknown Twitter command: *${subCommand}*\n\nUse *${context.config.PREFIX}twitter help* to see available commands.`);
+  }
+}
+
+// Show Twitter menu
+async function showTwitterMenu(reply, prefix) {
+  const menuText = `🐦 *TWITTER INTEGRATION* 🐦\n\n` +
+                  `📊 *User Commands:*\n` +
+                  `• *add @username* - Monitor Twitter account\n` +
+                  `• *remove @username* - Stop monitoring account\n` +
+                  `• *list* - View monitored accounts\n` +
+                  `• *status* - Check monitoring status\n\n` +
+                  `👑 *Admin Commands:*\n` +
+                  `• *settings* - View/modify settings\n` +
+                  `• *test @username* - Test account monitoring\n\n` +
+                  `🤖 *Auto-Monitoring:*\n` +
+                  `New tweets from monitored accounts will be automatically sent to this chat!\n\n` +
+                  `💡 *Usage:* ${prefix}twitter [command]`;
+  
+  await reply(menuText);
+}
+
+// Handle add account command
+async function handleAddAccount(context, args) {
+  const { reply, senderId, sock, from } = context;
+  
+  const isAuthorizedUser = await isAuthorized(sock, from, senderId);
+  if (!isAuthorizedUser) {
+    await reply('🚫 Only admins can add Twitter accounts to monitor.');
+    return;
+  }
+  
+  if (args.length === 0) {
+    await reply(`📝 *Add Twitter Account*\n\nUsage: ${context.config.PREFIX}twitter add @username\n\nExample: ${context.config.PREFIX}twitter add @elonmusk\n\n💡 The account will be monitored for new tweets in this chat.`);
+    return;
+  }
+  
+  const username = args[0].replace('@', '');
+  
+  try {
+    await reply(`⏳ Adding @${username} to monitoring list...`);
+    
+    const result = await addMonitoredAccount(username, [from], {
+      addedBy: senderId
+    });
+    
+    if (result.success) {
+      const account = result.data;
+      let successMessage = `✅ *Successfully added @${account.username}*\n\n`;
+      successMessage += `👤 Display Name: ${account.displayName}\n`;
+      successMessage += `✅ Verified: ${account.verified ? 'Yes' : 'No'}\n`;
+      successMessage += `📍 Target Chat: This chat\n`;
+      successMessage += `📊 Status: Active\n\n`;
+      successMessage += `🤖 *New tweets will be automatically sent here!*`;
+      
+      await reply(successMessage);
+    } else {
+      await reply(`❌ *Failed to add @${username}*\n\nError: ${result.error}\n\n💡 Make sure the username is correct and the account exists.`);
+    }
+  } catch (error) {
+    await reply(`❌ *Error adding Twitter account*\n\nPlease try again later.`);
+    console.error('Add account error:', error);
+  }
+}
+
+// Handle remove account command
+async function handleRemoveAccount(context, args) {
+  const { reply, senderId, sock, from } = context;
+  
+  const isAuthorizedUser = await isAuthorized(sock, from, senderId);
+  if (!isAuthorizedUser) {
+    await reply('🚫 Only admins can remove Twitter accounts from monitoring.');
+    return;
+  }
+  
+  if (args.length === 0) {
+    await reply(`📝 *Remove Twitter Account*\n\nUsage: ${context.config.PREFIX}twitter remove @username\n\nExample: ${context.config.PREFIX}twitter remove @elonmusk`);
+    return;
+  }
+  
+  const username = args[0].replace('@', '');
+  
+  try {
+    const success = await removeMonitoredAccount(username);
+    
+    if (success) {
+      await reply(`✅ *Successfully removed @${username}*\n\n🚫 This account is no longer being monitored.`);
+    } else {
+      await reply(`❌ *Account @${username} not found*\n\nUse *${context.config.PREFIX}twitter list* to see monitored accounts.`);
+    }
+  } catch (error) {
+    await reply(`❌ *Error removing Twitter account*\n\nPlease try again later.`);
+    console.error('Remove account error:', error);
+  }
+}
+
+// Handle list accounts command
+async function handleListAccounts(context) {
+  const { reply } = context;
+  
+  try {
+    const accounts = await getMonitoredAccounts();
+    
+    if (accounts.length === 0) {
+      await reply(`📋 *No Twitter Accounts Monitored*\n\nUse *${context.config.PREFIX}twitter add @username* to start monitoring accounts.`);
+      return;
+    }
+    
+    let listMessage = `📋 *MONITORED TWITTER ACCOUNTS* 📋\n\n`;
+    listMessage += `📊 Total accounts: ${accounts.length}\n\n`;
+    
+    accounts.forEach((account, index) => {
+      listMessage += `${index + 1}. @${account.username}\n`;
+      listMessage += `   👤 ${account.displayName}\n`;
+      listMessage += `   ✅ Verified: ${account.verified ? 'Yes' : 'No'}\n`;
+      listMessage += `   📊 Tweets sent: ${account.totalTweetsSent || 0}\n`;
+      listMessage += `   ⏰ Last checked: ${moment(account.lastChecked).tz('Africa/Lagos').format('DD/MM/YYYY HH:mm')}\n`;
+      listMessage += `   📍 Chats: ${account.targetChats.length}\n\n`;
+    });
+    
+    listMessage += `💡 *Use ${context.config.PREFIX}twitter remove @username to stop monitoring*`;
+    
+    await reply(listMessage);
+  } catch (error) {
+    await reply(`❌ *Error loading monitored accounts*\n\nPlease try again later.`);
+    console.error('List accounts error:', error);
+  }
+}
+
+// Handle settings command
+async function handleSettings(context, args) {
+  const { reply, senderId, sock, from } = context;
+  
+  const isAuthorizedUser = await isAuthorized(sock, from, senderId);
+  if (!isAuthorizedUser) {
+    await reply('🚫 Only admins can modify Twitter settings.');
+    return;
+  }
+  
+  try {
+    if (args.length === 0) {
+      let settingsMessage = `⚙️ *TWITTER SETTINGS* ⚙️\n\n`;
+      settingsMessage += `⏰ Check Interval: ${twitterSettings.checkInterval / 1000}s\n`;
+      settingsMessage += `📊 Max Tweets/Check: ${twitterSettings.maxTweetsPerCheck}\n`;
+      settingsMessage += `💬 Include Replies: ${twitterSettings.includeReplies ? 'Yes ✅' : 'No ❌'}\n`;
+      settingsMessage += `🔄 Include Retweets: ${twitterSettings.includeRetweets ? 'Yes ✅' : 'No ❌'}\n`;
+      settingsMessage += `📸 Enable Images: ${twitterSettings.enableImages ? 'Yes ✅' : 'No ❌'}\n`;
+      settingsMessage += `🎥 Enable Videos: ${twitterSettings.enableVideos ? 'Yes ✅' : 'No ❌'}\n`;
+      settingsMessage += `📏 Max Message Length: ${twitterSettings.maxMessageLength}\n`;
+      settingsMessage += `👑 Admin Only: ${twitterSettings.adminOnly ? 'Yes ✅' : 'No ❌'}\n\n`;
+      settingsMessage += `*📋 Setting Commands:*\n`;
+      settingsMessage += `• \`${context.config.PREFIX}twitter settings interval 300\`\n`;
+      settingsMessage += `• \`${context.config.PREFIX}twitter settings replies on/off\`\n`;
+      settingsMessage += `• \`${context.config.PREFIX}twitter settings retweets on/off\`\n`;
+      settingsMessage += `• \`${context.config.PREFIX}twitter settings adminonly on/off\`\n`;
+      settingsMessage += `• \`${context.config.PREFIX}twitter settings maxlength 1000\``;
+      
+      await reply(settingsMessage);
+      return;
+    }
+    
+    const setting = args[0].toLowerCase();
+    const value = args[1];
+    
+    let responseText = "";
+    
     switch (setting) {
       case 'interval':
         if (!value || isNaN(value)) {
@@ -838,227 +1061,4 @@ export {
   checkForNewTweets,
   startMonitoring,
   stopMonitoring
-};command) {
-      case 'twitter':
-      case 'tw':
-      case 'x':
-        if (args.length === 1) {
-          await showTwitterMenu(reply, config.PREFIX);
-        } else {
-          await handleSubCommand(args[1], args.slice(2), { m, sock, config, senderId, from, reply });
-        }
-        break;
-        
-      case 'twitteradd':
-      case 'twadd':
-        await handleAddAccount({ m, sock, config, senderId, from, reply }, args.slice(1));
-        break;
-        
-      case 'twitterremove':
-      case 'twremove':
-        await handleRemoveAccount({ m, sock, config, senderId, from, reply }, args.slice(1));
-        break;
-        
-      case 'twitterlist':
-      case 'twlist':
-        await handleListAccounts({ m, sock, config, senderId, from, reply });
-        break;
-    }
-  } catch (error) {
-    console.error('❌ Twitter plugin error:', error);
-  }
-}
-
-// Handle subcommands for the main twitter command
-async function handleSubCommand(subCommand, args, context) {
-  switch (subCommand.toLowerCase()) {
-    case 'add':
-      await handleAddAccount(context, args);
-      break;
-    case 'remove':
-    case 'delete':
-      await handleRemoveAccount(context, args);
-      break;
-    case 'list':
-      await handleListAccounts(context);
-      break;
-    case 'settings':
-      await handleSettings(context, args);
-      break;
-    case 'status':
-      await handleStatus(context);
-      break;
-    case 'test':
-      await handleTest(context, args);
-      break;
-    case 'help':
-      await showTwitterMenu(context.reply, context.config.PREFIX);
-      break;
-    default:
-      await context.reply(`❓ Unknown Twitter command: *${subCommand}*\n\nUse *${context.config.PREFIX}twitter help* to see available commands.`);
-  }
-}
-
-// Show Twitter menu
-async function showTwitterMenu(reply, prefix) {
-  const menuText = `🐦 *TWITTER INTEGRATION* 🐦\n\n` +
-                  `📊 *User Commands:*\n` +
-                  `• *add @username* - Monitor Twitter account\n` +
-                  `• *remove @username* - Stop monitoring account\n` +
-                  `• *list* - View monitored accounts\n` +
-                  `• *status* - Check monitoring status\n\n` +
-                  `👑 *Admin Commands:*\n` +
-                  `• *settings* - View/modify settings\n` +
-                  `• *test @username* - Test account monitoring\n\n` +
-                  `🤖 *Auto-Monitoring:*\n` +
-                  `New tweets from monitored accounts will be automatically sent to this chat!\n\n` +
-                  `💡 *Usage:* ${prefix}twitter [command]`;
-  
-  await reply(menuText);
-}
-
-// Handle add account command
-async function handleAddAccount(context, args) {
-  const { reply, senderId, sock, from } = context;
-  
-  const isAuthorizedUser = await isAuthorized(sock, from, senderId);
-  if (!isAuthorizedUser) {
-    await reply('🚫 Only admins can add Twitter accounts to monitor.');
-    return;
-  }
-  
-  if (args.length === 0) {
-    await reply(`📝 *Add Twitter Account*\n\nUsage: ${context.config.PREFIX}twitter add @username\n\nExample: ${context.config.PREFIX}twitter add @elonmusk\n\n💡 The account will be monitored for new tweets in this chat.`);
-    return;
-  }
-  
-  const username = args[0].replace('@', '');
-  
-  try {
-    await reply(`⏳ Adding @${username} to monitoring list...`);
-    
-    const result = await addMonitoredAccount(username, [from], {
-      addedBy: senderId
-    });
-    
-    if (result.success) {
-      const account = result.data;
-      let successMessage = `✅ *Successfully added @${account.username}*\n\n`;
-      successMessage += `👤 Display Name: ${account.displayName}\n`;
-      successMessage += `✅ Verified: ${account.verified ? 'Yes' : 'No'}\n`;
-      successMessage += `📍 Target Chat: This chat\n`;
-      successMessage += `📊 Status: Active\n\n`;
-      successMessage += `🤖 *New tweets will be automatically sent here!*`;
-      
-      await reply(successMessage);
-    } else {
-      await reply(`❌ *Failed to add @${username}*\n\nError: ${result.error}\n\n💡 Make sure the username is correct and the account exists.`);
-    }
-  } catch (error) {
-    await reply(`❌ *Error adding Twitter account*\n\nPlease try again later.`);
-    console.error('Add account error:', error);
-  }
-}
-
-// Handle remove account command
-async function handleRemoveAccount(context, args) {
-  const { reply, senderId, sock, from } = context;
-  
-  const isAuthorizedUser = await isAuthorized(sock, from, senderId);
-  if (!isAuthorizedUser) {
-    await reply('🚫 Only admins can remove Twitter accounts from monitoring.');
-    return;
-  }
-  
-  if (args.length === 0) {
-    await reply(`📝 *Remove Twitter Account*\n\nUsage: ${context.config.PREFIX}twitter remove @username\n\nExample: ${context.config.PREFIX}twitter remove @elonmusk`);
-    return;
-  }
-  
-  const username = args[0].replace('@', '');
-  
-  try {
-    const success = await removeMonitoredAccount(username);
-    
-    if (success) {
-      await reply(`✅ *Successfully removed @${username}*\n\n🚫 This account is no longer being monitored.`);
-    } else {
-      await reply(`❌ *Account @${username} not found*\n\nUse *${context.config.PREFIX}twitter list* to see monitored accounts.`);
-    }
-  } catch (error) {
-    await reply(`❌ *Error removing Twitter account*\n\nPlease try again later.`);
-    console.error('Remove account error:', error);
-  }
-}
-
-// Handle list accounts command
-async function handleListAccounts(context) {
-  const { reply } = context;
-  
-  try {
-    const accounts = await getMonitoredAccounts();
-    
-    if (accounts.length === 0) {
-      await reply(`📋 *No Twitter Accounts Monitored*\n\nUse *${context.config.PREFIX}twitter add @username* to start monitoring accounts.`);
-      return;
-    }
-    
-    let listMessage = `📋 *MONITORED TWITTER ACCOUNTS* 📋\n\n`;
-    listMessage += `📊 Total accounts: ${accounts.length}\n\n`;
-    
-    accounts.forEach((account, index) => {
-      listMessage += `${index + 1}. @${account.username}\n`;
-      listMessage += `   👤 ${account.displayName}\n`;
-      listMessage += `   ✅ Verified: ${account.verified ? 'Yes' : 'No'}\n`;
-      listMessage += `   📊 Tweets sent: ${account.totalTweetsSent || 0}\n`;
-      listMessage += `   ⏰ Last checked: ${moment(account.lastChecked).tz('Africa/Lagos').format('DD/MM/YYYY HH:mm')}\n`;
-      listMessage += `   📍 Chats: ${account.targetChats.length}\n\n`;
-    });
-    
-    listMessage += `💡 *Use ${context.config.PREFIX}twitter remove @username to stop monitoring*`;
-    
-    await reply(listMessage);
-  } catch (error) {
-    await reply(`❌ *Error loading monitored accounts*\n\nPlease try again later.`);
-    console.error('List accounts error:', error);
-  }
-}
-
-// Handle settings command
-async function handleSettings(context, args) {
-  const { reply, senderId, sock, from } = context;
-  
-  const isAuthorizedUser = await isAuthorized(sock, from, senderId);
-  if (!isAuthorizedUser) {
-    await reply('🚫 Only admins can modify Twitter settings.');
-    return;
-  }
-  
-  try {
-    if (args.length === 0) {
-      let settingsMessage = `⚙️ *TWITTER SETTINGS* ⚙️\n\n`;
-      settingsMessage += `⏰ Check Interval: ${twitterSettings.checkInterval / 1000}s\n`;
-      settingsMessage += `📊 Max Tweets/Check: ${twitterSettings.maxTweetsPerCheck}\n`;
-      settingsMessage += `💬 Include Replies: ${twitterSettings.includeReplies ? 'Yes ✅' : 'No ❌'}\n`;
-      settingsMessage += `🔄 Include Retweets: ${twitterSettings.includeRetweets ? 'Yes ✅' : 'No ❌'}\n`;
-      settingsMessage += `📸 Enable Images: ${twitterSettings.enableImages ? 'Yes ✅' : 'No ❌'}\n`;
-      settingsMessage += `🎥 Enable Videos: ${twitterSettings.enableVideos ? 'Yes ✅' : 'No ❌'}\n`;
-      settingsMessage += `📏 Max Message Length: ${twitterSettings.maxMessageLength}\n`;
-      settingsMessage += `👑 Admin Only: ${twitterSettings.adminOnly ? 'Yes ✅' : 'No ❌'}\n\n`;
-      settingsMessage += `*📋 Setting Commands:*\n`;
-      settingsMessage += `• \`${context.config.PREFIX}twitter settings interval 300\`\n`;
-      settingsMessage += `• \`${context.config.PREFIX}twitter settings replies on/off\`\n`;
-      settingsMessage += `• \`${context.config.PREFIX}twitter settings retweets on/off\`\n`;
-      settingsMessage += `• \`${context.config.PREFIX}twitter settings adminonly on/off\`\n`;
-      settingsMessage += `• \`${context.config.PREFIX}twitter settings maxlength 1000\``;
-      
-      await reply(settingsMessage);
-      return;
-    }
-    
-    const setting = args[0].toLowerCase();
-    const value = args[1];
-    
-    let responseText = "";
-    
-    switch (
+};
