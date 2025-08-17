@@ -1,10 +1,10 @@
-// plugins/groq.js - Groq AI integration with Nigerian slang - Updated with latest models
+// plugins/groq.js - Groq AI integration with Nigerian slang - Fixed mention detection
 import axios from 'axios';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
 export const info = {
   name: 'groq',
-  version: '2.0.0',
+  version: '2.0.1',
   author: 'Bot Developer',
   description: 'Lightning-fast AI chat powered by Groq with Nigerian Gen-Z vibes 🇳🇬⚡',
   commands: [
@@ -120,22 +120,6 @@ class GroqAI {
     const model = userModels.get(userId) || this.defaultModel;
     const history = this.getConversationHistory(userId);
     
-    // Enhanced system prompt for better Nigerian context
-    const systemPrompt = `You are a highly intelligent AI assistant with authentic Nigerian Gen-Z personality. You speak with natural Nigerian urban slang mixed with proper English. You're witty, helpful, streetwise, and knowledgeable about both global topics and Nigerian culture.
-
-Key traits:
-- Use Nigerian expressions naturally (abeg, omo, sha, oh, nah, wetin, how far, etc.)
-- Reference Nigerian context when relevant (economy, culture, challenges, opportunities)
-- Be conversational and engaging, not formal or robotic
-- Give practical advice that works for Nigerian environment
-- Use appropriate emojis but don't overdo it
-- Keep responses WhatsApp-friendly (concise but informative)
-- Be encouraging and positive while being realistic
-- Show understanding of Nigerian youth struggles and aspirations
-- Reference local concepts when explaining global topics
-
-Speak like a smart Nigerian youth who's well-educated but still connected to the streets. Help with any topic but always maintain that authentic Naija vibe! You're knowledgeable about tech, business, relationships, education, and life in Nigeria.`;
-
     // Build messages array with enhanced context
     const messages = [
       {
@@ -237,39 +221,76 @@ function toggleAIMode(userId) {
   return !currentMode;
 }
 
-// Cache bot IDs to avoid repeated calculations
-let cachedBotIds = null;
-let lastBotUserId = null;
+// Improved bot mention detection
+function getBotIds(sock) {
+  const botUserId = sock.user?.id;
+  if (!botUserId) return [];
+  
+  // Extract bot number from various formats
+  let botNumber = botUserId;
+  if (botUserId.includes(':')) {
+    botNumber = botUserId.split(':')[0];
+  }
+  if (botUserId.includes('@')) {
+    botNumber = botUserId.split('@')[0];
+  }
+  
+  // Generate all possible bot ID formats
+  return [
+    `${botNumber}@s.whatsapp.net`,
+    `${botNumber}@c.us`,
+    botUserId,
+    botNumber
+  ];
+}
+
+// Check if bot is mentioned
+function isBotMentioned(mentions, botIds) {
+  if (!mentions || !Array.isArray(mentions) || mentions.length === 0) {
+    return false;
+  }
+  
+  return mentions.some(mention => {
+    return botIds.some(botId => {
+      return mention === botId || mention.includes(botId.split('@')[0]);
+    });
+  });
+}
+
+// Check if message is a reply to bot
+function isReplyToBot(quotedMessage, botIds) {
+  if (!quotedMessage || !quotedMessage.participant) {
+    return false;
+  }
+  
+  return botIds.some(botId => {
+    return quotedMessage.participant === botId || 
+           quotedMessage.participant.includes(botId.split('@')[0]);
+  });
+}
 
 export default async function groqHandler(m, sock, config) {
   try {
-    // Optimized bot ID detection with caching
-    const currentBotUserId = sock.user.id;
+    // Get bot IDs for mention detection
+    const botIds = getBotIds(sock);
     
-    // Only recalculate bot IDs if the user ID changed
-    if (!cachedBotIds || lastBotUserId !== currentBotUserId) {
-      const botNumber = currentBotUserId.split(':')[0];
-      const primaryBotId = botNumber + '@s.whatsapp.net';
-      const fullBotFormatted = currentBotUserId.includes('@') ? currentBotUserId : currentBotUserId + '@s.whatsapp.net';
-      
-      // Create optimized array of unique bot IDs
-      cachedBotIds = [...new Set([
-        primaryBotId,
-        fullBotFormatted,
-        botNumber + '@lid'
-      ])];
-      
-      lastBotUserId = currentBotUserId;
-      console.log(`🔄 Updated cached bot IDs: ${JSON.stringify(cachedBotIds)}`);
-    }
-    
-    // Fast mention/reply detection using cached IDs
-    const isMentioned = m.mentions && cachedBotIds.some(botId => m.mentions.includes(botId));
-    const isReply = m.quoted && cachedBotIds.includes(m.quoted.sender);
+    // Enhanced mention and reply detection
+    const isMentioned = isBotMentioned(m.mentions, botIds);
+    const isReply = isReplyToBot(m.quoted, botIds);
     const isAIMode = isAIModeActive(m.sender);
     
     let isCommand = false;
     let query = '';
+
+    // Debug logging
+    console.log(`🔍 Debug Info:
+    - Bot IDs: ${JSON.stringify(botIds)}
+    - Mentions: ${JSON.stringify(m.mentions)}
+    - Is Mentioned: ${isMentioned}
+    - Is Reply: ${isReply}
+    - AI Mode: ${isAIMode}
+    - Quoted: ${m.quoted ? 'Yes' : 'No'}
+    - From Group: ${m.from.endsWith('@g.us')}`);
 
     // Check for AI commands
     if (m.body && m.body.startsWith(config.PREFIX)) {
@@ -281,8 +302,8 @@ export default async function groqHandler(m, sock, config) {
         const newMode = toggleAIMode(m.sender);
         const modeText = newMode ? 'ON 🟢' : 'OFF 🔴';
         const modeMsg = newMode 
-          ? "AI mode activated! 🤖 I'll now respond automatically in DMs and when tagged in groups."
-          : "AI mode deactivated! 😴 I'll only respond when tagged/mentioned or with commands.";
+          ? "AI mode activated! 🤖 I'll now respond automatically when tagged/mentioned/replied to."
+          : "AI mode deactivated! 😴 I'll only respond to commands unless tagged/mentioned/replied to.";
           
         await sock.sendMessage(m.from, {
           text: `🔄 *AI Mode: ${modeText}*\n\n${modeMsg}`
@@ -335,19 +356,29 @@ export default async function groqHandler(m, sock, config) {
     const isGroupChat = m.from.endsWith('@g.us');
     const isDM = !isGroupChat;
     
-    // In groups: only respond when mentioned, replied to, or command
-    // In DMs: respond when AI mode is on or when using commands/mentions
+    // Updated logic: 
+    // - Always respond to commands
+    // - Always respond when mentioned or replied to (regardless of AI mode)
+    // - In DMs: respond when AI mode is on (for any message)
     const shouldRespond = isCommand || 
-                         (isGroupChat && (isMentioned || isReply)) || 
-                         (isDM && (isAIMode || isMentioned || isReply));
+                         isMentioned || 
+                         isReply || 
+                         (isDM && isAIMode);
+
+    console.log(`📍 Response Decision: shouldRespond=${shouldRespond} (command=${isCommand}, mentioned=${isMentioned}, reply=${isReply}, DM+AIMode=${isDM && isAIMode})`);
 
     if (shouldRespond) {
       // Get the query
       if (!query) {
         query = m.body || '';
         
-        // Remove bot mention from query if present
-        query = query.replace(`@${botNumber}`, '').replace(/@\d+/g, '').trim();
+        // Clean up the query by removing mentions
+        if (botIds.length > 0) {
+          botIds.forEach(botId => {
+            const botNumber = botId.split('@')[0];
+            query = query.replace(new RegExp(`@${botNumber}`, 'g'), '').trim();
+          });
+        }
       }
 
       // Remove command prefix if it exists
@@ -360,7 +391,7 @@ export default async function groqHandler(m, sock, config) {
 
       if (!query || query.length < 2) {
         await sock.sendMessage(m.from, {
-          text: `${getRandomResponse(responses.greetings)}\n\n💡 *Quick tips:*\n• Use \`${config.PREFIX}aimode\` to toggle auto-response\n• Use \`${config.PREFIX}aimodel\` to switch AI models`
+          text: `${getRandomResponse(responses.greetings)}\n\n💡 *Quick tips:*\n• Use \`${config.PREFIX}aimode\` to toggle auto-response\n• Use \`${config.PREFIX}aimodel\` to switch AI models\n• Tag me or reply to me to chat!`
         }, { quoted: m });
         return;
       }
@@ -381,22 +412,16 @@ export default async function groqHandler(m, sock, config) {
           finalResponse = finalResponse.substring(0, 2000) + '...\n\n_Response too long! Break your question into smaller parts._';
         }
 
-        // Get current model name for footer
-        const currentModelId = userModels.get(m.sender) || groqAI.defaultModel;
-        const modelName = Object.keys(GROQ_CONFIG.MODELS).find(
-          key => GROQ_CONFIG.MODELS[key] === currentModelId
-        ) || 'llama3.3';
-
         // Send AI response
         await sock.sendMessage(m.from, {
           text: finalResponse
         }, { quoted: m });
 
         // Reward user with money
-        await unifiedUserManager.addMoney(m.sender, 10, 'Groq AI Chat Bonus'); // Increased reward
+        await unifiedUserManager.addMoney(m.sender, 10, 'Groq AI Chat Bonus');
 
-        console.log(`🤖 Groq AI query from ${m.pushName || m.sender.split('@')[0]} using ${modelName}: ${query.substring(0, 50)}...`);
-        console.log(`📍 Response trigger - Mentioned: ${isMentioned}, Reply: ${isReply}, Command: ${isCommand}, AIMode: ${isAIMode}, IsGroup: ${isGroupChat}`);
+        const trigger = isCommand ? 'command' : isMentioned ? 'mention' : isReply ? 'reply' : 'aimode';
+        console.log(`🤖 Groq AI query from ${m.pushName || m.sender.split('@')[0]} via ${trigger}: ${query.substring(0, 50)}...`);
 
       } catch (error) {
         console.error('Groq AI Error:', error);
