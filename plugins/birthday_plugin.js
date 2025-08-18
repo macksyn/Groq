@@ -1279,7 +1279,6 @@ async function testCleanup(reply) {
 }
 
 // Add to your handleTest function
-case 'connection':
   await testConnection(reply, sock);
   break;
 
