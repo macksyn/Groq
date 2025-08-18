@@ -1,3 +1,7 @@
+// At the top of your birthday plugin, add:
+const isConnectionHealthy = global.isConnectionHealthy || (() => true);
+const safeSend = global.sendMessageSafely || ((sock, jid, msg) => sock.sendMessage(jid, msg));
+
 // plugins/birthday.js - Birthday plugin compatible with PluginManager
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
@@ -234,56 +238,100 @@ function getReminderMessage(birthdayPerson, daysUntil) {
 // Send birthday wishes
 async function sendBirthdayWishes(sock) {
   if (!birthdaySettings.enableAutoWishes) {
+    console.log('🎂 Auto wishes disabled, skipping...');
+    return;
+  }
+  
+  // Check connection first
+  if (!isConnectionHealthy(sock)) {
+    console.log('❌ Connection not healthy, skipping birthday wishes');
     return;
   }
   
   const todaysBirthdays = await getTodaysBirthdays();
-  
-  if (todaysBirthdays.length === 0) {
-    return;
-  }
+  if (todaysBirthdays.length === 0) return;
   
   console.log(`🎂 Found ${todaysBirthdays.length} birthday(s) today!`);
+  const today = moment.tz('Africa/Lagos').format('YYYY-MM-DD');
   
   for (const birthdayPerson of todaysBirthdays) {
-    const wishMessage = getBirthdayWishMessage(birthdayPerson);
-    
     try {
+      // Check if already wished today
+      const existingWish = await db.collection(COLLECTIONS.BIRTHDAY_WISHES)
+        .findOne({ userId: birthdayPerson.userId, date: today });
+      
+      if (existingWish) {
+        console.log(`⏭️ Already wished ${birthdayPerson.name} today`);
+        continue;
+      }
+      
+      // Double-check connection before each person
+      if (!isConnectionHealthy(sock)) {
+        console.log('❌ Connection lost during birthday processing');
+        break;
+      }
+      
+      const wishMessage = getBirthdayWishMessage(birthdayPerson);
+      let successfulSends = 0;
+    
       // Send private wish to the birthday person
       if (birthdaySettings.enablePrivateReminders) {
-        await sock.sendMessage(birthdayPerson.userId, {
-          text: `🎉 *HAPPY BIRTHDAY!* 🎉\n\nToday is your special day! 🎂\n\nWishing you all the happiness in the world! ✨🎈\n\nEnjoy your celebration! 🎊`
-        });
-        
-        console.log(`✅ Sent private birthday wish to ${birthdayPerson.name}`);
+        try {
+          const privateMsg = `🎉 *HAPPY BIRTHDAY ${birthdayPerson.name}!* 🎉\n\nToday is your special day! 🎂\n\nWishing you all the happiness in the world! ✨🎈`;
+          
+          await safeSend(sock, birthdayPerson.userId, { text: privateMsg });
+          successfulSends++;
+          console.log(`✅ Sent private wish to ${birthdayPerson.name}`);
+          
+          // Wait between messages
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          
+        } catch (error) {
+          console.error(`❌ Private wish failed for ${birthdayPerson.name}:`, error.message);
+        }
       }
       
       // Send to configured groups
       if (birthdaySettings.enableGroupReminders && birthdaySettings.reminderGroups.length > 0) {
         for (const groupId of birthdaySettings.reminderGroups) {
           try {
-            await sock.sendMessage(groupId, {
+            if (!isConnectionHealthy(sock)) break;
+            
+            await safeSend(sock, groupId, {
               text: wishMessage,
               mentions: [birthdayPerson.userId]
             });
             
-            console.log(`✅ Sent birthday wish to group ${groupId} for ${birthdayPerson.name}`);
+            successfulSends++;
+            console.log(`✅ Sent group wish to ${groupId.split('@')[0]} for ${birthdayPerson.name}`);
+            
+            // Longer wait between groups
+            await new Promise(resolve => setTimeout(resolve, 8000));
+            
           } catch (error) {
-            console.error(`Error sending birthday wish to group ${groupId}:`, error);
+            console.error(`❌ Group wish failed for ${groupId.split('@')[0]}:`, error.message);
           }
         }
       }
       
-      // Mark as wished for today (to avoid duplicate wishes)
-      const today = moment.tz('Africa/Lagos').format('YYYY-MM-DD');
-      await db.collection(COLLECTIONS.BIRTHDAY_WISHES).insertOne({
-        userId: birthdayPerson.userId,
-        date: today,
-        timestamp: new Date()
-      });
+      // Mark as sent if at least one succeeded (to avoid duplicate wishes)
+      if (successfulSends > 0) {
+        await db.collection(COLLECTIONS.BIRTHDAY_WISHES).insertOne({
+          userId: birthdayPerson.userId,
+          name: birthdayPerson.name,
+          date: today,
+          timestamp: new Date(),
+          successfulSends
+        });
+        
+        console.log(`✅ Birthday completed for ${birthdayPerson.name} (${successfulSends} sent)`);
+      }
+      
+      // Wait between different people
+      await new Promise(resolve => setTimeout(resolve, 10000));
       
     } catch (error) {
-      console.error(`Error sending birthday wish to ${birthdayPerson.name}:`, error);
+      console.error(`💥 Error processing ${birthdayPerson.name}:`, error.message);
     }
   }
 }
