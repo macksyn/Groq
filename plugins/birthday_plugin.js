@@ -1278,6 +1278,37 @@ async function testCleanup(reply) {
   }
 }
 
+// Add to your handleTest function
+case 'connection':
+  await testConnection(reply, sock);
+  break;
+
+async function testConnection(reply, sock) {
+  try {
+    const isHealthy = isConnectionHealthy(sock);
+    const userInfo = sock.user ? `${sock.user.name} (${sock.user.id})` : 'Not available';
+    const wsState = sock.ws ? sock.ws.readyState : 'N/A';
+    
+    const testMessage = `🔍 **CONNECTION TEST**\n\n` +
+                       `✅ **Healthy:** ${isHealthy ? 'YES' : 'NO'}\n` +
+                       `👤 **User:** ${userInfo}\n` +
+                       `🌐 **WebSocket:** ${wsState} (1=OPEN)\n` +
+                       `⏰ **Time:** ${new Date().toLocaleString()}\n\n` +
+                       `${isHealthy ? '🎉 Connection is ready!' : '⚠️ Connection issues detected!'}`;
+    
+    await reply(testMessage);
+    
+    if (isHealthy) {
+      // Test actual message sending
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      await reply('📤 Test message sent successfully!');
+    }
+    
+  } catch (error) {
+    await reply(`❌ Connection test failed: ${error.message}`);
+  }
+}
+
 // Handle groups command (admin only)
 async function handleGroups(context, args) {
   const { reply, senderId, m } = context;
