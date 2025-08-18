@@ -598,6 +598,36 @@ function getPluginStats() {
   }
 }
 
+// Add these functions before your main() function
+function isConnectionHealthy(socket) {
+  if (!socket) return false;
+  if (!socket.user?.id) return false;
+  if (socket.ws && socket.ws.readyState !== 1) return false;
+  return true;
+}
+
+async function sendMessageSafely(socket, jid, message, options = {}) {
+  const maxRetries = 3;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      if (!isConnectionHealthy(socket)) {
+        throw new Error('Connection not healthy');
+      }
+      if (attempt > 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+      }
+      return await socket.sendMessage(jid, message, options);
+    } catch (error) {
+      console.log(chalk.red(`❌ Send attempt ${attempt}/${maxRetries} failed: ${error.message}`));
+      if (attempt === maxRetries) throw error;
+    }
+  }
+}
+
+// Make it globally available
+global.sendMessageSafely = sendMessageSafely;
+global.isConnectionHealthy = isConnectionHealthy;
+
 // Main bot startup function - DON'T START IMMEDIATELY
 async function startBot() {
   if (isConnecting) {
