@@ -2791,7 +2791,7 @@ async function handleAdminSettings(context, args) {
         return;
       }
       
-      const sendType = args[4].toLowerCase();
+      const sendType = args[3].toLowerCase();
       let manualNews;
       
       if (sendType === 'crypto') {
