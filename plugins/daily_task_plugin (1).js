@@ -1469,7 +1469,7 @@ async function handleTestTask(context, args) {
 // =======================
 
 // Function to check and post daily tasks (to be called by scheduler)
-export async function checkAndPostDailyTask(sock) {
+async function checkAndPostDailyTask(sock) {
   try {
     if (!taskSettings.autoPostEnabled) {
       console.log('⏸️ Auto-posting is disabled');
@@ -1521,12 +1521,8 @@ async function setGroupJid(groupJid) {
   }
 }
 
-// =======================
-// 🎯 AUTO-INITIALIZATION
-// =======================
-
 // Initialize plugin when first loaded
-export async function initializePlugin() {
+async function initializePlugin() {
   try {
     await initDatabase();
     await loadSettings();
@@ -1536,18 +1532,10 @@ export async function initializePlugin() {
   }
 }
 
-// =======================
-// 📤 EXPORTS
-// =======================
-
 // Export functions for use by other plugins or scheduler
 export { 
   checkAndPostDailyTask,
   setGroupJid,
-  taskSettings,
-  addMoney,
-  getUserData,
-  updateUserData,
-  initUser
+  initializePlugin,
+  taskSettings
 };
-    
