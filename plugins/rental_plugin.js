@@ -5,7 +5,7 @@ import moment from 'moment-timezone';
 // Plugin information export
 export const info = {
   name: 'Rental Simulation',
-  version: '1.2.0',
+  version: '1.3.0',
   author: 'Bot Developer',
   description: 'Manages a rental simulation in WhatsApp groups with wallets, rent payments, and automatic evictions.',
   commands: [
@@ -173,7 +173,29 @@ async function checkRentals(sock) {
   }
 }
 
-// --- Monitoring, Authorization, and other utility functions remain the same ---
+// Helper function to get current billing period info
+function getCurrentBillingPeriod(settings) {
+  let dueDateForCurrentPeriod, periodStart, periodEnd;
+  
+  if (settings.paymentFrequency === 'monthly') {
+    dueDateForCurrentPeriod = moment().endOf('month');
+    periodStart = moment().startOf('month');
+    periodEnd = dueDateForCurrentPeriod;
+  } else { // 'weekly'
+    periodStart = moment().startOf('isoWeek');
+    periodEnd = moment().endOf('isoWeek');
+    dueDateForCurrentPeriod = moment().isoWeekday(settings.dueDay);
+  }
+  
+  return { dueDateForCurrentPeriod, periodStart, periodEnd };
+}
+
+// Check if user exists in database
+async function getTenant(tenantId, groupId) {
+  return await db.collection(COLLECTIONS.TENANTS).findOne({ tenantId, groupId });
+}
+
+// --- Monitoring, Authorization, and other utility functions ---
 
 let monitoringInterval = null;
 
@@ -203,6 +225,15 @@ async function isAuthorized(sock, from, sender) {
     console.error('Error checking group admin status:', error);
     return false;
   }
+}
+
+// Extract mentioned users from message
+function extractMentions(message) {
+  const mentions = [];
+  if (message.message?.extendedTextMessage?.contextInfo?.mentionedJid) {
+    mentions.push(...message.message.extendedTextMessage.contextInfo.mentionedJid);
+  }
+  return mentions;
 }
 
 // =======================
@@ -240,13 +271,16 @@ async function handleSubCommand(subCommand, args, context) {
     switch (subCommand) {
       case 'setup': await handleSetup(context); break;
       case 'settings': await handleSettings(context, args); break;
-      // Other admin commands can be added here if needed
+      case 'addtenant': await handleAddTenant(context, args); break;
+      case 'defaulters': await handleDefaulters(context); break;
+      case 'evict': await handleEvict(context, args); break;
       default: await context.reply(`Admin command *${subCommand}* not found.`);
     }
   } else {
     switch (subCommand) {
       case 'help': await showHelpMenu(context.reply, context.config.PREFIX); break;
-      // User commands like 'pay' and 'wallet' can be added here
+      case 'pay': await handlePay(context); break;
+      case 'wallet': await handleWallet(context, args); break;
       default: await context.reply(`❓ Unknown command. Use *${context.config.PREFIX}rent help* for options.`);
     }
   }
@@ -255,14 +289,16 @@ async function handleSubCommand(subCommand, args, context) {
 async function showHelpMenu(reply, prefix) {
   const menu = `🏘️ *RENTAL SIMULATION MENU* 🏘️\n\n` +
                `*👤 Tenant Commands:*\n` +
-               `• *${prefix}rent pay* - Pay your rent from your wallet.\n` +
-               `• *${prefix}rent wallet* - Check your wallet balance.\n\n` +
+               `• *${prefix}rent pay* - Pay your rent from your wallet\n` +
+               `• *${prefix}rent wallet* - Check your wallet balance\n\n` +
                `*👑 Admin Commands:*\n` +
-               `• *${prefix}rent setup* - Enroll all members as tenants.\n` +
-               `• *${prefix}rent addtenant @user* - Add a new user.\n` +
-               `• *${prefix}rent defaulters* - List tenants with overdue rent.\n` +
-               `• *${prefix}rent wallet add @user <amount>* - Add funds to a tenant's wallet.\n` +
-               `• *${prefix}rent settings* - View or change rental settings.`;
+               `• *${prefix}rent setup* - Enroll all members as tenants\n` +
+               `• *${prefix}rent addtenant @user* - Add a new user\n` +
+               `• *${prefix}rent defaulters* - List tenants with overdue rent\n` +
+               `• *${prefix}rent evict @user* - Manually evict a tenant\n` +
+               `• *${prefix}rent wallet add @user <amount>* - Add funds to tenant's wallet\n` +
+               `• *${prefix}rent wallet check @user* - Check user's wallet\n` +
+               `• *${prefix}rent settings* - View or change rental settings`;
   await reply(menu);
 }
 
@@ -313,7 +349,9 @@ async function handleSettings(context, args) {
                           `*To Change Settings:*\n` +
                           `\`${prefix}rent settings amount <number>\`\n` +
                           `\`${prefix}rent settings frequency monthly\`\n` +
-                          `\`${prefix}rent settings frequency weekly <day>\`\n(e.g., \`${prefix}rent settings frequency weekly friday\`)`;
+                          `\`${prefix}rent settings frequency weekly <day>\`\n` +
+                          `\`${prefix}rent settings grace <days>\`\n` +
+                          `\`${prefix}rent settings autoevict on/off\``;
         return reply(settingsMsg);
     }
     
@@ -344,13 +382,259 @@ async function handleSettings(context, args) {
                 response = `❌ Invalid usage. Use:\n\`${prefix}rent settings frequency monthly\`\nOR\n\`${prefix}rent settings frequency weekly <day_name>\``;
             }
             break;
-        // Add more cases for 'grace', 'autoevict' if needed
+        case 'grace':
+            const graceDays = parseInt(value1);
+            if (!isNaN(graceDays) && graceDays >= 0) {
+                settings.gracePeriodDays = graceDays;
+                response = `✅ Grace period updated to *${graceDays} days*`;
+            } else { response = `❌ Invalid grace period.`; }
+            break;
+        case 'autoevict':
+            if (value1 === 'on' || value1 === 'off') {
+                settings.autoEvict = value1 === 'on';
+                response = `✅ Auto-eviction turned *${value1}*`;
+            } else { response = `❌ Use 'on' or 'off'`; }
+            break;
         default:
-            response = `❓ Unknown setting. Available keys: *amount*, *frequency*.`;
+            response = `❓ Unknown setting. Available keys: *amount*, *frequency*, *grace*, *autoevict*.`;
     }
 
     await saveSettings(from);
     await reply(response);
+}
+
+async function handleAddTenant(context, args) {
+    const { from, reply, m } = context;
+    const mentions = extractMentions(m);
+    
+    if (mentions.length === 0) {
+        return reply('❌ Please mention a user to add as tenant.\nUsage: `rent addtenant @user`');
+    }
+    
+    const userId = mentions[0];
+    const existingTenant = await getTenant(userId, from);
+    
+    if (existingTenant) {
+        return reply(`❌ @${userId.split('@')[0]} is already a tenant.`, [userId]);
+    }
+    
+    await db.collection(COLLECTIONS.TENANTS).insertOne({
+        tenantId: userId,
+        groupId: from,
+        wallet: 0,
+        joinDate: new Date(),
+        lastPaidDate: null
+    });
+    
+    await reply(`✅ Successfully added @${userId.split('@')[0]} as a tenant.`, [userId]);
+}
+
+async function handleDefaulters(context) {
+    const { from, reply } = context;
+    const settings = rentalSettings[from];
+    const { dueDateForCurrentPeriod, periodStart, periodEnd } = getCurrentBillingPeriod(settings);
+    const today = moment();
+    
+    const tenants = await db.collection(COLLECTIONS.TENANTS).find({ groupId: from }).toArray();
+    const defaulters = [];
+    
+    for (const tenant of tenants) {
+        const hasPaidForCurrentPeriod = tenant.lastPaidDate && 
+            moment(tenant.lastPaidDate).isBetween(periodStart, periodEnd, null, '[]');
+        
+        if (!hasPaidForCurrentPeriod && today.isAfter(dueDateForCurrentPeriod, 'day')) {
+            const daysOverdue = today.diff(dueDateForCurrentPeriod, 'days');
+            const gracePeriodEnd = moment(dueDateForCurrentPeriod).add(settings.gracePeriodDays, 'days');
+            const willBeEvicted = settings.autoEvict && today.isAfter(gracePeriodEnd);
+            
+            defaulters.push({
+                id: tenant.tenantId,
+                wallet: tenant.wallet,
+                daysOverdue,
+                willBeEvicted
+            });
+        }
+    }
+    
+    if (defaulters.length === 0) {
+        return reply('✅ No defaulters found! All tenants are up to date with their rent.');
+    }
+    
+    let defaultersMsg = `🚨 *RENT DEFAULTERS* 🚨\n\n`;
+    defaultersMsg += `*Due Date:* ${dueDateForCurrentPeriod.format('MMM Do, YYYY')}\n`;
+    defaultersMsg += `*Rent Amount:* ${settings.currencySymbol}${settings.rentAmount}\n\n`;
+    
+    const mentions = [];
+    defaulters.forEach((defaulter, index) => {
+        const username = defaulter.id.split('@')[0];
+        mentions.push(defaulter.id);
+        defaultersMsg += `${index + 1}. @${username}\n`;
+        defaultersMsg += `   • Wallet: ${settings.currencySymbol}${defaulter.wallet}\n`;
+        defaultersMsg += `   • Overdue: ${defaulter.daysOverdue} days\n`;
+        if (defaulter.willBeEvicted) {
+            defaultersMsg += `   • ⚠️ Will be evicted soon\n`;
+        }
+        defaultersMsg += `\n`;
+    });
+    
+    defaultersMsg += `*Grace Period:* ${settings.gracePeriodDays} days\n`;
+    defaultersMsg += `*Auto-Eviction:* ${settings.autoEvict ? 'Enabled' : 'Disabled'}`;
+    
+    await reply(defaultersMsg, mentions);
+}
+
+async function handleEvict(context, args) {
+    const { from, reply, m, sock } = context;
+    const mentions = extractMentions(m);
+    
+    if (mentions.length === 0) {
+        return reply('❌ Please mention a user to evict.\nUsage: `rent evict @user`');
+    }
+    
+    const userId = mentions[0];
+    const tenant = await getTenant(userId, from);
+    
+    if (!tenant) {
+        return reply(`❌ @${userId.split('@')[0]} is not a tenant in this group.`, [userId]);
+    }
+    
+    // Remove from group
+    try {
+        await sock.groupParticipantsUpdate(from, [userId], "remove");
+        await db.collection(COLLECTIONS.TENANTS).deleteOne({ tenantId: userId, groupId: from });
+        
+        const evictionMsg = `🚨 *MANUAL EVICTION* 🚨\n\nTenant @${userId.split('@')[0]} has been evicted by admin.`;
+        await reply(evictionMsg, [userId]);
+    } catch (error) {
+        console.error('Error evicting tenant:', error);
+        await reply('❌ Failed to evict tenant. Please try again or remove manually.');
+    }
+}
+
+async function handlePay(context) {
+    const { from, reply, senderId } = context;
+    const settings = rentalSettings[from];
+    const tenant = await getTenant(senderId, from);
+    
+    if (!tenant) {
+        return reply('❌ You are not registered as a tenant in this group.');
+    }
+    
+    if (tenant.wallet < settings.rentAmount) {
+        return reply(`❌ Insufficient funds!\n\nRequired: ${settings.currencySymbol}${settings.rentAmount}\nYour balance: ${settings.currencySymbol}${tenant.wallet}\nShortfall: ${settings.currencySymbol}${settings.rentAmount - tenant.wallet}`);
+    }
+    
+    // Check if already paid for current period
+    const { periodStart, periodEnd, dueDateForCurrentPeriod } = getCurrentBillingPeriod(settings);
+    const hasPaidForCurrentPeriod = tenant.lastPaidDate && 
+        moment(tenant.lastPaidDate).isBetween(periodStart, periodEnd, null, '[]');
+    
+    if (hasPaidForCurrentPeriod) {
+        return reply('✅ You have already paid rent for this period.');
+    }
+    
+    // Process payment
+    const newBalance = tenant.wallet - settings.rentAmount;
+    await db.collection(COLLECTIONS.TENANTS).updateOne(
+        { tenantId: senderId, groupId: from },
+        { $set: { wallet: newBalance, lastPaidDate: new Date() } }
+    );
+    
+    await db.collection(COLLECTIONS.PAYMENT_HISTORY).insertOne({
+        tenantId: senderId,
+        groupId: from,
+        amount: settings.rentAmount,
+        date: new Date(),
+        method: 'manual_payment'
+    });
+    
+    const paymentMsg = `✅ *RENT PAID SUCCESSFULLY!* ✅\n\n` +
+                      `Amount: ${settings.currencySymbol}${settings.rentAmount}\n` +
+                      `Period: ${periodStart.format('MMM Do')} - ${periodEnd.format('MMM Do, YYYY')}\n` +
+                      `New balance: ${settings.currencySymbol}${newBalance}`;
+    
+    await reply(paymentMsg);
+}
+
+async function handleWallet(context, args) {
+    const { from, reply, senderId, config, m } = context;
+    const settings = rentalSettings[from];
+    const isAdmin = await isAuthorized(context.sock, from, senderId);
+    
+    if (args.length === 0) {
+        // Check own wallet
+        const tenant = await getTenant(senderId, from);
+        if (!tenant) {
+            return reply('❌ You are not registered as a tenant in this group.');
+        }
+        
+        const walletMsg = `💰 *YOUR WALLET* 💰\n\n` +
+                         `Balance: ${settings.currencySymbol}${tenant.wallet}\n` +
+                         `Rent Amount: ${settings.currencySymbol}${settings.rentAmount}\n` +
+                         `Status: ${tenant.wallet >= settings.rentAmount ? '✅ Sufficient' : '❌ Insufficient'}`;
+        
+        return reply(walletMsg);
+    }
+    
+    // Admin commands
+    if (!isAdmin) {
+        return reply('🚫 Only admins can manage other users\' wallets.');
+    }
+    
+    const action = args[0]?.toLowerCase();
+    
+    if (action === 'add') {
+        const mentions = extractMentions(m);
+        const amount = parseInt(args[args.length - 1]); // Last argument should be amount
+        
+        if (mentions.length === 0) {
+            return reply('❌ Please mention a user.\nUsage: `rent wallet add @user <amount>`');
+        }
+        
+        if (isNaN(amount) || amount <= 0) {
+            return reply('❌ Please provide a valid amount.');
+        }
+        
+        const userId = mentions[0];
+        const tenant = await getTenant(userId, from);
+        
+        if (!tenant) {
+            return reply(`❌ @${userId.split('@')[0]} is not a tenant.`, [userId]);
+        }
+        
+        const newBalance = tenant.wallet + amount;
+        await db.collection(COLLECTIONS.TENANTS).updateOne(
+            { tenantId: userId, groupId: from },
+            { $set: { wallet: newBalance } }
+        );
+        
+        await reply(`✅ Added ${settings.currencySymbol}${amount} to @${userId.split('@')[0]}'s wallet.\nNew balance: ${settings.currencySymbol}${newBalance}`, [userId]);
+        
+    } else if (action === 'check') {
+        const mentions = extractMentions(m);
+        
+        if (mentions.length === 0) {
+            return reply('❌ Please mention a user.\nUsage: `rent wallet check @user`');
+        }
+        
+        const userId = mentions[0];
+        const tenant = await getTenant(userId, from);
+        
+        if (!tenant) {
+            return reply(`❌ @${userId.split('@')[0]} is not a tenant.`, [userId]);
+        }
+        
+        const walletMsg = `💰 *WALLET INFO* 💰\n\n` +
+                         `User: @${userId.split('@')[0]}\n` +
+                         `Balance: ${settings.currencySymbol}${tenant.wallet}\n` +
+                         `Rent Amount: ${settings.currencySymbol}${settings.rentAmount}\n` +
+                         `Status: ${tenant.wallet >= settings.rentAmount ? '✅ Sufficient' : '❌ Insufficient'}`;
+        
+        await reply(walletMsg, [userId]);
+        
+    } else {
+        await reply(`❌ Unknown wallet action.\nAvailable: *add*, *check*\n\nUsage:\n• \`${config.PREFIX}rent wallet add @user <amount>\`\n• \`${config.PREFIX}rent wallet check @user\``);
+    }
 }
 
 // =======================
