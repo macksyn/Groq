@@ -1332,9 +1332,9 @@ async function handleShowCategories(context) {
   await reply(categoriesMessage);
 }
 
-// Handle completions view
+// Handle completions view - FIXED VERSION
 async function handleCompletionsView(context, args) {
-  const { reply } = context;
+  const { reply, sock, from } = context; // Added sock and from to context
   
   try {
     const date = args[0] || getCurrentDate();
@@ -1354,22 +1354,36 @@ async function handleCompletionsView(context, args) {
     if (task.completions.length === 0) {
       completionMessage += `❌ *No completions yet*\n`;
       completionMessage += `💪 Be the first to complete this task!`;
+      
+      // Send without mentions for no completions
+      await reply(completionMessage);
     } else {
       completionMessage += `✅ *Completed Members:*\n\n`;
       
+      // Create mentions array for completed users
+      const mentions = [];
+      
       task.completions.forEach((completion, index) => {
-        const userPhone = completion.userId.split('@')[0];
+        const userJid = completion.userId;
+        const userPhone = userJid.split('@')[0];
         const submittedTime = moment(completion.submittedAt).tz('Africa/Lagos').format('HH:mm');
         
-        completionMessage += `${index + 1}. +${userPhone}\n`;
-
+        mentions.push(userJid); // Add to mentions array
+        
+        // Use @userPhone format for proper mentioning
+        completionMessage += `${index + 1}. @${userPhone}\n`;
         completionMessage += `   ⏰ ${submittedTime} • 🔥 Streak: ${completion.streak} • 💰 ₦${completion.reward.toLocaleString()}\n\n`;
       });
       
       completionMessage += `🎉 *Great participation from the GIST HQ family!*`;
+      
+      // Send with mentions (like sendCompletionUpdate does)
+      await sock.sendMessage(from, {
+        text: completionMessage,
+        mentions: mentions
+      });
     }
     
-    await reply(completionMessage);
   } catch (error) {
     await reply('❌ *Error loading completions. Please try again.*');
     console.error('Completions view error:', error);
