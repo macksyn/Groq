@@ -823,8 +823,8 @@ async function handleSubCommand(subCommand, args, context) {
       await handleQuestionsManager(context, args);
       break;
     case 'completions':
-      await handleCompletionsView(context, args);
-      break;
+  await handleCompletionsView({ ...context, sock, from }, args);
+  break;
     case 'records':
       await handleTaskRecords(context, args);
       break;
