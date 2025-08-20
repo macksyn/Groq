@@ -1357,11 +1357,15 @@ async function handleCompletionsView(context, args) {
     } else {
       completionMessage += `✅ *Completed Members:*\n\n`;
       
-      task.completions.forEach((completion, index) => {
-        const userPhone = @${completion.userId.split('@')[0]};
-        const submittedTime = moment(completion.submittedAt).tz('Africa/Lagos').format('HH:mm');
+      const mentions = [];
+      
+      completions.forEach((completion, index) => {
+        const userJid = completion.userId;
+        const userPhone = userJid.split('@')[0];
+        mentions.push(userJid);
         
-        completionMessage += `${index + 1}. +${userPhone}\n`;
+        updateMessage += `${index + 1}. @${userPhone}`;
+
         completionMessage += `   ⏰ ${submittedTime} • 🔥 Streak: ${completion.streak} • 💰 ₦${completion.reward.toLocaleString()}\n\n`;
       });
       
