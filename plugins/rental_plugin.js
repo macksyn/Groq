@@ -215,7 +215,11 @@ async function transferToRentWallet(userId, amount, reason = 'Transfer to rent w
     }
     
     // Deduct from economy wallet
-    await unifiedUserManager.deductMoney(userId, amount, reason);
+    const deductSuccess = await unifiedUserManager.removeMoney(userId, amount, reason);
+
+if (!deductSuccess) {
+  return { success: false, error: 'deduct_failed', economyBalance: economyData.balance };
+}
     
     // Add to rental wallet
     await db.collection(COLLECTIONS.TENANTS).updateOne(
