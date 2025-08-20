@@ -405,7 +405,10 @@ async function handleSetup(context) {
         console.log(`✅ Setup complete - ${totalTenants} tenants registered for group ${from}`);
         
     } catch (error) {
-        console.error('❌
+        console.error('❌ Setup error:', error);
+        await reply('❌ Error during setup. Please try again.');
+    }
+}
 
 async function handleSettings(context, args) {
     const { from, reply, config } = context;
