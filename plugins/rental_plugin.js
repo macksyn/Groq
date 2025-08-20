@@ -1,6 +1,7 @@
 // plugins/rental_plugin.js
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
+import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
 // Plugin information export
 export const info = {
@@ -173,7 +174,61 @@ async function checkRentals(sock) {
   }
 }
 
-// Helper function to get current billing period info
+// Get user data from unified manager (integrates with economy plugin)
+async function getUserEconomyData(userId) {
+  try {
+    return await unifiedUserManager.getUserData(userId);
+  } catch (error) {
+    console.error('Error getting user economy data:', error);
+    return { balance: 0 };
+  }
+}
+
+// Update user data via unified manager
+async function updateUserEconomyData(userId, data) {
+  try {
+    return await unifiedUserManager.updateUserData(userId, data);
+  } catch (error) {
+    console.error('Error updating user economy data:', error);
+    throw error;
+  }
+}
+
+// Initialize user via unified manager
+async function initEconomyUser(userId) {
+  try {
+    return await unifiedUserManager.initUser(userId);
+  } catch (error) {
+    console.error('Error initializing economy user:', error);
+    throw error;
+  }
+}
+
+// Transfer money from economy wallet to rental wallet
+async function transferToRentWallet(userId, amount, reason = 'Transfer to rent wallet') {
+  try {
+    // Get user's economy data
+    const economyData = await getUserEconomyData(userId);
+    
+    if (economyData.balance < amount) {
+      return { success: false, error: 'insufficient_funds', economyBalance: economyData.balance };
+    }
+    
+    // Deduct from economy wallet
+    await unifiedUserManager.deductMoney(userId, amount, reason);
+    
+    // Add to rental wallet
+    await db.collection(COLLECTIONS.TENANTS).updateOne(
+      { tenantId: userId },
+      { $inc: { wallet: amount } }
+    );
+    
+    return { success: true, newEconomyBalance: economyData.balance - amount };
+  } catch (error) {
+    console.error('Error transferring to rent wallet:', error);
+    return { success: false, error: 'transfer_failed' };
+  }
+}
 function getCurrentBillingPeriod(settings) {
   let dueDateForCurrentPeriod, periodStart, periodEnd;
   
@@ -308,29 +363,49 @@ async function handleSetup(context) {
     if (existingGroup) return reply('✅ This group is already set up for rental simulation.');
 
     await reply('⏳ Setting up rental system and enrolling all group members...');
-    const groupMetadata = await sock.groupMetadata(from);
-    const participants = groupMetadata.participants.map(p => p.id);
     
-    const tenantOps = participants.map(id => ({
-        updateOne: {
-            filter: { tenantId: id, groupId: from },
-            update: { $setOnInsert: { tenantId: id, groupId: from, wallet: 0, joinDate: new Date(), lastPaidDate: null } },
-            upsert: true
+    try {
+        const groupMetadata = await sock.groupMetadata(from);
+        const participants = groupMetadata.participants.map(p => p.id);
+        
+        console.log(`📋 Found ${participants.length} participants to enroll`);
+        console.log(`👥 Participants:`, participants);
+        
+        const tenantOps = participants.map(id => ({
+            updateOne: {
+                filter: { tenantId: id, groupId: from },
+                update: { $setOnInsert: { tenantId: id, groupId: from, wallet: 0, joinDate: new Date(), lastPaidDate: null } },
+                upsert: true
+            }
+        }));
+
+        let enrolledCount = 0;
+        let existingCount = 0;
+        
+        if (tenantOps.length > 0) {
+            const result = await db.collection(COLLECTIONS.TENANTS).bulkWrite(tenantOps);
+            enrolledCount = result.upsertedCount;
+            existingCount = result.matchedCount;
         }
-    }));
 
-    let enrolledCount = 0;
-    if (tenantOps.length > 0) {
-        const result = await db.collection(COLLECTIONS.TENANTS).bulkWrite(tenantOps);
-        enrolledCount = result.upsertedCount;
-    }
-
-    await db.collection(COLLECTIONS.RENTAL_GROUPS).insertOne({ groupId: from, active: true, createdAt: new Date() });
-    await loadSettings(from);
-    await saveSettings(from);
-    
-    await reply(`✅ *Rental Simulation Activated!*\n\nSuccessfully enrolled *${enrolledCount} members* as tenants.\nThe default due date is the end of each month.`);
-}
+        await db.collection(COLLECTIONS.RENTAL_GROUPS).insertOne({ groupId: from, active: true, createdAt: new Date() });
+        await loadSettings(from);
+        await saveSettings(from);
+        
+        // Verify setup by checking tenant count
+        const totalTenants = await db.collection(COLLECTIONS.TENANTS).countDocuments({ groupId: from });
+        
+        await reply(`✅ *Rental Simulation Activated!*\n\n` +
+                   `• Total members: *${participants.length}*\n` +
+                   `• New tenants enrolled: *${enrolledCount}*\n` +
+                   `• Existing tenants: *${existingCount}*\n` +
+                   `• Total tenants in database: *${totalTenants}*\n\n` +
+                   `The default due date is the end of each month.`);
+                   
+        console.log(`✅ Setup complete - ${totalTenants} tenants registered for group ${from}`);
+        
+    } catch (error) {
+        console.error('❌
 
 async function handleSettings(context, args) {
     const { from, reply, config } = context;
@@ -418,6 +493,8 @@ async function handleAddTenant(context, args) {
         return reply(`❌ @${userId.split('@')[0]} is already a tenant.`, [userId]);
     }
     
+    // Initialize both rental and economy data
+    await initEconomyUser(userId);
     await db.collection(COLLECTIONS.TENANTS).insertOne({
         tenantId: userId,
         groupId: from,
@@ -426,7 +503,7 @@ async function handleAddTenant(context, args) {
         lastPaidDate: null
     });
     
-    await reply(`✅ Successfully added @${userId.split('@')[0]} as a tenant.`, [userId]);
+    await reply(`✅ Successfully added @${userId.split('@')[0]} as a tenant.\n\n💡 They can now use \`rent wallet transfer <amount>\` to move money from their economy wallet to rent wallet.`, [userId]);
 }
 
 async function handleDefaulters(context) {
@@ -562,26 +639,72 @@ async function handleWallet(context, args) {
     const isAdmin = await isAuthorized(context.sock, from, senderId);
     
     if (args.length === 0) {
-        // Check own wallet
+        // Check own wallet - show both economy and rental wallets
         const tenant = await getTenant(senderId, from);
         if (!tenant) {
             return reply('❌ You are not registered as a tenant in this group.');
         }
         
-        const walletMsg = `💰 *YOUR WALLET* 💰\n\n` +
-                         `Balance: ${settings.currencySymbol}${tenant.wallet}\n` +
-                         `Rent Amount: ${settings.currencySymbol}${settings.rentAmount}\n` +
-                         `Status: ${tenant.wallet >= settings.rentAmount ? '✅ Sufficient' : '❌ Insufficient'}`;
+        // Get economy wallet balance
+        await initEconomyUser(senderId);
+        const economyData = await getUserEconomyData(senderId);
+        
+        const walletMsg = `💰 *YOUR WALLETS* 💰\n\n` +
+                         `🏦 *Economy Wallet:* ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
+                         `🏠 *Rent Wallet:* ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n\n` +
+                         `📋 *Rent Info:*\n` +
+                         `• Amount Due: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
+                         `• Status: ${tenant.wallet >= settings.rentAmount ? '✅ Sufficient' : '❌ Insufficient'}\n\n` +
+                         `💡 *Transfer money:* \`${config.PREFIX}rent wallet transfer <amount>\``;
         
         return reply(walletMsg);
     }
     
-    // Admin commands
-    if (!isAdmin) {
-        return reply('🚫 Only admins can manage other users\' wallets.');
+    const action = args[0]?.toLowerCase();
+    
+    if (action === 'transfer') {
+        // Transfer from economy wallet to rent wallet
+        const amount = parseInt(args[1]);
+        
+        if (isNaN(amount) || amount <= 0) {
+            return reply(`❌ Please provide a valid amount.\nUsage: \`${config.PREFIX}rent wallet transfer <amount>\`\n\nExample: \`${config.PREFIX}rent wallet transfer 50000\``);
+        }
+        
+        const tenant = await getTenant(senderId, from);
+        if (!tenant) {
+            return reply('❌ You are not registered as a tenant in this group.');
+        }
+        
+        await initEconomyUser(senderId);
+        const transferResult = await transferToRentWallet(senderId, amount);
+        
+        if (!transferResult.success) {
+            if (transferResult.error === 'insufficient_funds') {
+                return reply(`❌ Insufficient funds in your economy wallet!\n\n💰 Your economy balance: ${settings.currencySymbol}${transferResult.economyBalance?.toLocaleString() || 0}\n💸 Amount needed: ${settings.currencySymbol}${amount.toLocaleString()}\n📉 Shortfall: ${settings.currencySymbol}${(amount - (transferResult.economyBalance || 0)).toLocaleString()}\n\n💡 Earn more money through attendance or other activities!`);
+            } else {
+                return reply('❌ Transfer failed. Please try again.');
+            }
+        }
+        
+        // Get updated balances
+        const updatedTenant = await getTenant(senderId, from);
+        const updatedEconomyData = await getUserEconomyData(senderId);
+        
+        const transferMsg = `✅ *TRANSFER SUCCESSFUL!* ✅\n\n` +
+                           `💸 Transferred: ${settings.currencySymbol}${amount.toLocaleString()}\n\n` +
+                           `💰 *Updated Balances:*\n` +
+                           `🏦 Economy Wallet: ${settings.currencySymbol}${updatedEconomyData.balance?.toLocaleString() || 0}\n` +
+                           `🏠 Rent Wallet: ${settings.currencySymbol}${updatedTenant.wallet.toLocaleString()}\n\n` +
+                           `📋 Rent Status: ${updatedTenant.wallet >= settings.rentAmount ? '✅ Ready to pay rent!' : '❌ Still need more funds'}`;
+        
+        await reply(transferMsg);
+        return;
     }
     
-    const action = args[0]?.toLowerCase();
+    // Admin commands
+    if (!isAdmin) {
+        return reply('🚫 Only admins can use other wallet commands.');
+    }
     
     if (action === 'add') {
         const mentions = extractMentions(m);
@@ -608,7 +731,7 @@ async function handleWallet(context, args) {
             { $set: { wallet: newBalance } }
         );
         
-        await reply(`✅ Added ${settings.currencySymbol}${amount} to @${userId.split('@')[0]}'s wallet.\nNew balance: ${settings.currencySymbol}${newBalance}`, [userId]);
+        await reply(`✅ Added ${settings.currencySymbol}${amount.toLocaleString()} to @${userId.split('@')[0]}'s rent wallet.\nNew balance: ${settings.currencySymbol}${newBalance.toLocaleString()}`, [userId]);
         
     } else if (action === 'check') {
         const mentions = extractMentions(m);
@@ -624,16 +747,22 @@ async function handleWallet(context, args) {
             return reply(`❌ @${userId.split('@')[0]} is not a tenant.`, [userId]);
         }
         
+        // Get their economy data too
+        await initEconomyUser(userId);
+        const economyData = await getUserEconomyData(userId);
+        
         const walletMsg = `💰 *WALLET INFO* 💰\n\n` +
-                         `User: @${userId.split('@')[0]}\n` +
-                         `Balance: ${settings.currencySymbol}${tenant.wallet}\n` +
-                         `Rent Amount: ${settings.currencySymbol}${settings.rentAmount}\n` +
-                         `Status: ${tenant.wallet >= settings.rentAmount ? '✅ Sufficient' : '❌ Insufficient'}`;
+                         `👤 User: @${userId.split('@')[0]}\n\n` +
+                         `🏦 *Economy Wallet:* ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
+                         `🏠 *Rent Wallet:* ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n\n` +
+                         `📋 *Rent Info:*\n` +
+                         `• Amount Due: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
+                         `• Status: ${tenant.wallet >= settings.rentAmount ? '✅ Sufficient' : '❌ Insufficient'}`;
         
         await reply(walletMsg, [userId]);
         
     } else {
-        await reply(`❌ Unknown wallet action.\nAvailable: *add*, *check*\n\nUsage:\n• \`${config.PREFIX}rent wallet add @user <amount>\`\n• \`${config.PREFIX}rent wallet check @user\``);
+        await reply(`❌ Unknown wallet action.\n\n*Available Commands:*\n• \`${config.PREFIX}rent wallet\` - Check your wallets\n• \`${config.PREFIX}rent wallet transfer <amount>\` - Transfer from economy to rent wallet\n\n*Admin Only:*\n• \`${config.PREFIX}rent wallet add @user <amount>\`\n• \`${config.PREFIX}rent wallet check @user\``);
     }
 }
 
