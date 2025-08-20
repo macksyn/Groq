@@ -1,4 +1,4 @@
-// plugins/rental_plugin.js
+// plugins/rental_plugin.js - FIXED VERSION
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
@@ -6,7 +6,7 @@ import { unifiedUserManager } from '../lib/pluginIntegration.js';
 // Plugin information export
 export const info = {
   name: 'Rental Simulation',
-  version: '1.3.0',
+  version: '1.3.1',
   author: 'Bot Developer',
   description: 'Manages a rental simulation in WhatsApp groups with wallets, rent payments, and automatic evictions.',
   commands: [
@@ -204,35 +204,75 @@ async function initEconomyUser(userId) {
   }
 }
 
-// Transfer money from economy wallet to rental wallet
-async function transferToRentWallet(userId, amount, reason = 'Transfer to rent wallet') {
+// FIXED: Transfer money from economy wallet to rental wallet
+async function transferToRentWallet(userId, amount, groupId, reason = 'Transfer to rent wallet') {
   try {
+    console.log(`💰 Starting transfer for ${userId} in group ${groupId}: ${amount}`);
+    
     // Get user's economy data
     const economyData = await getUserEconomyData(userId);
+    console.log(`👤 User economy balance: ${economyData.balance}`);
     
     if (economyData.balance < amount) {
+      console.log(`❌ Insufficient funds: ${economyData.balance} < ${amount}`);
       return { success: false, error: 'insufficient_funds', economyBalance: economyData.balance };
     }
     
-    // Deduct from economy wallet
-    const deductSuccess = await unifiedUserManager.removeMoney(userId, amount, reason);
-
-if (!deductSuccess) {
-  return { success: false, error: 'deduct_failed', economyBalance: economyData.balance };
-}
+    // Get current rental wallet balance BEFORE deduction - WITH GROUP ID
+    const currentTenant = await db.collection(COLLECTIONS.TENANTS).findOne({ 
+      tenantId: userId, 
+      groupId: groupId 
+    });
+    console.log(`🏠 Current rent wallet: ${currentTenant ? currentTenant.wallet : 'NOT FOUND'}`);
     
-    // Add to rental wallet
-    await db.collection(COLLECTIONS.TENANTS).updateOne(
-      { tenantId: userId },
+    if (!currentTenant) {
+      console.log(`❌ Tenant not found in database for ${userId} in group ${groupId}`);
+      return { success: false, error: 'tenant_not_found' };
+    }
+    
+    // Deduct from economy wallet using the correct method name
+    const deductSuccess = await unifiedUserManager.removeMoney(userId, amount, reason);
+    console.log(`💸 Economy deduction result: ${deductSuccess}`);
+    
+    if (!deductSuccess) {
+      console.log(`❌ Failed to deduct from economy wallet`);
+      return { success: false, error: 'deduct_failed', economyBalance: economyData.balance };
+    }
+    
+    // Add to rental wallet - WITH GROUP ID (THIS IS THE KEY FIX!)
+    const updateResult = await db.collection(COLLECTIONS.TENANTS).updateOne(
+      { tenantId: userId, groupId: groupId }, // Include groupId in query
       { $inc: { wallet: amount } }
     );
     
-    return { success: true, newEconomyBalance: economyData.balance - amount };
+    console.log(`🏠 Rent wallet update result:`, updateResult);
+    console.log(`📊 Matched: ${updateResult.matchedCount}, Modified: ${updateResult.modifiedCount}`);
+    
+    // Verify the update worked
+    const updatedTenant = await db.collection(COLLECTIONS.TENANTS).findOne({ 
+      tenantId: userId, 
+      groupId: groupId 
+    });
+    console.log(`✅ Updated rent wallet: ${updatedTenant ? updatedTenant.wallet : 'NOT FOUND'}`);
+    
+    if (updateResult.matchedCount === 0) {
+      console.log(`❌ No tenant record matched for update`);
+      // Try to refund the economy wallet
+      await unifiedUserManager.addMoney(userId, amount, 'Refund - rental transfer failed');
+      return { success: false, error: 'tenant_not_matched' };
+    }
+    
+    return { 
+      success: true, 
+      newEconomyBalance: economyData.balance - amount,
+      newRentWallet: updatedTenant ? updatedTenant.wallet : 0
+    };
   } catch (error) {
     console.error('Error transferring to rent wallet:', error);
     return { success: false, error: 'transfer_failed' };
   }
 }
+
 function getCurrentBillingPeriod(settings) {
   let dueDateForCurrentPeriod, periodStart, periodEnd;
   
@@ -683,17 +723,23 @@ async function handleWallet(context, args) {
         }
         
         await initEconomyUser(senderId);
-        const transferResult = await transferToRentWallet(senderId, amount);
+        
+        // FIXED: Pass groupId to the transfer function
+        const transferResult = await transferToRentWallet(senderId, amount, from);
         
         if (!transferResult.success) {
             if (transferResult.error === 'insufficient_funds') {
                 return reply(`❌ Insufficient funds in your economy wallet!\n\n💰 Your economy balance: ${settings.currencySymbol}${transferResult.economyBalance?.toLocaleString() || 0}\n💸 Amount needed: ${settings.currencySymbol}${amount.toLocaleString()}\n📉 Shortfall: ${settings.currencySymbol}${(amount - (transferResult.economyBalance || 0)).toLocaleString()}\n\n💡 Earn more money through attendance or other activities!`);
+            } else if (transferResult.error === 'tenant_not_found') {
+                return reply('❌ You are not registered as a tenant in this group.');
+            } else if (transferResult.error === 'tenant_not_matched') {
+                return reply('❌ Failed to update your rent wallet. Your economy wallet has been refunded.');
             } else {
                 return reply('❌ Transfer failed. Please try again.');
             }
         }
         
-        // Get updated balances
+        // Get updated balances for confirmation
         const updatedTenant = await getTenant(senderId, from);
         const updatedEconomyData = await getUserEconomyData(senderId);
         
