@@ -1358,7 +1358,7 @@ async function handleCompletionsView(context, args) {
       completionMessage += `✅ *Completed Members:*\n\n`;
       
       task.completions.forEach((completion, index) => {
-        const userPhone = @${completion.userId.split('@')}[0];
+        const userPhone = @${completion.userId.split('@')[0]};
         const submittedTime = moment(completion.submittedAt).tz('Africa/Lagos').format('HH:mm');
         
         completionMessage += `${index + 1}. +${userPhone}\n`;
