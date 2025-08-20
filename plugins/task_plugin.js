@@ -749,7 +749,7 @@ async function isAuthorized(sock, from, sender) {
 // 🤖 MAIN PLUGIN HANDLER
 // =======================
 
-// Main plugin handler function
+// MAIN PLUGIN HANDLER - FIXED VERSION
 export default async function dailyTaskHandler(m, sock, config) {
   try {
     // Initialize database connection
@@ -785,6 +785,7 @@ export default async function dailyTaskHandler(m, sock, config) {
         if (args.length === 1) {
           await showTaskMenu(reply, config.PREFIX);
         } else {
+          // FIXED: Pass sock and from to handleSubCommand
           await handleSubCommand(args[1], args.slice(2), { m, sock, config, senderId, from, reply });
         }
         break;
@@ -804,7 +805,7 @@ export default async function dailyTaskHandler(m, sock, config) {
   }
 }
 
-// Handle subcommands for the main task command
+// FIXED: handleSubCommand now properly receives sock and from
 async function handleSubCommand(subCommand, args, context) {
   switch (subCommand.toLowerCase()) {
     case 'post':
@@ -823,8 +824,9 @@ async function handleSubCommand(subCommand, args, context) {
       await handleQuestionsManager(context, args);
       break;
     case 'completions':
-  await handleCompletionsView({ ...context, sock, from }, args);
-  break;
+      // FIXED: Now sock and from are available in context
+      await handleCompletionsView(context, args);
+      break;
     case 'records':
       await handleTaskRecords(context, args);
       break;
@@ -1332,9 +1334,9 @@ async function handleShowCategories(context) {
   await reply(categoriesMessage);
 }
 
-// Handle completions view - FIXED VERSION
+// FIXED: handleCompletionsView function
 async function handleCompletionsView(context, args) {
-  const { reply, sock, from } = context; // Added sock and from to context
+  const { reply, sock, from } = context; // Now sock and from are available
   
   try {
     const date = args[0] || getCurrentDate();
