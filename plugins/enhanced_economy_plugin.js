@@ -1470,11 +1470,14 @@ async function showEconomyMenu(reply, prefix) {
 
 // Enhanced Balance Command - CORRECTED
 async function handleBalance(context, args) {
-  // Destructure sock and from to use them directly
   const { reply, senderId, m, sock, from } = context;
   
   try {
-    const targetUser = (args && args.length > 0) ? getTargetUser(m, args.join(' ')) : senderId;
+    // **MODIFIED LINE:**
+    // First, try to get a target from a mention, a quote, or a number in the arguments.
+    // If getTargetUser returns null (no target found), default to the senderId.
+    const targetUser = getTargetUser(m, args.join(' ')) || senderId;
+    
     await initUser(targetUser);
     const userData = await getUserData(targetUser);
     
@@ -1512,10 +1515,10 @@ async function handleBalance(context, args) {
       }
     }
     
-    // **FIX:** Replace the simple reply with sendMessage that includes the mentions property
     await sock.sendMessage(from, {
       text: balanceText,
-      mentions: [targetUser]
+      mentions: [targetUser],
+      quoted: m
     });
 
   } catch (error) {
