@@ -1468,9 +1468,10 @@ async function showEconomyMenu(reply, prefix) {
   }
 }
 
-// Enhanced Balance Command
+// Enhanced Balance Command - CORRECTED
 async function handleBalance(context, args) {
-  const { reply, senderId, m } = context;
+  // Destructure sock and from to use them directly
+  const { reply, senderId, m, sock, from } = context;
   
   try {
     const targetUser = (args && args.length > 0) ? getTargetUser(m, args.join(' ')) : senderId;
@@ -1511,7 +1512,12 @@ async function handleBalance(context, args) {
       }
     }
     
-    await reply(balanceText);
+    // **FIX:** Replace the simple reply with sendMessage that includes the mentions property
+    await sock.sendMessage(from, {
+      text: balanceText,
+      mentions: [targetUser]
+    });
+
   } catch (error) {
     await reply('❌ *Error retrieving balance. Please try again.*');
     console.error('Balance error:', error);
