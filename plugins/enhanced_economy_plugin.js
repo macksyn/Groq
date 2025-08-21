@@ -3160,11 +3160,20 @@ async function handleRob(context, args) {
     await initUser(targetUser);
     const targetData = await getUserData(targetUser);
     
+    // **MODIFIED BLOCK START**
     // Check if target has robbery protection
     if (targetData.activeEffects?.robProtection && targetData.activeEffects.robProtection > Date.now()) {
-      await reply(`🛡️ *@${targetUser.split('@')[0]} is protected from robberies!*\n\n⏰ *Protection expires in ${Math.ceil((targetData.activeEffects.robProtection - Date.now()) / 60000)} minutes*`);
+      const protectionMessage = `🛡️ *@${targetUser.split('@')[0]} is protected from robberies!*\n\n⏰ *Protection expires in ${Math.ceil((targetData.activeEffects.robProtection - Date.now()) / 60000)} minutes*`;
+      
+      // Use the corrected sendMessage syntax
+      await sock.sendMessage(
+        from,
+        { text: protectionMessage, mentions: [targetUser] }, // Content with mention
+        { quoted: m }                                         // Options with quote
+      );
       return;
     }
+    // **MODIFIED BLOCK END**
     
     // Validation checks
     if (targetData.balance < ecoSettings.robMinTargetBalance) {
