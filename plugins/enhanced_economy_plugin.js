@@ -1,6 +1,7 @@
 // plugins/economy_enhanced.js - Enhanced Economy plugin with all features
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
+import { TimeHelpers } from '../lib/helpers.js';
 
 // Plugin information export
 export const info = {
@@ -3160,16 +3161,17 @@ async function handleRob(context, args) {
     await initUser(targetUser);
     const targetData = await getUserData(targetUser);
     
-    // **MODIFIED BLOCK START**
-    // Check if target has robbery protection
     if (targetData.activeEffects?.robProtection && targetData.activeEffects.robProtection > Date.now()) {
-      const protectionMessage = `🛡️ *@${targetUser.split('@')[0]} is protected from robberies!*\n\n⏰ *Protection expires in ${Math.ceil((targetData.activeEffects.robProtection - Date.now()) / 60000)} minutes*`;
+      const remainingMs = targetData.activeEffects.robProtection - Date.now();
+      // Use the imported helper function
+      const timeString = TimeHelpers.formatDuration(remainingMs);
       
-      // Use the corrected sendMessage syntax
+      const protectionMessage = `🛡️ *@${targetUser.split('@')[0]} is protected from robberies!*\n\n⏰ *Protection expires in ${timeString}*`;
+      
       await sock.sendMessage(
         from,
-        { text: protectionMessage, mentions: [targetUser] }, // Content with mention
-        { quoted: m }                                         // Options with quote
+        { text: protectionMessage, mentions: [targetUser] },
+        { quoted: m }
       );
       return;
     }
