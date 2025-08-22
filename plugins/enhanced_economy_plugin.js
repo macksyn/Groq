@@ -1,7 +1,7 @@
 // plugins/economy_enhanced.js - Enhanced Economy plugin with all features
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
-import { helpers } from '../lib/helpers.js';
+import { TimeHelpers } from '../lib/helpers.js';
 
 // Plugin information export
 export const info = {
