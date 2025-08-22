@@ -1493,6 +1493,7 @@ async function handleBalance(context, args) {
     
     balanceText += `💎 *Total Wealth:* ${ecoSettings.currency}${totalWealth.toLocaleString()}\n`;
     
+    // **MODIFIED BLOCK START**
     if (isOwnBalance && userData.activeEffects) {
       const activeEffects = Object.keys(userData.activeEffects).filter(effect => {
         const expiry = userData.activeEffects[effect];
@@ -1506,12 +1507,15 @@ async function handleBalance(context, args) {
           if (typeof expiry === 'boolean') {
             balanceText += `• ${effect} (Permanent)\n`;
           } else {
-            const remaining = Math.ceil((expiry - Date.now()) / 60000);
-            balanceText += `• ${effect} (${remaining}m left)\n`;
+            // Use the imported helper function for a readable format
+            const remainingMs = expiry - Date.now();
+            const timeString = TimeHelpers.formatDuration(remainingMs);
+            balanceText += `• ${effect} (${timeString} left)\n`;
           }
         });
       }
     }
+    // **MODIFIED BLOCK END**
     
     // **NEW SYNTAX:** Separating content and options into two objects
     const content = {
