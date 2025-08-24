@@ -3410,6 +3410,7 @@ async function handleBusiness(context, args) {
     
     switch (action) {
       case 'list':
+        // ... (this case remains unchanged) ...
         let businessList = '🏢 *AVAILABLE BUSINESSES* 🏢\n\n';
         for (const [id, business] of Object.entries(businessData)) {
           businessList += `🏪 *${business.name}*\n`;
@@ -3422,6 +3423,7 @@ async function handleBusiness(context, args) {
         break;
         
       case 'buy':
+        // ... (this case remains unchanged) ...
         if (args.length < 2) {
           await reply('⚠️ *Usage: business buy [business_id]*');
           return;
@@ -3437,7 +3439,6 @@ async function handleBusiness(context, args) {
         
         const userData = await getUserData(senderId);
         
-        // Check if user already owns this business
         const ownedBusinesses = userData.investments?.businesses || [];
         if (ownedBusinesses.some(b => b.id === businessId)) {
           await reply('⚠️ *You already own this business*');
@@ -3465,13 +3466,13 @@ async function handleBusiness(context, args) {
           'investments.businesses': ownedBusinesses
         });
         
-        // Check achievement
         await checkAchievements(senderId, 'business', { businessCount: ownedBusinesses.length });
         
         await reply(`🏢 *Business Purchase Successful!*\n\n🏪 *Business:* ${business.name}\n💰 *Price:* ${ecoSettings.currency}${business.price.toLocaleString()}\n📈 *Daily ROI:* ${(business.roi * 100).toFixed(1)}%\n\n💡 *Collect daily profits with:* ${context.config.PREFIX}business collect`);
         break;
         
       case 'portfolio':
+        // ... (this case remains unchanged) ...
         const portfolioData = await getUserData(senderId);
         const businesses = portfolioData.investments?.businesses || [];
         
@@ -3503,54 +3504,54 @@ async function handleBusiness(context, args) {
         const userBusinesses = collectData.investments?.businesses || [];
         
         if (userBusinesses.length === 0) {
-          await reply('🏢 *You don\'t own any businesses*');
+          await reply('🏢 *You don\'t have any businesses to collect profits from.*');
           return;
         }
         
         let totalProfit = 0;
         const now = new Date();
         const updatedBusinesses = [];
+        // **FIX:** Variable is declared here so it can be used everywhere in this block
+        const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
         
         userBusinesses.forEach(business => {
           const lastCollected = new Date(business.lastCollected);
-          const daysSince = Math.floor((now - lastCollected) / 86400000);
+          const timeSince = now.getTime() - lastCollected.getTime();
           
-          if (daysSince >= 1) {
+          if (timeSince >= twentyFourHoursInMs) {
+            const daysToCollect = Math.floor(timeSince / twentyFourHoursInMs);
             const currentROI = businessData[business.id]?.roi || business.roi;
-            const profit = business.price * currentROI * daysSince;
+            const profit = business.price * currentROI * daysToCollect;
             totalProfit += profit;
             
-            business.lastCollected = now;
+            business.lastCollected = new Date(lastCollected.getTime() + daysToCollect * twentyFourHoursInMs);
           }
           
           updatedBusinesses.push(business);
         });
         
-        // **MODIFIED BLOCK START**
         if (totalProfit === 0) {
-          // Find the soonest time a business will be ready for collection
           let soonestNextCollection = Infinity;
           userBusinesses.forEach(business => {
+            // It can now be safely used here
             const nextCollectionTime = new Date(business.lastCollected).getTime() + twentyFourHoursInMs;
             if (nextCollectionTime < soonestNextCollection) {
               soonestNextCollection = nextCollectionTime;
             }
           });
 
-          // Use the new helper function to get a specific time
           const timeString = TimeHelpers.formatFutureTime(soonestNextCollection);
           
           await reply(`⏰ *No profits to collect yet*\n\nPlease come back *${timeString}*`);
           return;
         }
-        // **MODIFIED BLOCK END**
         
         await addMoney(senderId, totalProfit, 'Business profits', false);
         await updateUserData(senderId, {
           'investments.businesses': updatedBusinesses
         });
         
-        await reply(`🏢 *Business Profits Collected!* 🏢\n\n💰 *Total Profit:* ${ecoSettings.currency}${totalProfit.toLocaleString()}\n🏪 *Businesses:* ${userBusinesses.length}\n\n💡 *Come back tomorrow for more profits!*`);
+        await reply(`🏢 *Business Profits Collected!* 🏢\n\n💰 *Total Profit:* ${ecoSettings.currency}${Math.floor(totalProfit).toLocaleString()}\n🏪 *From:* ${userBusinesses.length} businesses\n\n💡 *Your next profits will be available in 24 hours!*`);
         break;
         
       default:
