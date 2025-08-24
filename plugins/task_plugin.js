@@ -76,7 +76,8 @@ moment.tz.setDefault('Africa/Lagos');
 
 // Default task settings
 const defaultSettings = {
-  baseReward: 500,
+  baseReward: 300, // Reduced base reward for hybrid system
+  correctnessBonus: 50, // Bonus per correct answer
   enableStreakBonus: true,
   streakBonusMultiplier: 1.5,
   minStreakForBonus: 3,
@@ -85,8 +86,10 @@ const defaultSettings = {
   questionCount: 5,
   submissionDeadline: '23:59', // 11:59 PM
   adminNumbers: [],
-  groupJid: '', // Will be set when first used
+  groupJids: [], // Support multiple groups
   tagAllMembers: true,
+  minAnswerLength: 2, // Minimum answer length
+  showCorrectAnswers: false, // Don't show correct answers immediately
   themes: {
     monday: 'Business Ideas & Entrepreneurship',
     tuesday: 'General Knowledge',
@@ -130,111 +133,111 @@ async function saveSettings() {
 // =======================
 const questionDatabase = {
   business: [
-    { question: "What business can you start with just ₦20,000?", type: "open", category: "business" },
-    { question: "Name one skill you can monetize online", type: "open", category: "business" },
-    { question: "What does ROI stand for in business?", type: "open", category: "business" },
-    { question: "Which social media platform is best for business marketing in Nigeria?", type: "open", category: "business" },
-    { question: "What is the first step in starting any business?", type: "open", category: "business" },
-    { question: "Name one way to fund your startup business", type: "open", category: "business" },
-    { question: "What is a business plan?", type: "open", category: "business" },
-    { question: "How can you identify your target market?", type: "open", category: "business" },
-    { question: "What is the difference between profit and revenue?", type: "open", category: "business" },
-    { question: "Name one digital skill that's in high demand", type: "open", category: "business" },
-    { question: "What does 'minimum viable product' (MVP) mean?", type: "open", category: "business" },
-    { question: "How can you market your business for free?", type: "open", category: "business" },
-    { question: "What is customer retention?", type: "open", category: "business" },
-    { question: "Name one way to reduce business costs", type: "open", category: "business" },
-    { question: "What is the importance of networking in business?", type: "open", category: "business" }
+    { question: "What business can you start with just ₦20,000?", type: "open", category: "business", correctAnswer: "Any small retail business, food vending, digital services, etc." },
+    { question: "Name one skill you can monetize online", type: "open", category: "business", correctAnswer: "Writing, graphic design, programming, tutoring, etc." },
+    { question: "What does ROI stand for in business?", type: "open", category: "business", correctAnswer: "Return on Investment" },
+    { question: "Which social media platform is best for business marketing in Nigeria?", type: "open", category: "business", correctAnswer: "Instagram, Facebook, WhatsApp, etc." },
+    { question: "What is the first step in starting any business?", type: "open", category: "business", correctAnswer: "Market research, business planning, identifying target audience, etc." },
+    { question: "Name one way to fund your startup business", type: "open", category: "business", correctAnswer: "Personal savings, loans, investors, grants, etc." },
+    { question: "What is a business plan?", type: "open", category: "business", correctAnswer: "A detailed document outlining business goals and strategies" },
+    { question: "How can you identify your target market?", type: "open", category: "business", correctAnswer: "Market research, surveys, demographics analysis, etc." },
+    { question: "What is the difference between profit and revenue?", type: "open", category: "business", correctAnswer: "Revenue is total income, profit is revenue minus expenses" },
+    { question: "Name one digital skill that's in high demand", type: "open", category: "business", correctAnswer: "Web development, digital marketing, data analysis, etc." },
+    { question: "What does 'minimum viable product' (MVP) mean?", type: "open", category: "business", correctAnswer: "Basic version of product with essential features" },
+    { question: "How can you market your business for free?", type: "open", category: "business", correctAnswer: "Social media, word of mouth, networking, content marketing, etc." },
+    { question: "What is customer retention?", type: "open", category: "business", correctAnswer: "Keeping existing customers engaged and loyal" },
+    { question: "Name one way to reduce business costs", type: "open", category: "business", correctAnswer: "Automation, bulk purchasing, remote work, etc." },
+    { question: "What is the importance of networking in business?", type: "open", category: "business", correctAnswer: "Building relationships, finding opportunities, partnerships, etc." }
   ],
   
   general: [
-    { question: "What is the capital of Nigeria?", type: "open", category: "general" },
-    { question: "How many states are in Nigeria?", type: "open", category: "general" },
-    { question: "What year did Nigeria gain independence?", type: "open", category: "general" },
-    { question: "What is the largest continent in the world?", type: "open", category: "general" },
-    { question: "How many days are in a leap year?", type: "open", category: "general" },
-    { question: "What is the currency of Ghana?", type: "open", category: "general" },
-    { question: "Who wrote the Nigerian national anthem?", type: "open", category: "general" },
-    { question: "What does www stand for?", type: "open", category: "general" },
-    { question: "How many minutes are in a full day?", type: "open", category: "general" },
-    { question: "What is the smallest country in the world?", type: "open", category: "general" },
-    { question: "How many sides does a triangle have?", type: "open", category: "general" },
-    { question: "What is the largest ocean in the world?", type: "open", category: "general" },
-    { question: "In which year was WhatsApp founded?", type: "open", category: "general" },
-    { question: "What does GPS stand for?", type: "open", category: "general" },
-    { question: "How many hours are in a week?", type: "open", category: "general" }
+    { question: "What is the capital of Nigeria?", type: "open", category: "general", correctAnswer: "Abuja" },
+    { question: "How many states are in Nigeria?", type: "open", category: "general", correctAnswer: "36" },
+    { question: "What year did Nigeria gain independence?", type: "open", category: "general", correctAnswer: "1960" },
+    { question: "What is the largest continent in the world?", type: "open", category: "general", correctAnswer: "Asia" },
+    { question: "How many days are in a leap year?", type: "open", category: "general", correctAnswer: "366" },
+    { question: "What is the currency of Ghana?", type: "open", category: "general", correctAnswer: "Cedi" },
+    { question: "Who wrote the Nigerian national anthem?", type: "open", category: "general", correctAnswer: "Benedict Elide Odiase" },
+    { question: "What does www stand for?", type: "open", category: "general", correctAnswer: "World Wide Web" },
+    { question: "How many minutes are in a full day?", type: "open", category: "general", correctAnswer: "1440" },
+    { question: "What is the smallest country in the world?", type: "open", category: "general", correctAnswer: "Vatican City" },
+    { question: "How many sides does a triangle have?", type: "open", category: "general", correctAnswer: "3" },
+    { question: "What is the largest ocean in the world?", type: "open", category: "general", correctAnswer: "Pacific Ocean" },
+    { question: "In which year was WhatsApp founded?", type: "open", category: "general", correctAnswer: "2009" },
+    { question: "What does GPS stand for?", type: "open", category: "general", correctAnswer: "Global Positioning System" },
+    { question: "How many hours are in a week?", type: "open", category: "general", correctAnswer: "168" }
   ],
   
   hygiene: [
-    { question: "How many times should you brush your teeth daily?", type: "open", category: "hygiene" },
-    { question: "How long should you wash your hands to kill germs?", type: "open", category: "hygiene" },
-    { question: "How often should you change your toothbrush?", type: "open", category: "hygiene" },
-    { question: "What is the recommended time for daily exercise?", type: "open", category: "hygiene" },
-    { question: "How many glasses of water should you drink daily?", type: "open", category: "hygiene" },
-    { question: "How often should you wash your hair?", type: "open", category: "hygiene" },
-    { question: "What should you do before eating?", type: "open", category: "hygiene" },
-    { question: "How many hours of sleep do adults need daily?", type: "open", category: "hygiene" },
-    { question: "Name one benefit of regular bathing", type: "open", category: "hygiene" },
-    { question: "What is the best way to prevent body odor?", type: "open", category: "hygiene" },
-    { question: "How often should you clip your nails?", type: "open", category: "hygiene" },
-    { question: "Why is it important to wash fruits before eating?", type: "open", category: "hygiene" },
-    { question: "What should you cover your mouth with when coughing?", type: "open", category: "hygiene" },
-    { question: "How often should you change your bed sheets?", type: "open", category: "hygiene" },
-    { question: "Name one way to maintain oral hygiene", type: "open", category: "hygiene" }
+    { question: "How many times should you brush your teeth daily?", type: "open", category: "hygiene", correctAnswer: "2" },
+    { question: "How long should you wash your hands to kill germs?", type: "open", category: "hygiene", correctAnswer: "20 seconds" },
+    { question: "How often should you change your toothbrush?", type: "open", category: "hygiene", correctAnswer: "Every 3 months" },
+    { question: "What is the recommended time for daily exercise?", type: "open", category: "hygiene", correctAnswer: "30 minutes" },
+    { question: "How many glasses of water should you drink daily?", type: "open", category: "hygiene", correctAnswer: "8" },
+    { question: "How often should you wash your hair?", type: "open", category: "hygiene", correctAnswer: "2-3 times per week" },
+    { question: "What should you do before eating?", type: "open", category: "hygiene", correctAnswer: "Wash your hands" },
+    { question: "How many hours of sleep do adults need daily?", type: "open", category: "hygiene", correctAnswer: "7-9" },
+    { question: "Name one benefit of regular bathing", type: "open", category: "hygiene", correctAnswer: "Removes dirt, prevents odor, maintains health, etc." },
+    { question: "What is the best way to prevent body odor?", type: "open", category: "hygiene", correctAnswer: "Regular bathing, deodorant, clean clothes, etc." },
+    { question: "How often should you clip your nails?", type: "open", category: "hygiene", correctAnswer: "Weekly" },
+    { question: "Why is it important to wash fruits before eating?", type: "open", category: "hygiene", correctAnswer: "Remove germs, dirt, chemicals, etc." },
+    { question: "What should you cover your mouth with when coughing?", type: "open", category: "hygiene", correctAnswer: "Elbow, tissue, handkerchief, etc." },
+    { question: "How often should you change your bed sheets?", type: "open", category: "hygiene", correctAnswer: "Weekly" },
+    { question: "Name one way to maintain oral hygiene", type: "open", category: "hygiene", correctAnswer: "Brushing, flossing, mouthwash, etc." }
   ],
   
   current_affairs: [
-    { question: "Who is the current President of Nigeria?", type: "open", category: "current_affairs" },
-    { question: "What is the current minimum wage in Nigeria?", type: "open", category: "current_affairs" },
-    { question: "Which year was the new naira notes introduced?", type: "open", category: "current_affairs" },
-    { question: "What does CBN stand for?", type: "open", category: "current_affairs" },
-    { question: "Name Nigeria's current Vice President", type: "open", category: "current_affairs" },
-    { question: "What is the current exchange rate trend of Naira to Dollar?", type: "open", category: "current_affairs" },
-    { question: "Which state recently conducted local government elections?", type: "open", category: "current_affairs" },
-    { question: "What major tech company recently invested in Nigeria?", type: "open", category: "current_affairs" },
-    { question: "Name one current challenge facing Nigerian youth", type: "open", category: "current_affairs" },
-    { question: "What is the current fuel price per liter in Nigeria?", type: "open", category: "current_affairs" },
-    { question: "Which Nigerian state is known for oil production?", type: "open", category: "current_affairs" },
-    { question: "What does NYSC stand for?", type: "open", category: "current_affairs" },
-    { question: "Name one major road project currently ongoing in Nigeria", type: "open", category: "current_affairs" },
-    { question: "What is the current population estimate of Nigeria?", type: "open", category: "current_affairs" },
-    { question: "Which Nigerian bank was recently recapitalized?", type: "open", category: "current_affairs" }
+    { question: "Who is the current President of Nigeria?", type: "open", category: "current_affairs", correctAnswer: "Bola Ahmed Tinubu" },
+    { question: "What is the current minimum wage in Nigeria?", type: "open", category: "current_affairs", correctAnswer: "₦70,000" },
+    { question: "Which year was the new naira notes introduced?", type: "open", category: "current_affairs", correctAnswer: "2022" },
+    { question: "What does CBN stand for?", type: "open", category: "current_affairs", correctAnswer: "Central Bank of Nigeria" },
+    { question: "Name Nigeria's current Vice President", type: "open", category: "current_affairs", correctAnswer: "Kashim Shettima" },
+    { question: "What is the current exchange rate trend of Naira to Dollar?", type: "open", category: "current_affairs", correctAnswer: "Rising, volatile, fluctuating, etc." },
+    { question: "Which state recently conducted local government elections?", type: "open", category: "current_affairs", correctAnswer: "Various states (accept any recent)" },
+    { question: "What major tech company recently invested in Nigeria?", type: "open", category: "current_affairs", correctAnswer: "Google, Microsoft, Meta, etc." },
+    { question: "Name one current challenge facing Nigerian youth", type: "open", category: "current_affairs", correctAnswer: "Unemployment, inflation, education, etc." },
+    { question: "What is the current fuel price per liter in Nigeria?", type: "open", category: "current_affairs", correctAnswer: "₦600-700 (varies)" },
+    { question: "Which Nigerian state is known for oil production?", type: "open", category: "current_affairs", correctAnswer: "Rivers, Delta, Akwa Ibom, etc." },
+    { question: "What does NYSC stand for?", type: "open", category: "current_affairs", correctAnswer: "National Youth Service Corps" },
+    { question: "Name one major road project currently ongoing in Nigeria", type: "open", category: "current_affairs", correctAnswer: "Lagos-Ibadan expressway, 2nd Niger Bridge, etc." },
+    { question: "What is the current population estimate of Nigeria?", type: "open", category: "current_affairs", correctAnswer: "220+ million" },
+    { question: "Which Nigerian bank was recently recapitalized?", type: "open", category: "current_affairs", correctAnswer: "Various banks (accept reasonable answers)" }
   ],
   
   science: [
-    { question: "What gas do plants absorb from the atmosphere?", type: "open", category: "science" },
-    { question: "Which planet is closest to the Sun?", type: "open", category: "science" },
-    { question: "What does DNA stand for?", type: "open", category: "science" },
-    { question: "How many bones are in the human body?", type: "open", category: "science" },
-    { question: "What is the chemical symbol for water?", type: "open", category: "science" },
-    { question: "Which organ pumps blood through the human body?", type: "open", category: "science" },
-    { question: "What is the speed of light?", type: "open", category: "science" },
-    { question: "How many chambers does a human heart have?", type: "open", category: "science" },
-    { question: "What is the largest organ in the human body?", type: "open", category: "science" },
-    { question: "Which gas makes up most of Earth's atmosphere?", type: "open", category: "science" },
-    { question: "What is photosynthesis?", type: "open", category: "science" },
-    { question: "How many teeth does an adult human have?", type: "open", category: "science" },
-    { question: "What is the hardest natural substance on Earth?", type: "open", category: "science" },
-    { question: "Which blood type is considered universal donor?", type: "open", category: "science" },
-    { question: "What does CPU stand for in computers?", type: "open", category: "science" }
+    { question: "What gas do plants absorb from the atmosphere?", type: "open", category: "science", correctAnswer: "Carbon dioxide" },
+    { question: "Which planet is closest to the Sun?", type: "open", category: "science", correctAnswer: "Mercury" },
+    { question: "What does DNA stand for?", type: "open", category: "science", correctAnswer: "Deoxyribonucleic acid" },
+    { question: "How many bones are in the human body?", type: "open", category: "science", correctAnswer: "206" },
+    { question: "What is the chemical symbol for water?", type: "open", category: "science", correctAnswer: "H2O" },
+    { question: "Which organ pumps blood through the human body?", type: "open", category: "science", correctAnswer: "Heart" },
+    { question: "What is the speed of light?", type: "open", category: "science", correctAnswer: "300,000 km/s" },
+    { question: "How many chambers does a human heart have?", type: "open", category: "science", correctAnswer: "4" },
+    { question: "What is the largest organ in the human body?", type: "open", category: "science", correctAnswer: "Skin" },
+    { question: "Which gas makes up most of Earth's atmosphere?", type: "open", category: "science", correctAnswer: "Nitrogen" },
+    { question: "What is photosynthesis?", type: "open", category: "science", correctAnswer: "Plants making food using sunlight" },
+    { question: "How many teeth does an adult human have?", type: "open", category: "science", correctAnswer: "32" },
+    { question: "What is the hardest natural substance on Earth?", type: "open", category: "science", correctAnswer: "Diamond" },
+    { question: "Which blood type is considered universal donor?", type: "open", category: "science", correctAnswer: "O negative" },
+    { question: "What does CPU stand for in computers?", type: "open", category: "science", correctAnswer: "Central Processing Unit" }
   ],
   
   fun_facts: [
-    { question: "Which animal is known as the King of the Jungle?", type: "open", category: "fun_facts" },
-    { question: "How many legs does a spider have?", type: "open", category: "fun_facts" },
-    { question: "What is the tallest building in the world?", type: "open", category: "fun_facts" },
-    { question: "Which country has the most time zones?", type: "open", category: "fun_facts" },
-    { question: "What is the most spoken language in the world?", type: "open", category: "fun_facts" },
-    { question: "How many strings does a guitar have?", type: "open", category: "fun_facts" },
-    { question: "Which fruit is known as the king of fruits?", type: "open", category: "fun_facts" },
-    { question: "What is the fastest land animal?", type: "open", category: "fun_facts" },
-    { question: "How many colors are in a rainbow?", type: "open", category: "fun_facts" },
-    { question: "Which planet is known as the Red Planet?", type: "open", category: "fun_facts" },
-    { question: "What is the largest mammal in the world?", type: "open", category: "fun_facts" },
-    { question: "How many players are on a football team on the field?", type: "open", category: "fun_facts" },
-    { question: "Which bird can't fly but can run very fast?", type: "open", category: "fun_facts" },
-    { question: "What is the hottest planet in our solar system?", type: "open", category: "fun_facts" },
-    { question: "How many lives are cats said to have?", type: "open", category: "fun_facts" }
+    { question: "Which animal is known as the King of the Jungle?", type: "open", category: "fun_facts", correctAnswer: "Lion" },
+    { question: "How many legs does a spider have?", type: "open", category: "fun_facts", correctAnswer: "8" },
+    { question: "What is the tallest building in the world?", type: "open", category: "fun_facts", correctAnswer: "Burj Khalifa" },
+    { question: "Which country has the most time zones?", type: "open", category: "fun_facts", correctAnswer: "France" },
+    { question: "What is the most spoken language in the world?", type: "open", category: "fun_facts", correctAnswer: "Mandarin Chinese" },
+    { question: "How many strings does a guitar have?", type: "open", category: "fun_facts", correctAnswer: "6" },
+    { question: "Which fruit is known as the king of fruits?", type: "open", category: "fun_facts", correctAnswer: "Mango" },
+    { question: "What is the fastest land animal?", type: "open", category: "fun_facts", correctAnswer: "Cheetah" },
+    { question: "How many colors are in a rainbow?", type: "open", category: "fun_facts", correctAnswer: "7" },
+    { question: "Which planet is known as the Red Planet?", type: "open", category: "fun_facts", correctAnswer: "Mars" },
+    { question: "What is the largest mammal in the world?", type: "open", category: "fun_facts", correctAnswer: "Blue whale" },
+    { question: "How many players are on a football team on the field?", type: "open", category: "fun_facts", correctAnswer: "11" },
+    { question: "Which bird can't fly but can run very fast?", type: "open", category: "fun_facts", correctAnswer: "Ostrich" },
+    { question: "What is the hottest planet in our solar system?", type: "open", category: "fun_facts", correctAnswer: "Venus" },
+    { question: "How many lives are cats said to have?", type: "open", category: "fun_facts", correctAnswer: "9" }
   ]
 };
 
@@ -457,19 +460,58 @@ async function postDailyTask(sock, groupJid) {
   }
 }
 
-// Validate answer format
+// Validate answer format and check if answers are actual responses (not questions)
 function validateAnswerFormat(text) {
   // Look for numbered answers (1. answer 2. answer etc.)
   const answerPattern = /(\d+)\.\s*([^0-9]+?)(?=\s*\d+\.|$)/g;
   const answers = [];
   let match;
   
+  // Keywords that indicate questions rather than answers
+  const questionKeywords = [
+    'what', 'how', 'when', 'where', 'why', 'which', 'who',
+    'can you', 'do you', 'is it', 'are you', 'does it',
+    'business can you start', 'skill you can monetize',
+    'social media platform', 'first step in starting',
+    'gas do plants absorb', 'planet is closest',
+    'times should you', 'glasses of water',
+    'current president', 'minimum wage',
+    'animal is known', 'legs does a spider',
+    'stand for', 'many', '?'
+  ];
+  
   while ((match = answerPattern.exec(text)) !== null) {
     const questionNum = parseInt(match[1]);
-    const answer = match[2].trim();
+    let answer = match[2].trim();
     
-    if (answer.length > 0) {
-      answers[questionNum - 1] = answer;
+    if (answer.length > 2) { // At least 3 characters
+      // Remove question part if user copied question and added answer
+      // Look for patterns like "Question? Answer" or "Question Answer"
+      const sentences = answer.split(/[?.!]/);
+      if (sentences.length > 1) {
+        // Take the last meaningful sentence as the answer
+        const lastSentence = sentences[sentences.length - 1].trim();
+        if (lastSentence.length > 2) {
+          answer = lastSentence;
+        }
+      }
+      
+      // Check if this still looks like a question rather than an answer
+      const lowerAnswer = answer.toLowerCase();
+      const isQuestion = questionKeywords.some(keyword => 
+        lowerAnswer.includes(keyword) || 
+        lowerAnswer.endsWith('?') ||
+        lowerAnswer.startsWith('what ') ||
+        lowerAnswer.startsWith('how ') ||
+        lowerAnswer.startsWith('which ') ||
+        lowerAnswer.startsWith('when ') ||
+        lowerAnswer.startsWith('where ')
+      );
+      
+      // Only accept if it doesn't look like a question
+      if (!isQuestion) {
+        answers[questionNum - 1] = answer;
+      }
     }
   }
   
@@ -533,7 +575,7 @@ async function initUser(userId) {
   }
 }
 
-// Process task submission
+// Process task submission with correctness checking
 async function processTaskSubmission(m, sock, config) {
   try {
     const messageText = m.body || '';
@@ -571,16 +613,42 @@ async function processTaskSubmission(m, sock, config) {
     await initUser(senderId);
     const userData = await getUserData(senderId);
     
+    // Check answers and calculate correctness
+    let correctCount = 0;
+    const answerResults = [];
+    
+    for (let i = 0; i < todayTask.questions.length; i++) {
+      const question = todayTask.questions[i];
+      const userAnswer = answers[i] || '';
+      const isCorrect = checkAnswerCorrectness(userAnswer, question.correctAnswer, question.question);
+      
+      if (isCorrect) correctCount++;
+      
+      answerResults.push({
+        questionNumber: i + 1,
+        question: question.question,
+        userAnswer: userAnswer,
+        correctAnswer: question.correctAnswer,
+        isCorrect: isCorrect
+      });
+    }
+    
     // Update streak
     const currentStreak = updateTaskStreak(senderId, userData, today);
     
-    // Calculate reward
-    let finalReward = taskSettings.baseReward;
+    // Calculate hybrid reward
+    let baseReward = taskSettings.baseReward;
+    let correctnessBonus = correctCount * taskSettings.correctnessBonus;
+    let streakBonus = 0;
     
-    // Apply streak bonus
+    // Apply streak bonus to base reward only
     if (taskSettings.enableStreakBonus && currentStreak >= taskSettings.minStreakForBonus) {
-      finalReward = Math.floor(finalReward * taskSettings.streakBonusMultiplier);
+      const originalBase = baseReward;
+      baseReward = Math.floor(baseReward * taskSettings.streakBonusMultiplier);
+      streakBonus = baseReward - originalBase;
     }
+    
+    const finalReward = baseReward + correctnessBonus;
     
     // Add money to user's wallet
     await addMoney(senderId, finalReward, 'Daily task completion');
@@ -590,7 +658,8 @@ async function processTaskSubmission(m, sock, config) {
       lastTaskCompletion: today,
       totalTaskCompletions: (userData.totalTaskCompletions || 0) + 1,
       taskStreak: currentStreak,
-      longestTaskStreak: userData.longestTaskStreak
+      longestTaskStreak: userData.longestTaskStreak,
+      totalCorrectAnswers: (userData.totalCorrectAnswers || 0) + correctCount
     });
     
     // Add completion to today's task
@@ -598,8 +667,12 @@ async function processTaskSubmission(m, sock, config) {
       userId: senderId,
       userPhone: senderId.split('@')[0],
       answers: answers,
+      answerResults: answerResults,
+      correctCount: correctCount,
       submittedAt: new Date(),
-      reward: finalReward,
+      baseReward: baseReward,
+      correctnessBonus: correctnessBonus,
+      totalReward: finalReward,
       streak: currentStreak
     };
     
@@ -613,7 +686,11 @@ async function processTaskSubmission(m, sock, config) {
       userId: senderId,
       date: today,
       answers: answers,
-      reward: finalReward,
+      answerResults: answerResults,
+      correctCount: correctCount,
+      baseReward: baseReward,
+      correctnessBonus: correctnessBonus,
+      totalReward: finalReward,
       streak: currentStreak,
       submittedAt: new Date()
     });
@@ -621,23 +698,29 @@ async function processTaskSubmission(m, sock, config) {
     // Get updated user data
     const updatedUserData = await getUserData(senderId);
     
-    // Build reward message
-    let rewardBreakdown = `💰 Reward: ₦${finalReward.toLocaleString()}`;
+    // Build success message
+    let successMessage = `✅ *TASK COMPLETED!* ✅\n\n`;
+    successMessage += `📊 Score: ${correctCount}/${todayTask.questions.length} correct\n\n`;
+    successMessage += `💰 *Rewards:*\n`;
+    successMessage += `• Base: ₦${taskSettings.baseReward.toLocaleString()}\n`;
     
-    if (taskSettings.enableStreakBonus && currentStreak >= taskSettings.minStreakForBonus) {
+    if (streakBonus > 0) {
       const bonusPercent = Math.floor((taskSettings.streakBonusMultiplier - 1) * 100);
-      rewardBreakdown += ` (includes ${bonusPercent}% streak bonus)`;
+      successMessage += `• Streak: +₦${streakBonus.toLocaleString()} (${bonusPercent}%)\n`;
     }
     
-    // Success message
-    let successMessage = `✅ *TASK COMPLETED SUCCESSFULLY!* ✅\n\n`;
-    successMessage += `🎯 All questions answered!\n`;
-    successMessage += rewardBreakdown + '\n';
-    successMessage += `💸 New wallet balance: ₦${(updatedUserData.balance || 0).toLocaleString()}\n`;
-    successMessage += `🔥 Current streak: ${currentStreak} days\n`;
-    successMessage += `📊 Total completions: ${updatedUserData.totalTaskCompletions}\n`;
-    successMessage += `🏆 Longest streak: ${updatedUserData.longestTaskStreak} days\n\n`;
-    successMessage += `🎉 *Excellent work! Keep the momentum going!* 🚀`;
+    successMessage += `• Correct: +₦${correctnessBonus.toLocaleString()}\n`;
+    successMessage += `• *Total: ₦${finalReward.toLocaleString()}*\n\n`;
+    successMessage += `💸 Balance: ₦${(updatedUserData.balance || 0).toLocaleString()}\n`;
+    successMessage += `🔥 Streak: ${currentStreak} days\n\n`;
+    
+    // Simple right/wrong indicators only (no correct answers shown)
+    successMessage += `📝 Results: `;
+    answerResults.forEach((result, index) => {
+      successMessage += result.isCorrect ? '✅' : '❌';
+    });
+    
+    successMessage += `\n\n🎉 Great work! 🚀`;
     
     await sock.sendMessage(from, {
       text: successMessage
@@ -749,13 +832,18 @@ async function isAuthorized(sock, from, sender) {
 // 🤖 MAIN PLUGIN HANDLER
 // =======================
 
-// MAIN PLUGIN HANDLER - FIXED VERSION
+// Main plugin handler function
 export default async function dailyTaskHandler(m, sock, config) {
   try {
     // Initialize database connection
     if (!db) {
       await initDatabase();
       await loadSettings();
+    }
+    
+    // Set group JID for auto-posting if this is a group message
+    if (m.key.remoteJid.endsWith('@g.us')) {
+      await setGroupJid(m.key.remoteJid);
     }
     
     // Auto-detect task submissions (not starting with prefix)
@@ -785,7 +873,6 @@ export default async function dailyTaskHandler(m, sock, config) {
         if (args.length === 1) {
           await showTaskMenu(reply, config.PREFIX);
         } else {
-          // FIXED: Pass sock and from to handleSubCommand
           await handleSubCommand(args[1], args.slice(2), { m, sock, config, senderId, from, reply });
         }
         break;
@@ -805,7 +892,7 @@ export default async function dailyTaskHandler(m, sock, config) {
   }
 }
 
-// FIXED: handleSubCommand now properly receives sock and from
+// Handle subcommands for the main task command
 async function handleSubCommand(subCommand, args, context) {
   switch (subCommand.toLowerCase()) {
     case 'post':
@@ -824,7 +911,6 @@ async function handleSubCommand(subCommand, args, context) {
       await handleQuestionsManager(context, args);
       break;
     case 'completions':
-      // FIXED: Now sock and from are available in context
       await handleCompletionsView(context, args);
       break;
     case 'records':
@@ -1334,9 +1420,9 @@ async function handleShowCategories(context) {
   await reply(categoriesMessage);
 }
 
-// FIXED: handleCompletionsView function
+// Handle completions view
 async function handleCompletionsView(context, args) {
-  const { reply, sock, from } = context; // Now sock and from are available
+  const { reply } = context;
   
   try {
     const date = args[0] || getCurrentDate();
@@ -1356,36 +1442,21 @@ async function handleCompletionsView(context, args) {
     if (task.completions.length === 0) {
       completionMessage += `❌ *No completions yet*\n`;
       completionMessage += `💪 Be the first to complete this task!`;
-      
-      // Send without mentions for no completions
-      await reply(completionMessage);
     } else {
       completionMessage += `✅ *Completed Members:*\n\n`;
       
-      // Create mentions array for completed users
-      const mentions = [];
-      
       task.completions.forEach((completion, index) => {
-        const userJid = completion.userId;
-        const userPhone = userJid.split('@')[0];
+        const userPhone = completion.userId.split('@')[0];
         const submittedTime = moment(completion.submittedAt).tz('Africa/Lagos').format('HH:mm');
         
-        mentions.push(userJid); // Add to mentions array
-        
-        // Use @userPhone format for proper mentioning
-        completionMessage += `${index + 1}. @${userPhone}\n`;
+        completionMessage += `${index + 1}. +${userPhone}\n`;
         completionMessage += `   ⏰ ${submittedTime} • 🔥 Streak: ${completion.streak} • 💰 ₦${completion.reward.toLocaleString()}\n\n`;
       });
       
       completionMessage += `🎉 *Great participation from the GIST HQ family!*`;
-      
-      // Send with mentions (like sendCompletionUpdate does)
-      await sock.sendMessage(from, {
-        text: completionMessage,
-        mentions: mentions
-      });
     }
     
+    await reply(completionMessage);
   } catch (error) {
     await reply('❌ *Error loading completions. Please try again.*');
     console.error('Completions view error:', error);
@@ -1509,19 +1580,24 @@ async function checkAndPostDailyTask(sock) {
       return;
     }
     
-    // Get group JID from settings (should be set when first used)
-    if (!taskSettings.groupJid) {
-      console.log('⚠️ No group JID set for auto-posting');
+    // Get all registered group JIDs
+    if (!taskSettings.groupJids || taskSettings.groupJids.length === 0) {
+      console.log('⚠️ No group JIDs registered for auto-posting');
       return;
     }
     
-    // Post daily task
-    const success = await postDailyTask(sock, taskSettings.groupJid);
-    
-    if (success) {
-      console.log(`✅ Daily task auto-posted at ${currentTime} for ${today}`);
-    } else {
-      console.log(`❌ Failed to auto-post daily task for ${today}`);
+    // Post daily task to all registered groups
+    for (const groupJid of taskSettings.groupJids) {
+      try {
+        const success = await postDailyTask(sock, groupJid);
+        if (success) {
+          console.log(`✅ Daily task auto-posted to ${groupJid} at ${currentTime}`);
+        } else {
+          console.log(`❌ Failed to auto-post daily task to ${groupJid}`);
+        }
+      } catch (error) {
+        console.error(`Error posting to group ${groupJid}:`, error);
+      }
     }
     
   } catch (error) {
@@ -1531,10 +1607,10 @@ async function checkAndPostDailyTask(sock) {
 
 // Set group JID for auto-posting (called when plugin is first used in a group)
 async function setGroupJid(groupJid) {
-  if (!taskSettings.groupJid || taskSettings.groupJid !== groupJid) {
-    taskSettings.groupJid = groupJid;
+  if (!taskSettings.groupJids.includes(groupJid)) {
+    taskSettings.groupJids.push(groupJid);
     await saveSettings();
-    console.log(`📝 Group JID set for auto-posting: ${groupJid}`);
+    console.log(`📝 Group JID added for auto-posting: ${groupJid}`);
   }
 }
 
