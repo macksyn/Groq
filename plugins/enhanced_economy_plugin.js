@@ -3526,10 +3526,24 @@ async function handleBusiness(context, args) {
           updatedBusinesses.push(business);
         });
         
+        // **MODIFIED BLOCK START**
         if (totalProfit === 0) {
-          await reply('⏰ *No profits to collect yet*\n\nCome back tomorrow for daily business profits!');
+          // Find the soonest time a business will be ready for collection
+          let soonestNextCollection = Infinity;
+          userBusinesses.forEach(business => {
+            const nextCollectionTime = new Date(business.lastCollected).getTime() + twentyFourHoursInMs;
+            if (nextCollectionTime < soonestNextCollection) {
+              soonestNextCollection = nextCollectionTime;
+            }
+          });
+
+          // Use the new helper function to get a specific time
+          const timeString = TimeHelpers.formatFutureTime(soonestNextCollection);
+          
+          await reply(`⏰ *No profits to collect yet*\n\nPlease come back *${timeString}*`);
           return;
         }
+        // **MODIFIED BLOCK END**
         
         await addMoney(senderId, totalProfit, 'Business profits', false);
         await updateUserData(senderId, {
