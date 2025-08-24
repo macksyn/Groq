@@ -726,25 +726,30 @@ async function broadcastNews(newsData, sock) {
 // Auto news generation
 async function autoGenerateNews(sock) {
   try {
+    // Only run if the system is enabled and has target groups
+    if (!newsSettings.enabled || newsSettings.targetGroups.length === 0) {
+      return;
+    }
+
     const now = Date.now();
     const lastNews = newsSettings.lastNewsTime || 0;
     const timeSinceLastNews = now - lastNews;
-    const newsInterval = (24 * 60 * 60 * 1000) / newsSettings.frequency; // Distribute throughout day
     
+    // Calculate the interval based on frequency (in milliseconds)
+    const newsInterval = (24 * 60 * 60 * 1000) / newsSettings.frequency;
+
+    // **FIXED LOGIC:** Check if the time since the last news is greater than the interval
     if (timeSinceLastNews >= newsInterval) {
-      const newsType = Math.random() < 0.6 ? 'crypto' : 'business'; // 60% crypto, 40% business
+      console.log('📰 Triggering automatic news generation...');
+      const newsType = Math.random() < 0.6 ? 'crypto' : 'business';
       
-      let newsData;
-      if (newsType === 'crypto') {
-        newsData = await generateCryptoNews();
-      } else {
-        newsData = await generateBusinessNews();
-      }
+      let newsData = (newsType === 'crypto') ? await generateCryptoNews() : await generateBusinessNews();
       
       if (newsData) {
         await broadcastNews(newsData, sock);
         newsSettings.lastNewsTime = now;
         await saveNewsSettings();
+        console.log(`✅ Automatic ${newsType} news sent. Next check in ~${(newsInterval / 60000).toFixed(0)} minutes.`);
       }
     }
   } catch (error) {
@@ -2534,6 +2539,7 @@ async function handleAdminSettings(context, args) {
       settingsText += `• *${context.config.PREFIX}eco admin take @user [amount]*\n`;
       settingsText += `• *${context.config.PREFIX}eco admin reset @user*\n`;
       settingsText += `• *${context.config.PREFIX}eco admin event [type]*\n`;
+      settingsText += `• *${context.config.PREFIX}eco admin news [command]*\n`;
       
       await reply(settingsText);
       return;
@@ -2708,143 +2714,140 @@ async function handleAdminSettings(context, args) {
         
         // NEWS ADMIN SWITCH COMMAND
 
-              case 'news':
-  if (args.length < 3) {
-    await reply(`📰 *News Admin Commands:*\n• *enable/disable* - Toggle news system\n• *groups add [group_id]* - Add target group\n• *groups remove [group_id]* - Remove target group\n• *groups list* - View target groups\n• *frequency [number]* - Set daily news frequency\n• *send crypto/business* - Manual news\n• *settings* - View current settings`);
-    return;
-  }
-  
-  const newsAction = args[2].toLowerCase();
-  
-  switch (newsAction) {
-    case 'enable':
-      newsSettings.enabled = true;
-      await saveNewsSettings();
-      await reply('📰 *News system enabled*');
-      break;
-      
-    case 'disable':
-      newsSettings.enabled = false;
-      await saveNewsSettings();
-      await reply('📰 *News system disabled*');
-      break;
-      
-    case 'groups':
-      if (args.length < 4) {
-        await reply('⚠️ *Usage: news groups [add/remove/list] [group_id]*');
-        return;
-      }
-      
-      const groupAction = args[3].toLowerCase();
-      
-      switch (groupAction) {
-        case 'add':
-          if (args.length < 5) {
-            await reply('⚠️ *Usage: economy admin news groups add [group_id]*');
-            return;
-          }
-          
-          const addGroupId = args[4];
-          if (!newsSettings.targetGroups.includes(addGroupId)) {
-            newsSettings.targetGroups.push(addGroupId);
-            await saveNewsSettings();
-            await reply(`✅ *Added group ${addGroupId} to news targets*`);
-          } else {
-            await reply('⚠️ *Group already in target list*');
-          }
-          break;
-          
-        case 'remove':
-          if (args.length < 5) {
-            await reply('⚠️ *Usage: economy admin news groups remove [group_id]*');
-            return;
-          }
-          
-          const removeGroupId = args[4];
-          const index = newsSettings.targetGroups.indexOf(removeGroupId);
-          if (index > -1) {
-            newsSettings.targetGroups.splice(index, 1);
-            await saveNewsSettings();
-            await reply(`✅ *Removed group ${removeGroupId} from news targets*`);
-          } else {
-            await reply('⚠️ *Group not in target list*');
-          }
-          break;
-          
-        case 'list':
-          if (newsSettings.targetGroups.length === 0) {
-            await reply('📰 *No target groups configured*');
-          } else {
-            const groupList = newsSettings.targetGroups.join('\n• ');
-            await reply(`📰 *News Target Groups:*\n• ${groupList}`);
-          }
-          break;
-          
-        default:
-          await reply('❓ *Unknown groups command*');
-      }
-      break;
-      
-    case 'frequency':
-      if (args.length < 4) {
-        await reply('⚠️ *Usage: economy admin news frequency [1-10]*');
-        return;
-      }
-      
-      const freq = parseInt(args[3]);
-      if (isNaN(freq) || freq < 1 || freq > 10) {
-        await reply('⚠️ *Frequency must be between 1-10 news per day*');
-        return;
-      }
-      
-      newsSettings.frequency = freq;
-      await saveNewsSettings();
-      await reply(`📰 *News frequency set to ${freq} per day*`);
-      break;
-      
-    case 'send':
-      if (args.length < 4) {
-        await reply('⚠️ *Usage: economy admin news send [crypto/business]*');
-        return;
-      }
-      
-      const sendType = args[3].toLowerCase();
-      let manualNews;
-      
-      if (sendType === 'crypto') {
-        manualNews = await generateCryptoNews();
-      } else if (sendType === 'business') {
-        manualNews = await generateBusinessNews();
-      } else {
-        await reply('⚠️ *Type must be crypto or business*');
-        return;
-      }
-      
-      if (manualNews) {
-        await broadcastNews(manualNews, context.sock);
-        await reply('📰 *Manual news sent to all target groups*');
-      } else {
-        await reply('❌ *Error generating news*');
-      }
-      break;
-      
-    case 'settings':
-      const settingsText = `📰 *NEWS SYSTEM SETTINGS* 📰\n\n` +
-                          `🔘 *Status:* ${newsSettings.enabled ? '✅ Enabled' : '❌ Disabled'}\n` +
-                          `📊 *Frequency:* ${newsSettings.frequency} per day\n` +
-                          `🎯 *Target Groups:* ${newsSettings.targetGroups.length}\n` +
-                          `💥 *Crypto Impact:* ${(newsSettings.cryptoImpactRange.min * 100).toFixed(0)}-${(newsSettings.cryptoImpactRange.max * 100).toFixed(0)}%\n` +
-                          `🏢 *Business Impact:* ${(newsSettings.businessImpactRange.min * 100).toFixed(0)}-${(newsSettings.businessImpactRange.max * 100).toFixed(0)}%\n` +
-                          `⏰ *Last News:* ${newsSettings.lastNewsTime ? new Date(newsSettings.lastNewsTime).toLocaleString() : 'Never'}`;
-      
-      await reply(settingsText);
-      break;
-      
-    default:
-      await reply(`❓ *Unknown news command: ${newsAction}*\n\nUse *${context.config.PREFIX}economy admin news* to see available commands.`);
-  }
-  break;
+   case 'news': {
+        const newsAction = args[1] ? args[1].toLowerCase() : null;
 
+        if (!newsAction) {
+          await reply(`📰 *News Admin Commands:*\n• *enable/disable* - Toggle news system\n• *groups add [group_id]* - Add target group\n• *groups remove [group_id]* - Remove target group\n• *groups list* - View target groups\n• *frequency [number]* - Set daily news frequency\n• *send crypto/business* - Manual news\n• *settings* - View current settings`);
+          return;
+        }
+
+        switch (newsAction) {
+          case 'enable':
+            newsSettings.enabled = true;
+            await saveNewsSettings();
+            await reply('📰 *News system enabled*');
+            break;
+            
+          case 'disable':
+            newsSettings.enabled = false;
+            await saveNewsSettings();
+            await reply('📰 *News system disabled*');
+            break;
+            
+          case 'groups': {
+            const groupAction = args[2] ? args[2].toLowerCase() : null;
+            if (!groupAction) {
+              await reply('⚠️ *Usage: ...news groups [add/remove/list]*');
+              return;
+            }
+
+            switch (groupAction) {
+              case 'add': {
+                const addGroupId = args[3];
+                if (!addGroupId) {
+                  await reply('⚠️ *Usage: ...news groups add [group_id]*\n\n💡Tip: The group ID is usually in the group info.');
+                  return;
+                }
+                
+                if (!newsSettings.targetGroups.includes(addGroupId)) {
+                  newsSettings.targetGroups.push(addGroupId);
+                  await saveNewsSettings();
+                  await reply(`✅ *Added group ${addGroupId} to news targets*`);
+                } else {
+                  await reply('⚠️ *Group already in target list*');
+                }
+                break;
+              }
+                
+              case 'remove': {
+                const removeGroupId = args[3];
+                if (!removeGroupId) {
+                  await reply('⚠️ *Usage: ...news groups remove [group_id]*');
+                  return;
+                }
+                
+                const index = newsSettings.targetGroups.indexOf(removeGroupId);
+                if (index > -1) {
+                  newsSettings.targetGroups.splice(index, 1);
+                  await saveNewsSettings();
+                  await reply(`✅ *Removed group ${removeGroupId} from news targets*`);
+                } else {
+                  await reply('⚠️ *Group not in target list*');
+                }
+                break;
+              }
+                
+              case 'list':
+                if (newsSettings.targetGroups.length === 0) {
+                  await reply('📰 *No target groups configured*');
+                } else {
+                  const groupList = newsSettings.targetGroups.join('\n• ');
+                  await reply(`📰 *News Target Groups:*\n• ${groupList}`);
+                }
+                break;
+                
+              default:
+                await reply('❓ *Unknown groups command. Use add, remove, or list.*');
+            }
+            break;
+          }
+            
+          case 'frequency': {
+            const freq = parseInt(args[2]);
+            if (isNaN(freq) || freq < 1 || freq > 10) {
+              await reply('⚠️ *Frequency must be between 1-10 news per day*');
+              return;
+            }
+            
+            newsSettings.frequency = freq;
+            await saveNewsSettings();
+            await reply(`📰 *News frequency set to ${freq} per day*`);
+            break;
+          }
+            
+          case 'send': {
+            const sendType = args[2] ? args[2].toLowerCase() : null;
+            if (!sendType || !['crypto', 'business'].includes(sendType)) {
+              await reply('⚠️ *Usage: ...news send [crypto/business]*');
+              return;
+            }
+
+            if (newsSettings.targetGroups.length === 0) {
+              await reply('❌ *Cannot send news: No target groups have been added.*');
+              return;
+            }
+            
+            let manualNews = sendType === 'crypto' ? await generateCryptoNews() : await generateBusinessNews();
+            
+            if (manualNews) {
+              await broadcastNews(manualNews, context.sock);
+              await reply('📰 *Manual news sent to all target groups*');
+            } else {
+              await reply('❌ *Error generating news*');
+            }
+            break;
+          }
+            
+          case 'settings': {
+            const settingsText = `📰 *NEWS SYSTEM SETTINGS* 📰\n\n` +
+                                `🔘 *Status:* ${newsSettings.enabled ? '✅ Enabled' : '❌ Disabled'}\n` +
+                                `📊 *Frequency:* ${newsSettings.frequency} per day\n` +
+                                `🎯 *Target Groups:* ${newsSettings.targetGroups.length}\n` +
+                                `💥 *Crypto Impact:* ${(newsSettings.cryptoImpactRange.min * 100).toFixed(0)}-${(newsSettings.cryptoImpactRange.max * 100).toFixed(0)}%\n` +
+                                `🏢 *Business Impact:* ${(newsSettings.businessImpactRange.min * 100).toFixed(0)}-${(newsSettings.businessImpactRange.max * 100).toFixed(0)}%\n` +
+                                `⏰ *Last News:* ${newsSettings.lastNewsTime ? new Date(newsSettings.lastNewsTime).toLocaleString('en-NG', { timeZone: 'Africa/Lagos' }) : 'Never'}`;
+            
+            await reply(settingsText);
+            break;
+          }
+            
+          default:
+            await reply(`❓ *Unknown news command: ${newsAction}*`);
+        }
+        break;
+      }
+        
       default:
         await reply('❓ *Unknown admin command*');
     }
