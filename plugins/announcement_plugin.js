@@ -72,7 +72,7 @@ const defaultSettings = {
   cooldownMinutes: 5,
   includeTimestamp: true,
   includeFooter: true,
-  customHeader: '🔊 OFFICIAL ANNOUNCEMENT 🔊',
+  customHeader: '🔊 *OFFICIAL ANNOUNCEMENT* 🔊',
   customFooter: '━━━━━━━━━━━━━━━━━━━━\n🏢 GIST HQ Management',
   silentNotifications: true,
   saveHistory: true
@@ -212,8 +212,7 @@ function formatAnnouncementMessage(content, settings, groupName = null) {
   
   // Timestamp
   if (settings.includeTimestamp) {
-    message += `📅 Posted: ${timeStr}\n`;
-    message += `👥 All members have been notified\n\n`;
+    message += `📅 Posted: ${timeStr}`;
   }
   
   // Footer
@@ -289,9 +288,6 @@ async function postAnnouncement(sock, groupJid, content, senderId, senderName = 
     
     console.log(`📢 Announcement posted to ${groupName} by ${senderId}`);
     
-    return {
-      success: true,
-      message: `✅ Announcement posted successfully!\n👥 ${mentions.length} members notified`
     };
     
   } catch (error) {
