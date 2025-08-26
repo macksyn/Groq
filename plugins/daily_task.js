@@ -1,4 +1,4 @@
-// plugins/daily_task.js - Enhanced Daily Task System with Fixed Answer Validation
+// plugins/daily_task.js - Enhanced Daily Task System
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
@@ -72,7 +72,7 @@ const defaultSettings = {
 
 let taskSettings = { ...defaultSettings };
 
-// Enhanced question database with comprehensive answers
+// Enhanced question database
 const questionDatabase = {
   business: [
     { question: "What business can you start with just ₦20,000?", correctAnswer: "food vending, retail, digital services, online tutoring, photography" },
@@ -80,16 +80,7 @@ const questionDatabase = {
     { question: "What does ROI stand for in business?", correctAnswer: "return on investment" },
     { question: "What is the first step in starting any business?", correctAnswer: "market research, business planning, idea validation" },
     { question: "Name one way to fund your startup business", correctAnswer: "personal savings, loans, investors, grants, crowdfunding" },
-    { question: "How can you market your business for free?", correctAnswer: "social media, networking, word of mouth, content marketing" },
-    { question: "What is customer retention?", correctAnswer: "keeping existing customers engaged and loyal, maintaining customer relationships" },
-    { question: "Name one digital skill that's in high demand", correctAnswer: "web development, digital marketing, data analysis, ui design, seo" },
-    { question: "What does MVP mean in business?", correctAnswer: "minimum viable product" },
-    { question: "Name one way to reduce business costs", correctAnswer: "automation, bulk purchasing, remote work, outsourcing, energy efficiency" },
-    { question: "What business idea have you always wanted to try?", correctAnswer: "any business idea, personal answer" },
-    { question: "If you had ₦100,000 today, what business would you start?", correctAnswer: "any business idea, personal answer" },
-    { question: "What skill do you have that others might pay for?", correctAnswer: "any skill or talent, personal answer" },
-    { question: "Name one successful Nigerian entrepreneur you admire", correctAnswer: "aliko dangote, tony elumelu, folorunsho alakija, mike adenuga, jim ovia" },
-    { question: "What's the biggest business challenge in Nigeria today?", correctAnswer: "power supply, funding, corruption, inflation, infrastructure" }
+    { question: "What business idea have you always wanted to try?", correctAnswer: "any business idea, personal answer" }
   ],
   
   general: [
@@ -107,13 +98,7 @@ const questionDatabase = {
     { question: "Who wrote the Nigerian national anthem?", correctAnswer: "benedict elide odiase, john ilechukwu" },
     { question: "What does CPU stand for?", correctAnswer: "central processing unit" },
     { question: "How many continents are there?", correctAnswer: "7" },
-    { question: "What is the longest river in the world?", correctAnswer: "nile river, nile" },
-    // Personal questions
-    { question: "Which state in Nigeria are you from?", correctAnswer: "any nigerian state, personal answer" },
-    { question: "What is your favorite Nigerian food?", correctAnswer: "any nigerian food, personal answer" },
-    { question: "Name one place in Nigeria you'd love to visit", correctAnswer: "any place in nigeria, personal answer" },
-    { question: "What's your favorite color and why?", correctAnswer: "any color, personal answer" },
-    { question: "If you could meet any historical figure, who would it be?", correctAnswer: "any historical figure, personal answer" }
+    { question: "What is the longest river in the world?", correctAnswer: "nile river, nile" }
   ],
   
   hygiene: [
@@ -122,19 +107,7 @@ const questionDatabase = {
     { question: "How often should you change your toothbrush?", correctAnswer: "every 3 months, 3 months" },
     { question: "What is the recommended time for daily exercise?", correctAnswer: "30 minutes, 30" },
     { question: "How many glasses of water should you drink daily?", correctAnswer: "8, eight" },
-    { question: "What should you do before eating?", correctAnswer: "wash your hands, wash hands" },
-    { question: "How many hours of sleep do adults need daily?", correctAnswer: "7-9, 7 to 9, 8" },
-    { question: "What is the best way to prevent body odor?", correctAnswer: "regular bathing, deodorant, clean clothes, good hygiene" },
-    { question: "How often should you clip your nails?", correctAnswer: "weekly, every week" },
-    { question: "Why should you wash fruits before eating?", correctAnswer: "remove germs, remove dirt, remove chemicals, hygiene" },
-    { question: "How often should you shower?", correctAnswer: "daily, every day, once a day" },
-    { question: "What's the best time to brush your teeth?", correctAnswer: "morning and night, after meals, twice daily" },
-    // Personal hygiene questions
-    { question: "What time do you usually wake up in the morning?", correctAnswer: "any time, personal answer" },
-    { question: "How many times do you bathe in a day?", correctAnswer: "any number, personal answer" },
-    { question: "What's your favorite way to stay fit?", correctAnswer: "any exercise, personal answer" },
-    { question: "Do you prefer morning or evening showers?", correctAnswer: "morning, evening, personal preference" },
-    { question: "What healthy habit are you trying to build?", correctAnswer: "any healthy habit, personal answer" }
+    { question: "What should you do before eating?", correctAnswer: "wash your hands, wash hands" }
   ],
   
   current_affairs: [
@@ -143,19 +116,7 @@ const questionDatabase = {
     { question: "Name Nigeria's current Vice President", correctAnswer: "kashim shettima, shettima" },
     { question: "What does NYSC stand for?", correctAnswer: "national youth service corps" },
     { question: "Which states are known for oil production in Nigeria?", correctAnswer: "rivers, delta, akwa ibom, bayelsa" },
-    { question: "What is Nigeria's current minimum wage?", correctAnswer: "70000, 70,000, seventy thousand" },
-    { question: "Name one challenge facing Nigerian youth", correctAnswer: "unemployment, inflation, poor education, corruption" },
-    { question: "What major tech companies have invested in Nigeria recently?", correctAnswer: "google, microsoft, meta, amazon" },
-    { question: "When were new naira notes introduced?", correctAnswer: "2022, 2023" },
-    { question: "What is Nigeria's estimated population?", correctAnswer: "220 million, 200 million, over 200 million" },
-    { question: "What does INEC stand for?", correctAnswer: "independent national electoral commission" },
-    { question: "Name Nigeria's current capital territory", correctAnswer: "fct, federal capital territory, abuja" },
-    // Personal opinion questions
-    { question: "What's your opinion on Nigeria's current economic situation?", correctAnswer: "any opinion, personal answer" },
-    { question: "Which Nigerian news source do you trust most?", correctAnswer: "any news source, personal answer" },
-    { question: "What change would you like to see in Nigeria?", correctAnswer: "any positive change, personal answer" },
-    { question: "Do you think Nigeria is heading in the right direction?", correctAnswer: "yes, no, personal opinion" },
-    { question: "What's the biggest problem in your community?", correctAnswer: "any community problem, personal answer" }
+    { question: "What is Nigeria's current minimum wage?", correctAnswer: "70000, 70,000, seventy thousand" }
   ],
   
   science: [
@@ -164,21 +125,7 @@ const questionDatabase = {
     { question: "What does DNA stand for?", correctAnswer: "deoxyribonucleic acid" },
     { question: "How many bones are in the human body?", correctAnswer: "206" },
     { question: "What is the chemical symbol for water?", correctAnswer: "h2o" },
-    { question: "Which organ pumps blood in the human body?", correctAnswer: "heart" },
-    { question: "How many chambers does a human heart have?", correctAnswer: "4, four" },
-    { question: "What is the largest organ in the human body?", correctAnswer: "skin" },
-    { question: "Which gas makes up most of Earth's atmosphere?", correctAnswer: "nitrogen" },
-    { question: "How many teeth does an adult human have?", correctAnswer: "32" },
-    { question: "What is the speed of light?", correctAnswer: "300000000, 3x10^8, 299792458" },
-    { question: "What is the smallest unit of matter?", correctAnswer: "atom" },
-    { question: "Which scientist developed the theory of relativity?", correctAnswer: "albert einstein, einstein" },
-    { question: "What is photosynthesis?", correctAnswer: "plants making food from sunlight, plants converting light to energy" },
-    // Personal science questions
-    { question: "What's your favorite subject in school?", correctAnswer: "any subject, personal answer" },
-    { question: "Do you believe in climate change?", correctAnswer: "yes, no, personal opinion" },
-    { question: "What technology do you use most daily?", correctAnswer: "any technology, personal answer" },
-    { question: "Would you like to travel to space?", correctAnswer: "yes, no, personal answer" },
-    { question: "What's the most amazing scientific fact you know?", correctAnswer: "any fact, personal answer" }
+    { question: "Which organ pumps blood in the human body?", correctAnswer: "heart" }
   ],
   
   fun_facts: [
@@ -187,26 +134,7 @@ const questionDatabase = {
     { question: "What is the tallest building in the world?", correctAnswer: "burj khalifa" },
     { question: "Which country has the most time zones?", correctAnswer: "france" },
     { question: "What is the most spoken language in the world?", correctAnswer: "mandarin chinese, chinese, mandarin" },
-    { question: "How many strings does a standard guitar have?", correctAnswer: "6, six" },
-    { question: "What is the fastest land animal?", correctAnswer: "cheetah" },
-    { question: "How many colors are in a rainbow?", correctAnswer: "7, seven" },
-    { question: "Which planet is known as the Red Planet?", correctAnswer: "mars" },
-    { question: "What is the largest mammal in the world?", correctAnswer: "blue whale, whale" },
-    { question: "How many days are in a year?", correctAnswer: "365" },
-    { question: "What is the hardest natural substance?", correctAnswer: "diamond" },
-    { question: "Which continent has the most countries?", correctAnswer: "africa" },
-    { question: "What is the largest bird in the world?", correctAnswer: "ostrich" },
-    // Personal fun questions
-    { question: "What's your favorite movie of all time?", correctAnswer: "any movie, personal answer" },
-    { question: "If you could have any superpower, what would it be?", correctAnswer: "any superpower, personal answer" },
-    { question: "What's your dream vacation destination?", correctAnswer: "any place, personal answer" },
-    { question: "Are you a morning person or night owl?", correctAnswer: "morning person, night owl, personal preference" },
-    { question: "What's your biggest fear?", correctAnswer: "any fear, personal answer" },
-    { question: "If you won ₦10 million today, what would you do first?", correctAnswer: "any reasonable answer, personal answer" },
-    { question: "What's your favorite way to relax after a stressful day?", correctAnswer: "any method, personal answer" },
-    { question: "Do you prefer cats or dogs?", correctAnswer: "cats, dogs, both, neither" },
-    { question: "What's one thing you can't live without?", correctAnswer: "any item, personal answer" },
-    { question: "What makes you laugh the most?", correctAnswer: "any answer, personal answer" }
+    { question: "How many strings does a standard guitar have?", correctAnswer: "6, six" }
   ]
 };
 
@@ -284,24 +212,23 @@ async function initializeQuestionDatabase() {
   }
 }
 
-// Enhanced answer validation with better pattern matching
+// Enhanced answer validation
 function validateAnswerFormat(text) {
   const answers = [];
   
-  // Primary pattern: Look for "Answer:" followed by actual answer text
+  // Look for "Answer:" pattern
   const answerPattern = /\*Answer:\*\s*([^\n\r*]+)/gi;
   let match;
   
   while ((match = answerPattern.exec(text)) !== null) {
     const answer = match[1].trim();
     
-    // Only accept non-empty answers that aren't just the template
     if (answer.length > 0 && !answer.toLowerCase().includes('answer:') && answer !== '*Answer:*') {
       answers.push(answer);
     }
   }
   
-  // Fallback: Support old numbered format
+  // Fallback: numbered format
   if (answers.length === 0) {
     const numberedPattern = /(\d+)\.\s*([^0-9\n]+?)(?=\s*\d+\.|$)/g;
     while ((match = numberedPattern.exec(text)) !== null) {
@@ -309,7 +236,6 @@ function validateAnswerFormat(text) {
       let answer = match[2].trim();
       
       if (answer.length > 2) {
-        // Handle "Question? Answer" pattern - extract answer part
         const sentences = answer.split(/[?.!]/);
         if (sentences.length > 1) {
           const lastSentence = sentences[sentences.length - 1].trim();
@@ -318,7 +244,6 @@ function validateAnswerFormat(text) {
           }
         }
         
-        // Check if still looks like question
         const questionKeywords = ['what', 'how', 'when', 'where', 'why', 'which', 'who', 'can you', 'do you', 'stand for', 'many', '?'];
         const lowerAnswer = answer.toLowerCase();
         const isQuestion = questionKeywords.some(keyword => 
@@ -335,26 +260,25 @@ function validateAnswerFormat(text) {
   return answers;
 }
 
-// Enhanced answer correctness checking with flexible matching
+// Enhanced answer correctness checking
 function checkAnswerCorrectness(userAnswer, correctAnswer) {
   if (!userAnswer || !correctAnswer) return false;
   
   const userLower = userAnswer.toLowerCase().trim();
   const correctLower = correctAnswer.toLowerCase().trim();
   
-  // For personal questions, accept any reasonable answer
+  // For personal questions
   if (correctLower.includes('personal answer') || correctLower.includes('any ')) {
-    return userAnswer.length >= 2; // Any answer with at least 2 characters
+    return userAnswer.length >= 2;
   }
   
   // Exact match
   if (userLower === correctLower) return true;
   
-  // Handle multiple acceptable answers (comma-separated)
+  // Multiple acceptable answers
   if (correctLower.includes(',')) {
     const acceptableAnswers = correctLower.split(',').map(ans => ans.trim());
     return acceptableAnswers.some(ans => {
-      // Check exact match, partial match, or contains match
       return userLower === ans || 
              userLower.includes(ans) || 
              ans.includes(userLower) ||
@@ -362,56 +286,36 @@ function checkAnswerCorrectness(userAnswer, correctAnswer) {
     });
   }
   
-  // Partial matching for longer answers
+  // Partial matching
   if (userLower.includes(correctLower) || correctLower.includes(userLower)) {
     return true;
   }
   
-  // Number matching (extract and compare numbers)
+  // Number matching
   const userNumbers = userAnswer.match(/\d+/g);
   const correctNumbers = correctAnswer.match(/\d+/g);
   if (userNumbers && correctNumbers && userNumbers[0] === correctNumbers[0]) {
     return true;
   }
   
-  // Handle common abbreviations and variations
+  // Common abbreviations
   const commonAbbreviations = {
     'gps': 'global positioning system',
     'www': 'world wide web',
     'roi': 'return on investment',
-    'mvp': 'minimum viable product',
     'cbn': 'central bank of nigeria',
     'nysc': 'national youth service corps',
     'dna': 'deoxyribonucleic acid',
     'cpu': 'central processing unit',
-    'inec': 'independent national electoral commission',
-    'fct': 'federal capital territory',
     'co2': 'carbon dioxide',
     'h2o': 'water'
   };
   
-  // Check if user provided abbreviation or full form
   for (const [abbrev, fullForm] of Object.entries(commonAbbreviations)) {
     if (correctLower.includes(abbrev) && userLower.includes(fullForm)) {
       return true;
     }
     if (correctLower.includes(fullForm) && userLower.includes(abbrev)) {
-      return true;
-    }
-  }
-  
-  // Handle word variations and synonyms
-  const synonyms = {
-    'big': ['large', 'huge', 'massive'],
-    'small': ['tiny', 'little', 'mini'],
-    'fast': ['quick', 'rapid', 'speedy'],
-    'slow': ['gradual', 'sluggish'],
-    'good': ['great', 'excellent', 'fine'],
-    'bad': ['terrible', 'awful', 'poor']
-  };
-  
-  for (const [word, alternatives] of Object.entries(synonyms)) {
-    if (correctLower.includes(word) && alternatives.some(alt => userLower.includes(alt))) {
       return true;
     }
   }
@@ -595,7 +499,7 @@ async function initUser(userId) {
   return await unifiedUserManager.initUser(userId);
 }
 
-// Enhanced task submission processing with detailed feedback
+// Enhanced task submission processing
 async function processTaskSubmission(m, sock, config) {
   try {
     const messageText = m.body || '';
@@ -639,7 +543,6 @@ async function processTaskSubmission(m, sock, config) {
       const userAnswer = answers[i] || '';
       const isCorrect = checkAnswerCorrectness(userAnswer, question.correctAnswer);
       
-      // Debug logging
       console.log(`Q${i+1}: "${question.question}"`);
       console.log(`User: "${userAnswer}" | Expected: "${question.correctAnswer}" | Correct: ${isCorrect}`);
       
@@ -708,7 +611,7 @@ async function processTaskSubmission(m, sock, config) {
     
     const updatedUserData = await getUserData(senderId);
     
-    // Enhanced success message with detailed breakdown
+    // Enhanced success message
     let successMessage = `✅ *TASK COMPLETED!* ✅\n\n`;
     successMessage += `📊 *Your Score:* ${correctCount}/${todayTask.questions.length} correct\n\n`;
     
@@ -749,9 +652,6 @@ async function processTaskSubmission(m, sock, config) {
     
     await sock.sendMessage(from, { text: successMessage }, { quoted: m });
     
-    // Update completion list
-    await sendCompletionUpdate(sock, from, today);
-    
     return true;
   } catch (error) {
     console.error('Error processing task submission:', error);
@@ -759,62 +659,6 @@ async function processTaskSubmission(m, sock, config) {
       text: `❌ *Error processing your submission.*\n\nPlease try again or contact an admin.`
     }, { quoted: m });
     return false;
-  }
-}
-
-async function sendCompletionUpdate(sock, groupJid, date = null) {
-  try {
-    const targetDate = date || getCurrentDate();
-    
-    const todayTask = await db.collection(COLLECTIONS.DAILY_TASKS).findOne({ date: targetDate });
-    if (!todayTask) return;
-    
-    const completions = todayTask.completions || [];
-    const totalMembers = await getGroupMembers(sock, groupJid);
-    
-    let updateMessage = `📊 *GIST HQ - TASK COMPLETION STATUS* 📊\n\n`;
-    updateMessage += `📅 Date: ${targetDate}\n`;
-    updateMessage += `🎯 Theme: ${todayTask.theme}\n`;
-    updateMessage += `👥 Progress: ${completions.length}/${totalMembers.length} members\n\n`;
-    
-    if (completions.length === 0) {
-      updateMessage += `❌ *No completions yet*\n`;
-      updateMessage += `💪 Be the first to complete today's task!`;
-    } else {
-      updateMessage += `✅ *COMPLETED TODAY:*\n\n`;
-      
-      const mentions = [];
-      
-      completions.forEach((completion, index) => {
-        const userJid = completion.userId;
-        const userPhone = userJid.split('@')[0];
-        mentions.push(userJid);
-        
-        updateMessage += `${index + 1}. @${userPhone}`;
-        updateMessage += ` - ${completion.correctCount}/5 correct`;
-        
-        if (completion.streak > 1) {
-          updateMessage += ` - 🔥 ${completion.streak} days`;
-        }
-        
-        updateMessage += '\n';
-      });
-      
-      const remaining = totalMembers.length - completions.length;
-      if (remaining > 0) {
-        updateMessage += `\n💪 *Keep it up! ${remaining} members still pending...*`;
-      } else {
-        updateMessage += `\n🎉 *Amazing! Everyone has completed today's task!*`;
-      }
-      
-      await sock.sendMessage(groupJid, { text: updateMessage, mentions: mentions });
-      return;
-    }
-    
-    await sock.sendMessage(groupJid, { text: updateMessage });
-    
-  } catch (error) {
-    console.error('Error sending completion update:', error);
   }
 }
 
@@ -974,6 +818,30 @@ async function handleSubCommand(subCommand, args, context) {
   }
 }
 
+async function showTaskMenu(reply, prefix) {
+  const menuText = `🎯 *DAILY TASK SYSTEM* 🎯\n\n` +
+                  `📊 *User Commands:*\n` +
+                  `• *current* - View today's task\n` +
+                  `• *stats* - View your statistics\n` +
+                  `• *records* - View completion history\n` +
+                  `• *completions* - See who completed today\n\n` +
+                  `👑 *Admin Commands:*\n` +
+                  `• *post* - Post today's task manually\n` +
+                  `• *settings* - System settings\n\n` +
+                  `🤖 *How to Submit Answers:*\n` +
+                  `1️⃣ Copy the daily task message\n` +
+                  `2️⃣ Fill in answers after each "Answer:"\n` +
+                  `3️⃣ Send the completed message\n\n` +
+                  `📅 *Daily Themes:*\n` +
+                  `Mon: Business • Tue: General • Wed: Hygiene\n` +
+                  `Thu: Current Affairs • Fri: Science • Sat: Fun Facts • Sun: Mixed\n\n` +
+                  `💰 *Rewards:* ₦${taskSettings.baseReward.toLocaleString()} base + ₦${taskSettings.correctnessBonus} per correct answer\n` +
+                  `🔥 *Streak Bonus:* +${Math.floor((taskSettings.streakBonusMultiplier - 1) * 100)}% after ${taskSettings.minStreakForBonus} days\n\n` +
+                  `💡 *Usage:* ${prefix}task [command]`;
+  
+  await reply(menuText);
+}
+
 async function handlePostTask(context) {
   const { reply, senderId, sock, m, from } = context;
   
@@ -1115,7 +983,7 @@ async function handleTaskStats(context) {
 }
 
 async function handleTaskSettings(context, args) {
-  const { reply, senderId, sock, m, from, config } = context;
+  const { reply, senderId, sock, from, config } = context;
   
   const isAdminUser = await isAuthorized(sock, from, senderId);
   if (!isAdminUser) {
@@ -1148,9 +1016,7 @@ async function handleTaskSettings(context, args) {
       settingsMessage += `• \`${config.PREFIX}task settings bonus 150\`\n`;
       settingsMessage += `• \`${config.PREFIX}task settings streak on/off\`\n`;
       settingsMessage += `• \`${config.PREFIX}task settings autopost on/off\`\n`;
-      settingsMessage += `• \`${config.PREFIX}task settings posttime 09:00\`\n`;
-      settingsMessage += `• \`${config.PREFIX}task settings questions 3\`\n`;
-      settingsMessage += `• \`${config.PREFIX}task settings deadline 22:00\``;
+      settingsMessage += `• \`${config.PREFIX}task settings posttime 09:00\``;
       
       await reply(settingsMessage);
       return;
@@ -1225,33 +1091,8 @@ async function handleTaskSettings(context, args) {
         }
         break;
         
-      case 'questions':
-        if (!value || isNaN(value) || parseInt(value) < 1 || parseInt(value) > 10) {
-          responseText = `⚠️ Invalid number. Use: ${config.PREFIX}task settings questions 5 (1-10)`;
-        } else {
-          taskSettings.questionCount = parseInt(value);
-          await saveSettings();
-          responseText = `✅ Questions per task set to ${parseInt(value)}`;
-        }
-        break;
-        
-      case 'deadline':
-        if (!value || !/^\d{2}:\d{2}$/.test(value)) {
-          responseText = `⚠️ Invalid time format. Use: ${config.PREFIX}task settings deadline 23:59`;
-        } else {
-          const [hours, minutes] = value.split(':');
-          if (parseInt(hours) > 23 || parseInt(minutes) > 59) {
-            responseText = "⚠️ Invalid time. Hours: 00-23, Minutes: 00-59";
-          } else {
-            taskSettings.submissionDeadline = value;
-            await saveSettings();
-            responseText = `✅ Submission deadline set to ${value}`;
-          }
-        }
-        break;
-        
       default:
-        responseText = `⚠️ Unknown setting: *${setting}*\n\nAvailable settings:\n• reward\n• bonus\n• streak\n• autopost\n• posttime\n• questions\n• deadline`;
+        responseText = `⚠️ Unknown setting: *${setting}*\n\nAvailable settings:\n• reward\n• bonus\n• streak\n• autopost\n• posttime`;
     }
     
     await reply(responseText);
@@ -1357,15 +1198,6 @@ async function handleTaskRecords(context, args) {
       recordsText += `   ⏰ ${moment(record.submittedAt).tz('Africa/Lagos').format('DD/MM/YY HH:mm')}\n\n`;
     });
     
-    // Calculate personal statistics
-    const totalRewards = records.reduce((sum, r) => sum + r.totalRewards, 0);
-    const avgScore = records.reduce((sum, r) => sum + r.correctCount, 0) / records.length;
-    const bestStreak = Math.max(...records.map(r => r.streak));
-    
-    recordsText += `📈 *Your Performance:*\n`;
-    recordsText += `• Average score: ${(avgScore / taskSettings.questionCount * 100).toFixed(1)}%\n`;
-    recordsText += `• Best streak: ${bestStreak} days\n`;
-    recordsText += `• Total from tasks: ₦${totalRewards.toLocaleString()}\n\n`;
     recordsText += `💡 *Use: ${config.PREFIX}task records [number]* for more (max 50)`;
     
     await reply(recordsText);
@@ -1442,20 +1274,4 @@ export {
   checkAndPostDailyTask,
   setGroupJid,
   taskSettings
-};\n` +
-                  `👑 *Admin Commands:*\n` +
-                  `• *post* - Post today's task manually\n` +
-                  `• *settings* - System settings\n\n` +
-                  `🤖 *How to Submit Answers:*\n` +
-                  `1️⃣ Copy the daily task message\n` +
-                  `2️⃣ Fill in answers after each "Answer:"\n` +
-                  `3️⃣ Send the completed message\n\n` +
-                  `📅 *Daily Themes:*\n` +
-                  `Mon: Business • Tue: General • Wed: Hygiene\n` +
-                  `Thu: Current Affairs • Fri: Science • Sat: Fun Facts • Sun: Mixed\n\n` +
-                  `💰 *Rewards:* ₦${taskSettings.baseReward.toLocaleString()} base + ₦${taskSettings.correctnessBonus} per correct answer\n` +
-                  `🔥 *Streak Bonus:* +${Math.floor((taskSettings.streakBonusMultiplier - 1) * 100)}% after ${taskSettings.minStreakForBonus} days\n\n` +
-                  `💡 *Usage:* ${prefix}task [command]`;
-  
-  await reply(menuText);
-}
+};
