@@ -6,9 +6,9 @@ import { unifiedUserManager } from '../lib/pluginIntegration.js';
 // Plugin information export
 export const info = {
   name: 'Daily Task System',
-  version: '2.0.0',
+  version: '2.1.0', // Updated version to reflect scheduler integration
   author: 'Bot Developer',
-  description: 'Enhanced daily quiz task system with improved answer validation, streaks, and MongoDB persistence',
+  description: 'Enhanced daily quiz task system with self-contained scheduler, improved answer validation, streaks, and MongoDB persistence',
   commands: [
     {
       name: 'task',
@@ -738,12 +738,72 @@ async function isAuthorized(sock, from, sender) {
   }
 }
 
+// =======================================================================
+// NEW: INTERNAL SCHEDULER FOR AUTOMATIC TASK POSTING
+// =======================================================================
+
+class TaskScheduler {
+  constructor(sock) {
+    this.sock = sock;
+    this.interval = null;
+    this.running = false;
+  }
+
+  start() {
+    if (this.running) return;
+    this.running = true;
+    console.log('⏰ Daily Task scheduler started');
+
+    // Check every minute if it's time to post.
+    this.interval = setInterval(() => {
+      checkAndPostDailyTask(this.sock);
+    }, 60000); // 1 minute
+  }
+
+  stop() {
+    this.running = false;
+    if (this.interval) {
+      clearInterval(this.interval);
+    }
+    this.interval = null;
+    console.log('⏰ Daily Task scheduler stopped');
+  }
+
+  restart() {
+    this.stop();
+    setTimeout(() => this.start(), 1000);
+  }
+}
+
+// Global instance to hold the scheduler
+let taskScheduler = null;
+
+// Function to initialize the scheduler
+function initializeTaskScheduler(sock) {
+  if (taskScheduler) {
+    taskScheduler.stop();
+  }
+  taskScheduler = new TaskScheduler(sock);
+  taskScheduler.start();
+  return taskScheduler;
+}
+
+// =======================================================================
+// MODIFIED: MAIN PLUGIN HANDLER TO INITIALIZE THE SCHEDULER
+// =======================================================================
+
 // Main handler
 export default async function dailyTaskHandler(m, sock, config) {
   try {
+    // MODIFIED: Initialize DB, settings, and the internal scheduler on first run
     if (!db) {
       await initDatabase();
       await loadSettings();
+      
+      // This ensures the scheduler starts automatically when the plugin is first used.
+      if (!taskScheduler) {
+        initializeTaskScheduler(sock);
+      }
     }
     
     if (m.key.remoteJid.endsWith('@g.us')) {
