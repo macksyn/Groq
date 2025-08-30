@@ -13,7 +13,7 @@ export const info = {
   author: 'Bot Developer',
   description: 'Complete sports betting simulation with EPL, La Liga, Bundesliga, Serie A teams and multi-bet slips',
   commands: [
-    { name: 'bet', aliases: ['sportbet', 'sportsbet'], description: 'Access sports betting system' },
+    { name: 'bet', aliases: ['sportbet', 'sportybet'], description: 'Access sports betting system' },
     { name: 'fixtures', aliases: ['matches', 'games'], description: 'View upcoming matches' },
     { name: 'betslip', aliases: ['slip'], description: 'Manage your bet slip' },
     { name: 'mybets', aliases: ['bets'], description: 'View your active bets' },
