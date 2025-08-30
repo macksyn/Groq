@@ -1,4 +1,4 @@
-// plugins/Football_betting.js - REFACTORED VERSION with Dynamic Form
+// plugins/football_betting.js - REFACTORED VERSION with Dynamic Form
 
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
@@ -351,7 +351,7 @@ export default async function bettingHandler(m, sock, config) {
 
     switch (command) {
         case 'bet':
-        case 'sportbet':
+        case 'sportybet':
         case 'sportsbet':
             if (args.length === 1) {
                 await showBettingMenu(reply, config.PREFIX);
@@ -392,7 +392,7 @@ export default async function bettingHandler(m, sock, config) {
 }
 
 async function showBettingMenu(reply, prefix) {
-  const menuText = `⚽ *SPORTS BETTING* ⚽\n\n` +
+  const menuText = `⚽ *SPORTY BET* ⚽\n\n` +
                    `🎯 *Available Commands:*\n` +
                    `• *${prefix}fixtures* - View upcoming matches\n` +
                    `• *${prefix}leagues* - Available leagues\n` +
