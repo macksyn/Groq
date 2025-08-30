@@ -2,9 +2,6 @@
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
 
-// Import economy functions
-import { addMoney, removeMoney, getUserData, updateUserData, initUser, ecoSettings } from './enhanced_economy_plugin.js';
-
 // Plugin information export
 export const info = {
   name: 'Sports Betting System',
@@ -41,6 +38,11 @@ export const info = {
       name: 'leagues',
       aliases: ['competitions'],
       description: 'View available leagues'
+    },
+    {
+      name: 'results',
+      aliases: ['recent', 'scores'],
+      description: 'View recent match results'
     }
   ]
 };
@@ -55,11 +57,17 @@ const BET_COLLECTIONS = {
   TEAM_STATS: 'betting_team_stats'
 };
 
-// Database connection (reuse from economy plugin)
+// Economy collections (to interact with economy plugin)
+const ECONOMY_COLLECTIONS = {
+  USERS: 'economy_users',
+  TRANSACTIONS: 'economy_transactions'
+};
+
+// Database connection
 let db = null;
 let mongoClient = null;
 
-// Initialize betting database and start auto simulation
+// Initialize betting database
 async function initBettingDatabase() {
   if (db) return db;
   
@@ -72,6 +80,7 @@ async function initBettingDatabase() {
     await db.collection(BET_COLLECTIONS.MATCHES).createIndex({ matchId: 1 }, { unique: true });
     await db.collection(BET_COLLECTIONS.BETS).createIndex({ userId: 1, timestamp: -1 });
     await db.collection(BET_COLLECTIONS.BETSLIPS).createIndex({ userId: 1 });
+    await db.collection(ECONOMY_COLLECTIONS.USERS).createIndex({ userId: 1 }, { unique: true });
     
     console.log('✅ Sports Betting MongoDB connected successfully');
     
@@ -81,6 +90,158 @@ async function initBettingDatabase() {
     return db;
   } catch (error) {
     console.error('❌ Sports Betting MongoDB connection failed:', error);
+    throw error;
+  }
+}
+
+// Economy integration functions (self-contained)
+const ecoSettings = {
+  currency: '₦',
+  startingBalance: 0,
+  startingBankBalance: 0
+};
+
+// Initialize user in economy system
+async function initEconomyUser(userId) {
+  try {
+    if (!db) {
+      await initBettingDatabase();
+    }
+    
+    const existingUser = await db.collection(ECONOMY_COLLECTIONS.USERS).findOne({ userId });
+    
+    if (!existingUser) {
+      const newUser = {
+        userId,
+        balance: ecoSettings.startingBalance,
+        bank: ecoSettings.startingBankBalance,
+        inventory: [],
+        clan: null,
+        bounty: 0,
+        rank: 'Newbie',
+        lastAttendance: null,
+        totalAttendances: 0,
+        streak: 0,
+        longestStreak: 0,
+        birthdayData: null,
+        lastDaily: null,
+        lastWork: null,
+        lastRob: null,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+      
+      await db.collection(ECONOMY_COLLECTIONS.USERS).insertOne(newUser);
+      return newUser;
+    }
+    
+    return existingUser;
+  } catch (error) {
+    console.error('Error initializing economy user:', error);
+    throw error;
+  }
+}
+
+// Get user data from economy system
+async function getEconomyUserData(userId) {
+  try {
+    if (!db) {
+      await initBettingDatabase();
+    }
+    
+    await initEconomyUser(userId);
+    return await db.collection(ECONOMY_COLLECTIONS.USERS).findOne({ userId });
+  } catch (error) {
+    console.error('Error getting economy user data:', error);
+    throw error;
+  }
+}
+
+// Update user data in economy system
+async function updateEconomyUserData(userId, data) {
+  try {
+    if (!db) {
+      await initBettingDatabase();
+    }
+    
+    const result = await db.collection(ECONOMY_COLLECTIONS.USERS).updateOne(
+      { userId },
+      { 
+        $set: { 
+          ...data, 
+          updatedAt: new Date() 
+        } 
+      },
+      { upsert: true }
+    );
+    return result;
+  } catch (error) {
+    console.error('Error updating economy user data:', error);
+    throw error;
+  }
+}
+
+// Add money to user balance
+async function addMoneyToUser(userId, amount, reason = 'Sports bet win') {
+  try {
+    if (!db) {
+      await initBettingDatabase();
+    }
+    
+    const user = await getEconomyUserData(userId);
+    const newBalance = user.balance + amount;
+    
+    await updateEconomyUserData(userId, { balance: newBalance });
+    
+    // Log transaction
+    await db.collection(ECONOMY_COLLECTIONS.TRANSACTIONS).insertOne({
+      userId,
+      type: 'credit',
+      amount,
+      reason,
+      balanceBefore: user.balance,
+      balanceAfter: newBalance,
+      timestamp: new Date()
+    });
+    
+    console.log(`💰 Added ${ecoSettings.currency}${amount} to ${userId.split('@')[0]} (${reason})`);
+    return newBalance;
+  } catch (error) {
+    console.error('Error adding money:', error);
+    throw error;
+  }
+}
+
+// Remove money from user balance
+async function removeMoneyFromUser(userId, amount, reason = 'Sports bet stake') {
+  try {
+    if (!db) {
+      await initBettingDatabase();
+    }
+    
+    const user = await getEconomyUserData(userId);
+    if (user.balance >= amount) {
+      const newBalance = user.balance - amount;
+      
+      await updateEconomyUserData(userId, { balance: newBalance });
+      
+      // Log transaction
+      await db.collection(ECONOMY_COLLECTIONS.TRANSACTIONS).insertOne({
+        userId,
+        type: 'debit',
+        amount,
+        reason,
+        balanceBefore: user.balance,
+        balanceAfter: newBalance,
+        timestamp: new Date()
+      });
+      
+      console.log(`💸 Removed ${ecoSettings.currency}${amount} from ${userId.split('@')[0]} (${reason})`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('Error removing money:', error);
     throw error;
   }
 }
@@ -160,6 +321,8 @@ const TEAMS = {
 const BET_TYPES = {
   WIN: { name: 'Match Winner', description: 'Predict the winner of the match' },
   DRAW: { name: 'Draw', description: 'Match ends in a draw' },
+  OVER15: { name: 'Over 1.5 Goals', description: 'Total goals over 1.5' },
+  UNDER15: { name: 'Under 1.5 Goals', description: 'Total goals under 1.5' },
   OVER25: { name: 'Over 2.5 Goals', description: 'Total goals over 2.5' },
   UNDER25: { name: 'Under 2.5 Goals', description: 'Total goals under 2.5' },
   BTTS_YES: { name: 'Both Teams to Score - Yes', description: 'Both teams score' },
@@ -190,6 +353,8 @@ function generateOdds(homeTeam, awayTeam, homeStrength, awayStrength) {
     HOME_WIN: Math.max(1.1, (1 / normHome) * (1 - margin)),
     DRAW: Math.max(2.5, (1 / normDraw) * (1 - margin)),
     AWAY_WIN: Math.max(1.1, (1 / normAway) * (1 - margin)),
+    OVER15: Math.random() * 1.0 + 1.2, // 1.2 - 2.2
+    UNDER15: Math.random() * 1.5 + 2.0, // 2.0 - 3.5
     OVER25: Math.random() * 1.5 + 1.4, // 1.4 - 2.9
     UNDER25: Math.random() * 1.2 + 1.8, // 1.8 - 3.0
     BTTS_YES: Math.random() * 1.0 + 1.6, // 1.6 - 2.6
@@ -304,6 +469,7 @@ function simulateMatchResult(homeStrength, awayStrength, odds) {
   }
   
   const totalGoals = homeGoals + awayGoals;
+  const over15 = totalGoals > 1.5;
   const over25 = totalGoals > 2.5;
   const btts = homeGoals > 0 && awayGoals > 0;
   
@@ -312,13 +478,38 @@ function simulateMatchResult(homeStrength, awayStrength, odds) {
     homeGoals,
     awayGoals,
     totalGoals,
+    over15,
     over25,
     btts
   };
 }
 
-// Get target user from various inputs
-function getTargetUser(m, text) {
+// Check if user is admin/owner (implement your admin check function)
+function isAdmin(userId) {
+  try {
+    if (!userId || typeof userId !== 'string') return false;
+    
+    // Implement your admin check logic here
+    const adminNumbers = process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : [];
+    return adminNumbers.includes(userId.split('@')[0]);
+  } catch (error) {
+    console.error('Error checking admin status:', error);
+    return false;
+  }
+}
+
+function isOwner(userId) {
+  try {
+    if (!userId || typeof userId !== 'string') return false;
+    
+    // Implement your owner check logic here
+    const ownerNumber = process.env.OWNER_NUMBER || '';
+    return userId.split('@')[0] === ownerNumber;
+  } catch (error) {
+    console.error('Error checking owner status:', error);
+    return false;
+  }
+}
   try {
     if (!m || !m.message) return null;
 
@@ -407,14 +598,14 @@ export default async function bettingHandler(m, sock, config) {
       return;
     }
 
-    // Initialize database
+    // Initialize database and user
     if (!db) {
       await initBettingDatabase();
       await initializeMatches();
     }
 
     // Initialize user in economy system
-    await initUser(senderId);
+    await initEconomyUser(senderId);
     
     // Reply helper
     const reply = async (text) => {
@@ -467,6 +658,12 @@ export default async function bettingHandler(m, sock, config) {
         await handleLeagues({ m, sock, config, senderId, from, reply });
         break;
         
+      case 'results':
+      case 'recent':
+      case 'scores':
+        await handleResults({ m, sock, config, senderId, from, reply });
+        break;
+        
       default:
         // Don't respond to unknown commands
         break;
@@ -485,14 +682,15 @@ async function showBettingMenu(reply, prefix) {
                     `• *${prefix}leagues* - Available leagues\n` +
                     `• *${prefix}betslip* - Manage your bet slip\n` +
                     `• *${prefix}mybets* - View active bets\n` +
-                    `• *${prefix}bethistory* - View bet history\n\n` +
+                    `• *${prefix}bethistory* - View bet history\n` +
+                    `• *${prefix}results* - View recent match results\n\n` +
                     `🏆 *Leagues Available:*\n` +
                     `• 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League (20 teams)\n` +
                     `• 🇪🇸 La Liga (Top 10 teams)\n` +
                     `• 🇩🇪 Bundesliga (Top 5 teams)\n` +
                     `• 🇮🇹 Serie A (Top 5 teams)\n\n` +
                     `💰 *Bet Types:*\n` +
-                    `• Match Winner • Draw • Over/Under 2.5 Goals • Both Teams to Score\n\n` +
+                    `• Match Winner • Draw • Over/Under 1.5 Goals • Over/Under 2.5 Goals • Both Teams to Score\n\n` +
                     `💡 *Start by viewing: ${prefix}fixtures*`;
     
     await reply(menuText);
@@ -544,6 +742,7 @@ async function handleFixtures(context, args) {
       fixturesText += `🏆 ${match.league}\n`;
       fixturesText += `📅 ${matchTime} WAT\n`;
       fixturesText += `💰 Home: ${match.odds.HOME_WIN} | Draw: ${match.odds.DRAW} | Away: ${match.odds.AWAY_WIN}\n`;
+      fixturesText += `⚽ O1.5: ${match.odds.OVER15} | U1.5: ${match.odds.UNDER15}\n`;
       fixturesText += `⚽ O2.5: ${match.odds.OVER25} | U2.5: ${match.odds.UNDER25}\n`;
       fixturesText += `🎯 BTTS: ${match.odds.BTTS_YES} | No BTTS: ${match.odds.BTTS_NO}\n`;
       fixturesText += `🆔 ID: ${match.matchId}\n\n`;
@@ -568,7 +767,7 @@ async function handleBetSlip(context, args) {
       const betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
       
       if (!betSlip || betSlip.selections.length === 0) {
-        await reply(`📋 *Your bet slip is empty*\n\n💡 *Add bets:* ${context.config.PREFIX}betslip add [matchId] [betType]\n\n🎯 *Bet Types:*\n• HOME_WIN, AWAY_WIN, DRAW\n• OVER25, UNDER25\n• BTTS_YES, BTTS_NO\n\n*Example:* ${context.config.PREFIX}betslip add 1 HOME_WIN`);
+        await reply(`📋 *Your bet slip is empty*\n\n💡 *Add bets:* ${context.config.PREFIX}betslip add [matchId] [betType]\n\n🎯 *Bet Types:*\n• HOME_WIN, AWAY_WIN, DRAW\n• OVER15, UNDER15, OVER25, UNDER25\n• BTTS_YES, BTTS_NO\n\n*Example:* ${context.config.PREFIX}betslip add 1 HOME_WIN`);
         return;
       }
       
@@ -734,7 +933,7 @@ async function handleSetStake(context, args) {
     }
     
     // Check user balance
-    const userData = await getUserData(senderId);
+    const userData = await getEconomyUserData(senderId);
     if (userData.balance < stakeAmount) {
       await reply(`🚫 *Insufficient balance*\n\n💵 *Your Balance:* ${ecoSettings.currency}${userData.balance.toLocaleString()}\n💸 *Required:* ${ecoSettings.currency}${stakeAmount.toLocaleString()}`);
       return;
@@ -791,7 +990,7 @@ async function handlePlaceBet(context) {
     }
     
     // Check user balance
-    const userData = await getUserData(senderId);
+    const userData = await getEconomyUserData(senderId);
     if (userData.balance < betSlip.stake) {
       await reply(`🚫 *Insufficient balance*\n\n💵 *Your Balance:* ${ecoSettings.currency}${userData.balance.toLocaleString()}\n💸 *Required:* ${ecoSettings.currency}${betSlip.stake.toLocaleString()}`);
       return;
@@ -819,7 +1018,7 @@ async function handlePlaceBet(context) {
     const potentialWin = betSlip.stake * totalOdds;
     
     // Deduct stake from user balance
-    await removeMoney(senderId, betSlip.stake, 'Sports bet stake');
+    await removeMoneyFromUser(senderId, betSlip.stake, 'Sports bet stake');
     
     // Create bet record
     const betRecord = {
@@ -854,7 +1053,7 @@ async function handlePlaceBet(context) {
       confirmText += `   🎯 ${selection.betType.replace('_', ' ')} @ ${selection.odds}\n`;
     });
     
-    const updatedBalance = await getUserData(senderId);
+    const updatedBalance = await getEconomyUserData(senderId);
     confirmText += `\n💵 *New Balance:* ${ecoSettings.currency}${updatedBalance.balance.toLocaleString()}\n\n`;
     confirmText += `🍀 *Good luck!*`;
     
@@ -1262,7 +1461,7 @@ async function handleSimulateBets(context) {
       
       simulationText += `${match.homeTeam} ${result.homeGoals} - ${result.awayGoals} ${match.awayTeam}\n`;
       simulationText += `🏆 Result: ${result.result.replace('_', ' ')}\n`;
-      simulationText += `⚽ Goals: ${result.totalGoals} (O2.5: ${result.over25 ? 'Yes' : 'No'})\n`;
+      simulationText += `⚽ Goals: ${result.totalGoals} (O1.5: ${result.over15 ? 'Yes' : 'No'} | O2.5: ${result.over25 ? 'Yes' : 'No'})\n`;
       simulationText += `🎯 BTTS: ${result.btts ? 'Yes' : 'No'}\n\n`;
       
       // Settle bets for this match
@@ -1338,6 +1537,12 @@ async function settleBetsForMatch(matchId, matchResult) {
             case 'DRAW':
               selectionWon = matchResult.result === 'DRAW';
               break;
+            case 'OVER15':
+              selectionWon = matchResult.over15;
+              break;
+            case 'UNDER15':
+              selectionWon = !matchResult.over15;
+              break;
             case 'OVER25':
               selectionWon = matchResult.over25;
               break;
@@ -1376,7 +1581,7 @@ async function settleBetsForMatch(matchId, matchResult) {
         if (allMatchesCompleted) {
           if (betWon) {
             // User won - pay out winnings
-            await addMoney(bet.userId, bet.potentialWin, 'Sports bet win');
+            await addMoneyToUser(bet.userId, bet.potentialWin, 'Sports bet win');
             await db.collection(BET_COLLECTIONS.BETS).updateOne(
               { _id: bet._id },
               {
@@ -1408,5 +1613,24 @@ async function settleBetsForMatch(matchId, matchResult) {
   }
 }
 
+// Graceful shutdown - stop auto simulation
+process.on('SIGINT', () => {
+  console.log('🛑 Shutting down sports betting plugin...');
+  stopAutoSimulation();
+  if (mongoClient) {
+    mongoClient.close();
+  }
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('🛑 Shutting down sports betting plugin...');
+  stopAutoSimulation();
+  if (mongoClient) {
+    mongoClient.close();
+  }
+  process.exit(0);
+});
+
 // Export for use by other plugins if needed
-export { generateMatches, simulateMatchResult, TEAMS };
+export { generateMatches, simulateMatchResult, TEAMS, startAutoSimulation, stopAutoSimulation };
