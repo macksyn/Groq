@@ -1938,6 +1938,16 @@ async function handleShop(context, args) {
       
       const itemId = getItemId(args[1]);
       const item = SHOP_ITEMS[itemId];
+
+       // --- OUT OF STOCK MODIFICATION ---
+
+      // Check if the item is robProtection and set it to out of stock
+      if (itemId === 'robProtection') {
+        await reply('🚫 *Sorry, the "Bodyguard" is currently out of stock.*');
+        return; // This stops the rest of the buy process
+      }
+
+      // --- END OF MODIFICATION ---
       
       if (!item) {
         await reply('❌ *Item not found*');
