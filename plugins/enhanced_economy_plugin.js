@@ -1943,7 +1943,7 @@ async function handleShop(context, args) {
 
       // Check if the item is robProtection and set it to out of stock
       if (itemId === 'robProtection') {
-        await reply('🚫 *Sorry, the "Bodyguard" is currently out of stock.*');
+        await reply('🚫 *Sorry, Rob Protection is currently out of stock.*');
         return; // This stops the rest of the buy process
       }
 
