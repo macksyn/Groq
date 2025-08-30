@@ -1,4 +1,4 @@
-// plugins/football_betting.js - REFACTORED VERSION with Dynamic Form
+// plugins/Football_betting.js - REFACTORED VERSION with Dynamic Form & UI Update
 
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
@@ -9,8 +9,8 @@ import { unifiedUserManager } from '../lib/pluginIntegration.js';
 // Plugin information export
 export const info = {
   name: 'Sports Betting System',
-  version: '2.1.0', // Updated version with form dynamics
-  author: 'Alex Macksyn',
+  version: '2.2.0', // Updated version with UI improvements
+  author: 'Bot Developer',
   description: 'Complete sports betting simulation with EPL, La Liga, Bundesliga, Serie A teams and multi-bet slips',
   commands: [
     { name: 'bet', aliases: ['sportbet', 'sportsbet'], description: 'Access sports betting system' },
@@ -140,27 +140,20 @@ const BET_TYPES = {
   BTTS_NO: { name: 'Both Teams to Score - No', description: 'One or both teams fail to score' }
 };
 
-// UPDATED: Function now includes form calculation
 function generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm) {
-  // Calculate effective strength based on form (form is weighted at 20%)
   const effectiveHomeStrength = (homeStrength * 0.8) + (homeForm * 0.2);
   const effectiveAwayStrength = (awayStrength * 0.8) + (awayForm * 0.2);
-
   const strengthDiff = effectiveHomeStrength - effectiveAwayStrength;
   const homeAdvantage = 5;
-  
   const adjustedHomeStrength = effectiveHomeStrength + homeAdvantage;
   const totalStrength = adjustedHomeStrength + effectiveAwayStrength;
-  
   const homeWinProb = (adjustedHomeStrength / totalStrength) * 0.6 + 0.2;
   const awayWinProb = (effectiveAwayStrength / totalStrength) * 0.6 + 0.2;
   const drawProb = 1 - homeWinProb - awayWinProb + 0.15;
-  
   const total = homeWinProb + drawProb + awayWinProb;
   const normHome = homeWinProb / total;
   const normDraw = drawProb / total;
   const normAway = awayWinProb / total;
-  
   const margin = 0.1;
   const odds = {
     HOME_WIN: Math.max(1.1, (1 / normHome) * (1 - margin)),
@@ -173,15 +166,12 @@ function generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, 
     BTTS_YES: Math.random() * 1.0 + 1.6,
     BTTS_NO: Math.random() * 1.0 + 1.4
   };
-  
   Object.keys(odds).forEach(key => {
-    odds[key] = Math.round(odds[key] * 100) / 100;
+    odds[key] = parseFloat(odds[key].toFixed(2));
   });
-  
   return odds;
 }
 
-// UPDATED: Function now passes form to generateOdds
 function generateMatches() {
   const matches = [];
   const leagues = Object.keys(TEAMS);
@@ -195,18 +185,14 @@ function generateMatches() {
       do {
         awayTeamIndex = Math.floor(Math.random() * teams.length);
       } while (awayTeamIndex === homeTeamIndex);
-      
       const homeTeam = teams[homeTeamIndex];
       const awayTeam = teams[awayTeamIndex];
-      
       const homeStrength = TEAMS[league].teams[homeTeam].strength;
       const awayStrength = TEAMS[league].teams[awayTeam].strength;
       const homeForm = TEAMS[league].teams[homeTeam].form;
       const awayForm = TEAMS[league].teams[awayTeam].form;
-      
       const odds = generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm);
       const matchTime = moment().add(Math.floor(Math.random() * 72), 'hours');
-      
       matches.push({
         matchId: matchId++,
         league: TEAMS[league].name,
@@ -245,27 +231,25 @@ async function initializeMatches() {
   }
 }
 
-// NEW: Function to update team form in the global TEAMS object after a match
 function updateTeamForms(match) {
     try {
         const homeTeam = TEAMS[match.leagueCode].teams[match.homeTeam];
         const awayTeam = TEAMS[match.leagueCode].teams[match.awayTeam];
 
         if (match.result.result === 'HOME_WIN') {
-            homeTeam.form = Math.min(100, homeTeam.form + 5); // Increase form, max 100
-            awayTeam.form = Math.max(0, awayTeam.form - 5);   // Decrease form, min 0
+            homeTeam.form = Math.min(100, homeTeam.form + 5);
+            awayTeam.form = Math.max(0, awayTeam.form - 5);
         } else if (match.result.result === 'AWAY_WIN') {
             homeTeam.form = Math.max(0, homeTeam.form - 5);
             awayTeam.form = Math.min(100, awayTeam.form + 5);
-        } else { // Draw
-            homeTeam.form = Math.max(0, homeTeam.form - 2); // Slight decrease for home draw
-            awayTeam.form = Math.min(100, awayTeam.form + 2); // Slight increase for away draw
+        } else {
+            homeTeam.form = Math.max(0, homeTeam.form - 2);
+            awayTeam.form = Math.min(100, awayTeam.form + 2);
         }
     } catch (error) {
         console.error(`Error updating form for match ${match.matchId}:`, error);
     }
 }
-
 
 function simulateMatchResult(homeStrength, awayStrength, odds) {
   const rand = Math.random();
@@ -324,7 +308,6 @@ export default async function bettingHandler(m, sock, config) {
     const args = messageBody.split(' ').filter(arg => arg.length > 0);
     const command = args[0].toLowerCase();
     
-    // Check if the command belongs to this plugin
     const commandInfo = info.commands.find(c => c.name === command || c.aliases.includes(command));
     if (!commandInfo) return;
 
@@ -351,8 +334,8 @@ export default async function bettingHandler(m, sock, config) {
 
     switch (command) {
         case 'bet':
+        case 'sportbet':
         case 'sportybet':
-        case 'sportsbet':
             if (args.length === 1) {
                 await showBettingMenu(reply, config.PREFIX);
             } else {
@@ -409,6 +392,7 @@ async function showBettingMenu(reply, prefix) {
   await reply(menuText);
 }
 
+// UPDATED: Added O/U 1.5 and bolded the market types
 async function handleFixtures(context, args) {
     const { reply, config } = context;
     try {
@@ -436,10 +420,11 @@ async function handleFixtures(context, args) {
             fixturesText += `*${index + 1}.* ${match.homeTeam} vs ${match.awayTeam}\n`;
             fixturesText += `🏆 ${match.league}\n`;
             fixturesText += `📅 ${matchTime} WAT\n`;
-            fixturesText += `💰 Home: ${match.odds.HOME_WIN} | Draw: ${match.odds.DRAW} | Away: ${match.odds.AWAY_WIN}\n`;
-            fixturesText += `⚽ Over 2.5: ${match.odds.OVER25} | Under 2.5: ${match.odds.UNDER25}\n`;
-            fixturesText += `🎯 BTTS: ${match.odds.BTTS_YES} | No BTTS: ${match.odds.BTTS_NO}\n`;
-            fixturesText += `🆔 ID: ${match.matchId}\n\n`;
+            fixturesText += `💰 *Home:* ${match.odds.HOME_WIN} | *Draw:* ${match.odds.DRAW} | *Away:* ${match.odds.AWAY_WIN}\n`;
+            fixturesText += `⚽ *Over 1.5:* ${match.odds.OVER15} | *Under 1.5:* ${match.odds.UNDER15}\n`;
+            fixturesText += `⚽ *Over 2.5:* ${match.odds.OVER25} | *Under 2.5:* ${match.odds.UNDER25}\n`;
+            fixturesText += `🎯 *BTTS:* ${match.odds.BTTS_YES} | *No BTTS:* ${match.odds.BTTS_NO}\n`;
+            fixturesText += `🆔 *ID:* ${match.matchId}\n\n`;
         });
         fixturesText += `💡 *Add to slip:* ${config.PREFIX}betslip add [matchId] [betType]`;
         await reply(fixturesText);
@@ -449,13 +434,14 @@ async function handleFixtures(context, args) {
     }
 }
 
+// UPDATED: Added O/U 1.5 to the help text
 async function handleBetSlip(context, args) {
     const { reply, senderId, config } = context;
     try {
         if (!args || args.length === 0) {
             const betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
             if (!betSlip || betSlip.selections.length === 0) {
-                await reply(`📋 *Your bet slip is empty*\n\n💡 *Add bets:* ${config.PREFIX}betslip add [matchId] [betType]\n\n*Example:* ${config.PREFIX}betslip add 1 HOME_WIN`);
+                await reply(`📋 *Your bet slip is empty*\n\n💡 *Add bets:* ${config.PREFIX}betslip add [matchId] [betType]\n\n🎯 *Bet Types:*\n• HOME_WIN, AWAY_WIN, DRAW\n• OVER15, UNDER15, OVER25, UNDER25\n• BTTS_YES, BTTS_NO\n\n*Example:* ${config.PREFIX}betslip add 1 HOME_WIN`);
                 return;
             }
             let slipText = `📋 *YOUR BET SLIP* 📋\n\n`;
@@ -817,7 +803,6 @@ function stopAutoSimulation() {
   }
 }
 
-// UPDATED: Now calls updateTeamForms
 async function autoSimulateMatches() {
   try {
     if (!db) return;
@@ -839,7 +824,6 @@ async function autoSimulateMatches() {
       
       await settleBetsForMatch(match.matchId, result);
       
-      // NEW: Update team form after simulation
       updateTeamForms(match);
     }
     
@@ -880,7 +864,7 @@ async function handleSimulateBets(context) {
             simulationText += `🏆 Result: ${result.result.replace('_', ' ')}\n`;
             simulationText += `⚽ Goals: ${result.totalGoals} | BTTS: ${result.btts ? 'Yes' : 'No'}\n\n`;
             await settleBetsForMatch(match.matchId, result);
-            updateTeamForms(match); // Also update form on manual sim
+            updateTeamForms(match);
         }
         simulationText += `✅ *All bets settled*\n🔄 *Generating new matches...*`;
         await reply(simulationText);
@@ -953,7 +937,6 @@ async function settleBetsForMatch(matchId, matchResult) {
         }
         if (!selectionWon) {
           betWon = false;
-          // No need to check further if one leg fails
           break;
         }
       }
