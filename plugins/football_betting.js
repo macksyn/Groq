@@ -10,7 +10,7 @@ import { unifiedUserManager } from '../lib/pluginIntegration.js';
 export const info = {
   name: 'Sports Betting System',
   version: '2.1.0', // Updated version with form dynamics
-  author: 'Bot Developer',
+  author: 'Alex Macksyn',
   description: 'Complete sports betting simulation with EPL, La Liga, Bundesliga, Serie A teams and multi-bet slips',
   commands: [
     { name: 'bet', aliases: ['sportbet', 'sportsbet'], description: 'Access sports betting system' },
@@ -437,7 +437,7 @@ async function handleFixtures(context, args) {
             fixturesText += `🏆 ${match.league}\n`;
             fixturesText += `📅 ${matchTime} WAT\n`;
             fixturesText += `💰 Home: ${match.odds.HOME_WIN} | Draw: ${match.odds.DRAW} | Away: ${match.odds.AWAY_WIN}\n`;
-            fixturesText += `⚽ O2.5: ${match.odds.OVER25} | U2.5: ${match.odds.UNDER25}\n`;
+            fixturesText += `⚽ Over 2.5: ${match.odds.OVER25} | Under 2.5: ${match.odds.UNDER25}\n`;
             fixturesText += `🎯 BTTS: ${match.odds.BTTS_YES} | No BTTS: ${match.odds.BTTS_NO}\n`;
             fixturesText += `🆔 ID: ${match.matchId}\n\n`;
         });
