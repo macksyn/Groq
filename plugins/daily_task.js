@@ -809,4 +809,180 @@ async function showTaskMenu(reply, prefix) {
                   `• *settings* - System settings\n\n` +
                   `📅 *Daily Themes:*\n` +
                   `Mon: Business • Tue: General • Wed: Personal\n` +
+                  `Thu: Current Affairs • Fri: Science • Sat: Relationship\n`+
+                  `Sun: Group Survey\n\n` +
+                  `💰 *Rewards:* ₦${taskSettings.baseReward.toLocaleString()} base + ₦${taskSettings.correctnessBonus} per correct answer\n` +
+                  `💡 *Usage:* ${prefix}task [command]`;
+  await reply(menuText);
+}
+
+async function handlePostTask(context) {
+  const { reply, senderId, sock, m, from } = context;
+  if (!await isAuthorized(sock, from, senderId)) return reply('🚫 Only admins can post tasks.');
+  if (!from.endsWith('@g.us')) return reply('❌ This command works only in groups.');
+  try {
+    if (await postDailyTask(sock, from)) await reply('✅ *Daily task posted successfully!*');
+    else await reply('❌ *Failed to post task.*');
+  } catch (error) { await reply('❌ *Error posting task.*'); console.error('Post task error:', error); }
+}
+
+async function handleCurrentTask(context) {
+  const { reply, config } = context;
+  try {
+    const today = getCurrentDate();
+    const todayTask = await db.collection(COLLECTIONS.DAILY_TASKS).findOne({ date: today });
+    if (!todayTask) return reply(`📅 *No task for today.*\n\nAdmins can post manually: *${config.PREFIX}task post*`);
+    await reply(formatDailyTaskMessage(todayTask));
+  } catch (error) { await reply('❌ *Error loading current task.*'); console.error('Current task error:', error); }
+}
+
+async function handleTaskStats(context) {
+  const { reply, senderId } = context;
+  try {
+    await initUser(senderId);
+    const userData = await getUserData(senderId);
+    let statsMessage = `📊 *YOUR TASK STATISTICS* 📊\n\n` +
+                     `📅 Last completion: ${userData.lastTaskCompletion || 'Never'}\n` +
+                     `📋 Total completions: ${userData.totalTaskCompletions || 0}\n` +
+                     `🎯 Total correct answers: ${userData.totalCorrectAnswers || 0}\n` +
+                     `💰 Balance: ₦${(userData.balance || 0).toLocaleString()}\n` +
+                     `🔥 Current streak: ${userData.taskStreak || 0} days\n` +
+                     `🏆 Longest streak: ${userData.longestTaskStreak || 0} days`;
+    await reply(statsMessage);
+  } catch (error) { await reply('❌ *Error loading statistics.*'); console.error('Stats error:', error); }
+}
+
+// MODIFIED: Added 'bonus' setting
+async function handleTaskSettings(context, args) {
+  const { reply, senderId, sock, from, config } = context;
+  if (!await isAuthorized(sock, from, senderId)) return reply('🚫 Only admins can access settings.');
+  
+  try {
+    if (args.length === 0) {
+      let settingsMessage = `⚙️ *TASK SYSTEM SETTINGS* ⚙️\n\n` +
+        `💰 *Rewards:*\n` +
+        `• Base reward: ₦${taskSettings.baseReward.toLocaleString()}\n` +
+        `• Correctness bonus: ₦${taskSettings.correctnessBonus} per correct\n` +
+        `• Streak bonus: ${taskSettings.enableStreakBonus ? 'Enabled ✅' : 'Disabled ❌'}\n\n` +
+        `🤖 *Automation:*\n` +
+        `• Auto-post: ${taskSettings.autoPostEnabled ? 'Enabled ✅' : 'Disabled ❌'}\n` +
+        `• Post time: ${taskSettings.autoPostTime}\n` +
+        `• Submission deadline: ${taskSettings.submissionDeadline}\n\n` +
+        `🔧 *Available Commands:*\n` +
+        `• \`${config.PREFIX}task settings reward 2000\`\n` +
+        `• \`${config.PREFIX}task settings bonus 150\`\n` +
+        `• \`${config.PREFIX}task settings streak on/off\`\n` +
+        `• \`${config.PREFIX}task settings autopost on/off\`\n` +
+        `• \`${config.PREFIX}task settings posttime 09:00\`\n` +
+        `• \`${config.PREFIX}task settings deadline 23:00\``;
+      await reply(settingsMessage);
+      return;
+    }
+    
+    const setting = args[0].toLowerCase();
+    const value = args[1];
+    let responseText = "";
+    
+    switch (setting) {
+      case 'reward':
+        if (!value || isNaN(value)) responseText = `⚠️ Invalid amount.`;
+        else { taskSettings.baseReward = parseInt(value); await saveSettings(); responseText = `✅ Base reward set to ₦${parseInt(value).toLocaleString()}`; }
+        break;
+      case 'bonus':
+        if (!value || isNaN(value)) responseText = `⚠️ Invalid amount.`;
+        else { taskSettings.correctnessBonus = parseInt(value); await saveSettings(); responseText = `✅ Correctness bonus set to ₦${parseInt(value).toLocaleString()}`; }
+        break;
+      case 'streak':
+        if (['on', 'true', '1'].includes(value?.toLowerCase())) { taskSettings.enableStreakBonus = true; await saveSettings(); responseText = "✅ Streak bonus enabled 🔥"; }
+        else if (['off', 'false', '0'].includes(value?.toLowerCase())) { taskSettings.enableStreakBonus = false; await saveSettings(); responseText = "✅ Streak bonus disabled"; }
+        else responseText = `⚠️ Invalid value. Use: on/off`;
+        break;
+      case 'autopost':
+        if (['on', 'true', '1'].includes(value?.toLowerCase())) { taskSettings.autoPostEnabled = true; await saveSettings(); responseText = `✅ Auto-posting enabled 🤖`; }
+        else if (['off', 'false', '0'].includes(value?.toLowerCase())) { taskSettings.autoPostEnabled = false; await saveSettings(); responseText = "✅ Auto-posting disabled"; }
+        else responseText = `⚠️ Invalid value. Use: on/off`;
+        break;
+      case 'posttime':
+      case 'deadline':
+        if (!value || !/^\d{2}:\d{2}$/.test(value)) responseText = `⚠️ Invalid time format (HH:MM).`;
+        else {
+          if (setting === 'posttime') taskSettings.autoPostTime = value;
+          else taskSettings.submissionDeadline = value;
+          await saveSettings();
+          responseText = `✅ ${setting === 'posttime' ? 'Auto-post time' : 'Deadline'} set to ${value}`;
+        }
+        break;
+      default:
+        responseText = `⚠️ Unknown setting: *${setting}*`;
+    }
+    await reply(responseText);
+  } catch (error) { await reply('❌ *Error updating settings.*'); console.error('Settings error:', error); }
+}
+
+async function handleCompletionsView(context, args) {
+  const { reply } = context;
+  try {
+    const date = args[0] || getCurrentDate();
+    const task = await db.collection(COLLECTIONS.DAILY_TASKS).findOne({ date: date });
+    if (!task) return reply(`📅 *No task found for ${date}*`);
+    
+    let completionMessage = `📊 *TASK COMPLETION REPORT* 📊\n\n` +
+                          `📅 Date: ${date}\n` +
+                          `🎯 Theme: ${task.theme}\n` +
+                          `📋 Participants: ${task.completions.length}\n\n`;
+    
+    if (task.completions.length > 0) {
+      const sorted = task.completions.sort((a, b) => b.correctCount - a.correctCount || new Date(a.submittedAt) - new Date(b.submittedAt));
+      sorted.forEach((c, i) => {
+        completionMessage += `${i + 1}. +${c.userPhone}\n   📊 Score: ${c.correctCount}/${task.questions.length} • 💰 ₦${c.totalReward.toLocaleString()}\n`;
+      });
+    } else {
+      completionMessage += `❌ *No completions yet*`;
+    }
+    await reply(completionMessage);
+  } catch (error) { await reply('❌ *Error loading completions.*'); console.error('Completions error:', error); }
+}
+
+async function handleTaskRecords(context, args) {
+  const { reply, senderId, config } = context;
+  try {
+    const limit = args[0] ? parseInt(args[0]) : 5;
+    const records = await db.collection(COLLECTIONS.TASK_RECORDS).find({ userId: senderId }).sort({ submittedAt: -1 }).limit(limit).toArray();
+    if (records.length === 0) return reply(`📋 *No task history found*`);
+    
+    let recordsText = `📋 *YOUR LAST ${records.length} TASKS* 📋\n\n`;
+    records.forEach((r, i) => {
+      recordsText += `${i + 1}. 📅 ${r.date}\n   📊 ${r.correctCount}/${taskSettings.questionCount} correct • 💰 ₦${r.totalReward.toLocaleString()}\n`;
+    });
+    recordsText += `\n💡 Use *${config.PREFIX}task records [num]* for more.`;
+    await reply(recordsText);
+  } catch (error) { await reply('❌ *Error loading records.*'); console.error('Records error:', error); }
+}
+
+async function handleTestTask(context, args) {
+  const { reply, config } = context;
+  const testAnswers = args.join(' ');
+  if (!testAnswers) return reply(`🔍 *ANSWER FORMAT VALIDATOR*\n\n*Usage:* ${config.PREFIX}testtask [your_test_message]`);
+  
+  try {
+    const answers = validateAnswerFormat(testAnswers);
+    let result = `🔍 *FORMAT VALIDATION RESULTS* 🔍\n\n` +
+                 `📊 Detected: ${answers.length} answers\n\n`;
+    if (answers.length > 0) {
+      answers.forEach((ans, i) => { result += `${i + 1}. "${ans.slice(0, 30)}..."\n`; });
+      if (answers.length >= taskSettings.questionCount) result += `\n🎉 *FORMAT VALID!* ✅`;
+      else result += `\n❌ *INSUFFICIENT ANSWERS*`;
+    } else {
+      result += `❌ *NO ANSWERS DETECTED*`;
+    }
+    await reply(result);
+  } catch (error) { await reply('❌ *Error testing format.*'); console.error('Test error:', error); }
+}
+
+// Export functions for external use
+export { 
+  checkAndPostDailyTask,
+  setGroupJid,
+  taskSettings
+};
 
