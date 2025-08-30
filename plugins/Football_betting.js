@@ -3,7 +3,7 @@ import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
 
 // Import economy functions
-import { addMoney, removeMoney, getUserData, updateUserData, initUser, ecoSettings } from './economy.js';
+import { addMoney, removeMoney, getUserData, updateUserData, initUser, ecoSettings } from './enhanced_economy_plugin.js';
 
 // Plugin information export
 export const info = {
@@ -59,6 +59,7 @@ const BET_COLLECTIONS = {
 let db = null;
 let mongoClient = null;
 
+// Initialize betting database and start auto simulation
 async function initBettingDatabase() {
   if (db) return db;
   
@@ -73,6 +74,10 @@ async function initBettingDatabase() {
     await db.collection(BET_COLLECTIONS.BETSLIPS).createIndex({ userId: 1 });
     
     console.log('✅ Sports Betting MongoDB connected successfully');
+    
+    // Start automatic match simulation
+    startAutoSimulation();
+    
     return db;
   } catch (error) {
     console.error('❌ Sports Betting MongoDB connection failed:', error);
@@ -86,26 +91,26 @@ const TEAMS = {
   EPL: {
     name: 'English Premier League',
     teams: {
-      'Manchester City': { strength: 95, form: 90 },
-      'Arsenal': { strength: 92, form: 88 },
-      'Liverpool': { strength: 90, form: 85 },
-      'Chelsea': { strength: 85, form: 78 },
-      'Manchester United': { strength: 82, form: 75 },
-      'Newcastle United': { strength: 80, form: 82 },
-      'Tottenham': { strength: 78, form: 70 },
-      'Brighton': { strength: 75, form: 80 },
-      'West Ham': { strength: 72, form: 68 },
-      'Aston Villa': { strength: 70, form: 75 },
-      'Crystal Palace': { strength: 68, form: 65 },
-      'Fulham': { strength: 65, form: 70 },
-      'Brentford': { strength: 63, form: 68 },
-      'Wolves': { strength: 60, form: 58 },
-      'Everton': { strength: 58, form: 55 },
-      'Nottingham Forest': { strength: 55, form: 60 },
-      'Luton Town': { strength: 50, form: 52 },
-      'Burnley': { strength: 48, form: 45 },
-      'Sheffield United': { strength: 45, form: 40 },
-      'Bournemouth': { strength: 52, form: 55 }
+      'Arsenal': { strength: 92, form: 90 },
+      'Aston Villa': { strength: 80, form: 78 },
+      'Bournemouth': { strength: 68, form: 65 },
+      'Brentford': { strength: 70, form: 72 },
+      'Brighton': { strength: 75, form: 78 },
+      'Chelsea': { strength: 84, form: 80 },
+      'Crystal Palace': { strength: 72, form: 70 },
+      'Everton': { strength: 69, form: 66 },
+      'Fulham': { strength: 71, form: 73 },
+      'Ipswich Town': { strength: 62, form: 60 },
+      'Leicester City': { strength: 73, form: 75 },
+      'Liverpool': { strength: 91, form: 88 },
+      'Manchester City': { strength: 96, form: 95 },
+      'Manchester United': { strength: 85, form: 82 },
+      'Newcastle United': { strength: 82, form: 80 },
+      'Nottingham Forest': { strength: 67, form: 68 },
+      'Southampton': { strength: 64, form: 62 },
+      'Tottenham': { strength: 83, form: 81 },
+      'West Ham': { strength: 78, form: 75 },
+      'Wolves': { strength: 74, form: 72 },
     }
   },
   
@@ -113,16 +118,16 @@ const TEAMS = {
   LALIGA: {
     name: 'Spanish La Liga',
     teams: {
-      'Real Madrid': { strength: 96, form: 92 },
-      'Barcelona': { strength: 88, form: 85 },
-      'Atletico Madrid': { strength: 85, form: 80 },
-      'Real Sociedad': { strength: 78, form: 82 },
-      'Real Betis': { strength: 75, form: 78 },
-      'Villarreal': { strength: 73, form: 75 },
-      'Athletic Bilbao': { strength: 70, form: 72 },
-      'Valencia': { strength: 68, form: 65 },
-      'Sevilla': { strength: 72, form: 68 },
-      'Girona': { strength: 65, form: 70 }
+      'Real Madrid': { strength: 97, form: 95 },
+      'Barcelona': { strength: 90, form: 88 },
+      'Girona': { strength: 80, form: 82 },
+      'Atletico Madrid': { strength: 88, form: 85 },
+      'Athletic Bilbao': { strength: 82, form: 80 },
+      'Real Sociedad': { strength: 81, form: 83 },
+      'Real Betis': { strength: 79, form: 77 },
+      'Villarreal': { strength: 78, form: 76 },
+      'Valencia': { strength: 77, form: 75 },
+      'Sevilla': { strength: 80, form: 78 },
     }
   },
   
@@ -130,11 +135,11 @@ const TEAMS = {
   BUNDESLIGA: {
     name: 'German Bundesliga',
     teams: {
-      'Bayern Munich': { strength: 94, form: 90 },
-      'Borussia Dortmund': { strength: 85, form: 82 },
-      'RB Leipzig': { strength: 80, form: 78 },
-      'Bayer Leverkusen': { strength: 78, form: 85 },
-      'Union Berlin': { strength: 72, form: 70 }
+      'Bayern Munich': { strength: 94, form: 92 },
+      'Bayer Leverkusen': { strength: 91, form: 93 },
+      'Borussia Dortmund': { strength: 88, form: 86 },
+      'RB Leipzig': { strength: 87, form: 88 },
+      'VfB Stuttgart': { strength: 84, form: 85 },
     }
   },
   
@@ -142,11 +147,11 @@ const TEAMS = {
   SERIEA: {
     name: 'Italian Serie A',
     teams: {
-      'Inter Milan': { strength: 88, form: 85 },
-      'Juventus': { strength: 85, form: 80 },
-      'AC Milan': { strength: 82, form: 78 },
-      'Napoli': { strength: 80, form: 75 },
-      'AS Roma': { strength: 75, form: 72 }
+      'Inter Milan': { strength: 92, form: 90 },
+      'AC Milan': { strength: 87, form: 85 },
+      'Juventus': { strength: 86, form: 84 },
+      'Atalanta': { strength: 83, form: 81 },
+      'Napoli': { strength: 84, form: 82 },
     }
   }
 };
@@ -1087,22 +1092,150 @@ async function handleLeagues(context) {
   }
 }
 
-// Simulate match results and settle bets (admin function)
+// Automatic match simulation system
+let simulationInterval = null;
+
+// Start automatic match simulation
+function startAutoSimulation() {
+  if (simulationInterval) {
+    clearInterval(simulationInterval);
+  }
+  
+  // Check every 5 minutes for matches that need to be simulated
+  simulationInterval = setInterval(async () => {
+    try {
+      await autoSimulateMatches();
+    } catch (error) {
+      console.error('❌ Auto simulation error:', error);
+    }
+  }, 5 * 60 * 1000); // 5 minutes
+  
+  console.log('✅ Auto match simulation started (checks every 5 minutes)');
+}
+
+// Stop automatic simulation
+function stopAutoSimulation() {
+  if (simulationInterval) {
+    clearInterval(simulationInterval);
+    simulationInterval = null;
+    console.log('⏹️ Auto match simulation stopped');
+  }
+}
+
+// Auto simulate matches that have reached their scheduled time
+async function autoSimulateMatches() {
+  try {
+    if (!db) return;
+    
+    const now = new Date();
+    
+    // Find matches that should have started but haven't been simulated yet
+    const matchesToSimulate = await db.collection(BET_COLLECTIONS.MATCHES)
+      .find({
+        status: 'upcoming',
+        matchTime: { $lte: now } // Match time has passed
+      })
+      .toArray();
+    
+    if (matchesToSimulate.length === 0) {
+      return; // No matches to simulate
+    }
+    
+    console.log(`⚽ Auto-simulating ${matchesToSimulate.length} matches...`);
+    
+    for (const match of matchesToSimulate) {
+      const result = simulateMatchResult(match.homeStrength, match.awayStrength, match.odds);
+      
+      // Update match with result
+      await db.collection(BET_COLLECTIONS.MATCHES).updateOne(
+        { matchId: match.matchId },
+        {
+          $set: {
+            status: 'completed',
+            result: result,
+            completedAt: new Date()
+          }
+        }
+      );
+      
+      console.log(`✅ ${match.homeTeam} ${result.homeGoals}-${result.awayGoals} ${match.awayTeam}`);
+      
+      // Settle bets for this match
+      await settleBetsForMatch(match.matchId, result);
+    }
+    
+    // Check if we need to generate new matches
+    const upcomingCount = await db.collection(BET_COLLECTIONS.MATCHES)
+      .countDocuments({ status: 'upcoming' });
+    
+    if (upcomingCount < 15) { // Keep at least 15 upcoming matches
+      await generateNewMatches();
+    }
+    
+    console.log(`✅ Auto-simulation complete. Settled bets for ${matchesToSimulate.length} matches`);
+  } catch (error) {
+    console.error('❌ Auto simulation error:', error);
+  }
+}
+
+// Generate new matches to replace completed ones
+async function generateNewMatches() {
+  try {
+    const newMatches = generateMatches();
+    
+    // Get the highest existing match ID
+    const lastMatch = await db.collection(BET_COLLECTIONS.MATCHES)
+      .findOne({}, { sort: { matchId: -1 } });
+    
+    let nextMatchId = lastMatch ? lastMatch.matchId + 1 : 1;
+    
+    // Update match IDs to continue sequence
+    newMatches.forEach(match => {
+      match.matchId = nextMatchId++;
+      // Set match times to be in the future (next 72 hours)
+      const hoursFromNow = Math.floor(Math.random() * 72) + 1;
+      match.matchTime = moment().add(hoursFromNow, 'hours').toDate();
+    });
+    
+    await db.collection(BET_COLLECTIONS.MATCHES).insertMany(newMatches);
+    console.log(`✅ Generated ${newMatches.length} new matches`);
+  } catch (error) {
+    console.error('❌ Error generating new matches:', error);
+  }
+}
+
+// Get match results for display
+async function getRecentResults(limit = 5) {
+  try {
+    const results = await db.collection(BET_COLLECTIONS.MATCHES)
+      .find({ status: 'completed' })
+      .sort({ completedAt: -1 })
+      .limit(limit)
+      .toArray();
+    
+    return results;
+  } catch (error) {
+    console.error('Error getting recent results:', error);
+    return [];
+  }
+}
+
+// Manual simulation command (for testing or admin override)
 async function handleSimulateBets(context) {
   const { reply, senderId } = context;
   
   try {
-    // Check if user is admin (implement your admin check)
-    const isAdmin = senderId.includes('your_admin_number'); // Replace with actual admin check
+    // Check if user is admin
+    const isAdminUser = isAdmin(senderId) || isOwner(senderId);
     
-    if (!isAdmin) {
-      await reply('🚫 *Only administrators can simulate matches*');
+    if (!isAdminUser) {
+      await reply('🚫 *Only administrators can manually simulate matches*\n\n💡 *Note: Matches simulate automatically when their time arrives*');
       return;
     }
     
     const upcomingMatches = await db.collection(BET_COLLECTIONS.MATCHES)
       .find({ status: 'upcoming' })
-      .limit(5)
+      .limit(3)
       .toArray();
     
     if (upcomingMatches.length === 0) {
@@ -1110,7 +1243,7 @@ async function handleSimulateBets(context) {
       return;
     }
     
-    let simulationText = `⚽ *MATCH SIMULATION RESULTS* ⚽\n\n`;
+    let simulationText = `⚽ *MANUAL SIMULATION RESULTS* ⚽\n\n`;
     
     for (const match of upcomingMatches) {
       const result = simulateMatchResult(match.homeStrength, match.awayStrength, match.odds);
@@ -1136,14 +1269,43 @@ async function handleSimulateBets(context) {
       await settleBetsForMatch(match.matchId, result);
     }
     
-    simulationText += `✅ *All bets have been settled automatically*`;
+    simulationText += `✅ *All bets have been settled*\n🔄 *Generating new matches...*`;
     await reply(simulationText);
     
     // Generate new matches
-    await initializeMatches();
+    await generateNewMatches();
   } catch (error) {
     await reply('❌ *Error simulating matches. Please try again.*');
     console.error('Simulate bets error:', error);
+  }
+}
+
+// Add results command
+async function handleResults(context) {
+  const { reply } = context;
+  
+  try {
+    const recentResults = await getRecentResults(8);
+    
+    if (recentResults.length === 0) {
+      await reply('📊 *No recent results available*');
+      return;
+    }
+    
+    let resultsText = `📊 *RECENT RESULTS* 📊\n\n`;
+    
+    recentResults.forEach((match, index) => {
+      const completedTime = moment(match.completedAt).tz('Africa/Lagos').format('DD/MM HH:mm');
+      resultsText += `*${index + 1}.* ${match.homeTeam} ${match.result.homeGoals} - ${match.result.awayGoals} ${match.awayTeam}\n`;
+      resultsText += `🏆 ${match.league}\n`;
+      resultsText += `📅 ${completedTime} WAT\n`;
+      resultsText += `⚽ Total Goals: ${match.result.totalGoals} | BTTS: ${match.result.btts ? 'Yes' : 'No'}\n\n`;
+    });
+    
+    await reply(resultsText);
+  } catch (error) {
+    await reply('❌ *Error loading results. Please try again.*');
+    console.error('Results error:', error);
   }
 }
 
