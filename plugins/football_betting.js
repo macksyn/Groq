@@ -1,15 +1,15 @@
-// plugins/Football_betting.js - REFACTORED VERSION
+// plugins/Football_betting.js - REFACTORED VERSION with Dynamic Form
 
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
 
-// REFACTORED: Use the central manager to interact with user data
+// Use the central manager to interact with user data
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
 // Plugin information export
 export const info = {
   name: 'Sports Betting System',
-  version: '2.0.0', // Updated version
+  version: '2.1.0', // Updated version with form dynamics
   author: 'Bot Developer',
   description: 'Complete sports betting simulation with EPL, La Liga, Bundesliga, Serie A teams and multi-bet slips',
   commands: [
@@ -65,9 +65,7 @@ async function initBettingDatabase() {
   }
 }
 
-// DELETED: All self-contained economy functions are removed and replaced by unifiedUserManager.
-
-// UPDATED: Team data for the 2025/2026 season
+// Team data for the 2025/2026 season
 const TEAMS = {
   EPL: {
     name: 'English Premier League',
@@ -142,18 +140,27 @@ const BET_TYPES = {
   BTTS_NO: { name: 'Both Teams to Score - No', description: 'One or both teams fail to score' }
 };
 
-function generateOdds(homeTeam, awayTeam, homeStrength, awayStrength) {
-  const strengthDiff = homeStrength - awayStrength;
+// UPDATED: Function now includes form calculation
+function generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm) {
+  // Calculate effective strength based on form (form is weighted at 20%)
+  const effectiveHomeStrength = (homeStrength * 0.8) + (homeForm * 0.2);
+  const effectiveAwayStrength = (awayStrength * 0.8) + (awayForm * 0.2);
+
+  const strengthDiff = effectiveHomeStrength - effectiveAwayStrength;
   const homeAdvantage = 5;
-  const adjustedHomeStrength = homeStrength + homeAdvantage;
-  const totalStrength = adjustedHomeStrength + awayStrength;
+  
+  const adjustedHomeStrength = effectiveHomeStrength + homeAdvantage;
+  const totalStrength = adjustedHomeStrength + effectiveAwayStrength;
+  
   const homeWinProb = (adjustedHomeStrength / totalStrength) * 0.6 + 0.2;
-  const awayWinProb = (awayStrength / totalStrength) * 0.6 + 0.2;
+  const awayWinProb = (effectiveAwayStrength / totalStrength) * 0.6 + 0.2;
   const drawProb = 1 - homeWinProb - awayWinProb + 0.15;
+  
   const total = homeWinProb + drawProb + awayWinProb;
   const normHome = homeWinProb / total;
   const normDraw = drawProb / total;
   const normAway = awayWinProb / total;
+  
   const margin = 0.1;
   const odds = {
     HOME_WIN: Math.max(1.1, (1 / normHome) * (1 - margin)),
@@ -166,12 +173,15 @@ function generateOdds(homeTeam, awayTeam, homeStrength, awayStrength) {
     BTTS_YES: Math.random() * 1.0 + 1.6,
     BTTS_NO: Math.random() * 1.0 + 1.4
   };
+  
   Object.keys(odds).forEach(key => {
     odds[key] = Math.round(odds[key] * 100) / 100;
   });
+  
   return odds;
 }
 
+// UPDATED: Function now passes form to generateOdds
 function generateMatches() {
   const matches = [];
   const leagues = Object.keys(TEAMS);
@@ -185,12 +195,18 @@ function generateMatches() {
       do {
         awayTeamIndex = Math.floor(Math.random() * teams.length);
       } while (awayTeamIndex === homeTeamIndex);
+      
       const homeTeam = teams[homeTeamIndex];
       const awayTeam = teams[awayTeamIndex];
+      
       const homeStrength = TEAMS[league].teams[homeTeam].strength;
       const awayStrength = TEAMS[league].teams[awayTeam].strength;
-      const odds = generateOdds(homeTeam, awayTeam, homeStrength, awayStrength);
+      const homeForm = TEAMS[league].teams[homeTeam].form;
+      const awayForm = TEAMS[league].teams[awayTeam].form;
+      
+      const odds = generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm);
       const matchTime = moment().add(Math.floor(Math.random() * 72), 'hours');
+      
       matches.push({
         matchId: matchId++,
         league: TEAMS[league].name,
@@ -199,6 +215,8 @@ function generateMatches() {
         awayTeam,
         homeStrength,
         awayStrength,
+        homeForm,
+        awayForm,
         odds,
         matchTime: matchTime.toDate(),
         status: 'upcoming',
@@ -212,7 +230,7 @@ function generateMatches() {
 async function initializeMatches() {
   try {
     const existingMatches = await db.collection(BET_COLLECTIONS.MATCHES).countDocuments({ status: 'upcoming' });
-    if (existingMatches < 15) { // Ensure there are always matches
+    if (existingMatches < 15) {
       const newMatches = generateMatches();
       const lastMatch = await db.collection(BET_COLLECTIONS.MATCHES).findOne({}, { sort: { matchId: -1 } });
       let nextMatchId = lastMatch ? lastMatch.matchId + 1 : 1;
@@ -226,6 +244,28 @@ async function initializeMatches() {
     console.error('Error initializing matches:', error);
   }
 }
+
+// NEW: Function to update team form in the global TEAMS object after a match
+function updateTeamForms(match) {
+    try {
+        const homeTeam = TEAMS[match.leagueCode].teams[match.homeTeam];
+        const awayTeam = TEAMS[match.leagueCode].teams[match.awayTeam];
+
+        if (match.result.result === 'HOME_WIN') {
+            homeTeam.form = Math.min(100, homeTeam.form + 5); // Increase form, max 100
+            awayTeam.form = Math.max(0, awayTeam.form - 5);   // Decrease form, min 0
+        } else if (match.result.result === 'AWAY_WIN') {
+            homeTeam.form = Math.max(0, homeTeam.form - 5);
+            awayTeam.form = Math.min(100, awayTeam.form + 5);
+        } else { // Draw
+            homeTeam.form = Math.max(0, homeTeam.form - 2); // Slight decrease for home draw
+            awayTeam.form = Math.min(100, awayTeam.form + 2); // Slight increase for away draw
+        }
+    } catch (error) {
+        console.error(`Error updating form for match ${match.matchId}:`, error);
+    }
+}
+
 
 function simulateMatchResult(homeStrength, awayStrength, odds) {
   const rand = Math.random();
@@ -283,6 +323,11 @@ export default async function bettingHandler(m, sock, config) {
     if (!messageBody) return;
     const args = messageBody.split(' ').filter(arg => arg.length > 0);
     const command = args[0].toLowerCase();
+    
+    // Check if the command belongs to this plugin
+    const commandInfo = info.commands.find(c => c.name === command || c.aliases.includes(command));
+    if (!commandInfo) return;
+
     const senderId = m.key.participant || m.key.remoteJid;
     const from = m.key.remoteJid;
     if (!senderId || !from) return;
@@ -292,7 +337,6 @@ export default async function bettingHandler(m, sock, config) {
       await initializeMatches();
     }
 
-    // REFACTORED: Initialize user using the central manager
     await unifiedUserManager.initUser(senderId);
 
     const reply = async (text) => {
@@ -571,7 +615,7 @@ async function handleSetStake(context, args) {
 }
 
 async function handlePlaceBet(context) {
-  const { reply, senderId, sock, from } = context;
+  const { reply, senderId, sock, from, config } = context;
   try {
     const betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
     if (!betSlip || betSlip.selections.length === 0) {
@@ -579,7 +623,7 @@ async function handlePlaceBet(context) {
       return;
     }
     if (!betSlip.stake || betSlip.stake <= 0) {
-      await reply(`💰 *Please set a stake first*\n\n💡 *Usage:* ${context.config.PREFIX}betslip stake [amount]`);
+      await reply(`💰 *Please set a stake first*\n\n💡 *Usage:* ${config.PREFIX}betslip stake [amount]`);
       return;
     }
     const userData = await unifiedUserManager.getUserData(senderId);
@@ -692,11 +736,11 @@ async function handleMyBets(context) {
 }
 
 async function handleBetHistory(context) {
-    const { reply, senderId } = context;
+    const { reply, senderId, config } = context;
     try {
         const betHistory = await db.collection(BET_COLLECTIONS.BETS).find({ userId: senderId }).sort({ placedAt: -1 }).limit(15).toArray();
         if (betHistory.length === 0) {
-            await reply(`📋 *No betting history*\n\n💡 *Place your first bet:* ${context.config.PREFIX}fixtures`);
+            await reply(`📋 *No betting history*\n\n💡 *Place your first bet:* ${config.PREFIX}fixtures`);
             return;
         }
         let historyText = `📊 *YOUR BETTING HISTORY* 📊\n\n`;
@@ -773,19 +817,32 @@ function stopAutoSimulation() {
   }
 }
 
+// UPDATED: Now calls updateTeamForms
 async function autoSimulateMatches() {
   try {
     if (!db) return;
     const now = new Date();
     const matchesToSimulate = await db.collection(BET_COLLECTIONS.MATCHES).find({ status: 'upcoming', matchTime: { $lte: now } }).toArray();
     if (matchesToSimulate.length === 0) return;
+    
     console.log(`⚽ Auto-simulating ${matchesToSimulate.length} matches...`);
+    
     for (const match of matchesToSimulate) {
       const result = simulateMatchResult(match.homeStrength, match.awayStrength, match.odds);
-      await db.collection(BET_COLLECTIONS.MATCHES).updateOne({ matchId: match.matchId }, { $set: { status: 'completed', result: result, completedAt: new Date() } });
+      
+      await db.collection(BET_COLLECTIONS.MATCHES).updateOne(
+          { matchId: match.matchId }, 
+          { $set: { status: 'completed', result: result, completedAt: new Date() } }
+      );
+      
       console.log(`✅ ${match.homeTeam} ${result.homeGoals}-${result.awayGoals} ${match.awayTeam}`);
+      
       await settleBetsForMatch(match.matchId, result);
+      
+      // NEW: Update team form after simulation
+      updateTeamForms(match);
     }
+    
     await initializeMatches();
     console.log(`✅ Auto-simulation complete. Settled bets for ${matchesToSimulate.length} matches`);
   } catch (error) {
@@ -823,6 +880,7 @@ async function handleSimulateBets(context) {
             simulationText += `🏆 Result: ${result.result.replace('_', ' ')}\n`;
             simulationText += `⚽ Goals: ${result.totalGoals} | BTTS: ${result.btts ? 'Yes' : 'No'}\n\n`;
             await settleBetsForMatch(match.matchId, result);
+            updateTeamForms(match); // Also update form on manual sim
         }
         simulationText += `✅ *All bets settled*\n🔄 *Generating new matches...*`;
         await reply(simulationText);
@@ -895,6 +953,8 @@ async function settleBetsForMatch(matchId, matchResult) {
         }
         if (!selectionWon) {
           betWon = false;
+          // No need to check further if one leg fails
+          break;
         }
       }
       
@@ -924,3 +984,4 @@ function gracefulShutdown() {
 
 process.on('SIGINT', gracefulShutdown);
 process.on('SIGTERM', gracefulShutdown);
+
