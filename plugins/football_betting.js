@@ -1,6 +1,8 @@
-// plugins/sports_betting.js - Sports Betting plugin compatible with PluginManager
+// plugins/Football_betting.js
+
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
+import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
 // Plugin information export
 export const info = {
