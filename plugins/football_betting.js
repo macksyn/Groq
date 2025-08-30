@@ -97,7 +97,7 @@ const betTypeAliases = {
     '2': 'AWAY_WIN', 'aw': 'AWAY_WIN', 'away': 'AWAY', 'awaywin': 'AWAY_WIN'
 };
 
-// NEW: Helper function to display user-friendly bet type names
+// Helper function to display user-friendly bet type names
 function formatBetType(betTypeKey) {
     switch (betTypeKey) {
         case 'HOME_WIN': return 'Home Win (1)';
@@ -739,7 +739,7 @@ const betTypeAliases = {
     '2': 'AWAY_WIN', 'aw': 'AWAY_WIN', 'away': 'AWAY', 'awaywin': 'AWAY_WIN'
 };
 
-// NEW: Helper function to display user-friendly bet type names
+// Helper function to display user-friendly bet type names
 function formatBetType(betTypeKey) {
     switch (betTypeKey) {
         case 'HOME_WIN': return 'Home Win (1)';
@@ -1123,6 +1123,11 @@ async function handleRemoveFromBetSlip(context, args) {
         const selectionNumber = parseInt(args[0]);
         if (isNaN(selectionNumber)) {
             await reply('⚠️ *Please provide a valid selection number*');
+            return;
+        }
+        const betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
+        if (!betSlip || betSlip.selections.length === 0) {
+            await reply('📋 *Your bet slip is empty*');
             return;
         }
 , '$options' : 'i' } });
@@ -1318,7 +1323,7 @@ const betTypeAliases = {
     '2': 'AWAY_WIN', 'aw': 'AWAY_WIN', 'away': 'AWAY', 'awaywin': 'AWAY_WIN'
 };
 
-// NEW: Helper function to display user-friendly bet type names
+// Helper function to display user-friendly bet type names
 function formatBetType(betTypeKey) {
     switch (betTypeKey) {
         case 'HOME_WIN': return 'Home Win (1)';
@@ -1702,6 +1707,11 @@ async function handleRemoveFromBetSlip(context, args) {
         const selectionNumber = parseInt(args[0]);
         if (isNaN(selectionNumber)) {
             await reply('⚠️ *Please provide a valid selection number*');
+            return;
+        }
+        const betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
+        if (!betSlip || betSlip.selections.length === 0) {
+            await reply('📋 *Your bet slip is empty*');
             return;
         }
 , '$options' : 'i' } 
