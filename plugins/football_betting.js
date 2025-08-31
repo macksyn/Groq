@@ -86,15 +86,22 @@ const TEAMS = {
 
 // Maps user-friendly aliases to internal bet type keys
 const betTypeAliases = {
-    'over1.5': 'OVER1.5', 'o1.5': 'OVER15', 'over15': 'OVER15',
-    'under1.5': 'UNDER1.5', 'u1.5': 'UNDER15', 'under15': 'UNDER15',
-    'over2.5': 'OVER2.5', 'o2.5': 'OVER25', 'over25': 'OVER25',
-    'under2.5': 'UNDER2.5', 'u2.5': 'UNDER25', 'under25': 'UNDER25',
-    'btts': 'BTTS_YES', 'gg': 'GG', 'btts_yes': 'BTTS_YES',
-    'nobtts': 'BTTS_NO', 'ng': 'NG', 'btts_no': 'BTTS_NO',
-    '1': 'HOME_WIN', 'hw': 'HOME_WIN', 'home': 'HOME', 'homewin': 'HOME_WIN',
+    // Over/Under 1.5 -> All point to OVER15 or UNDER15
+    'over1.5': 'OVER15', 'o1.5': 'OVER15', 'over15': 'OVER15',
+    'under1.5': 'UNDER15', 'u1.5': 'UNDER15', 'under15': 'UNDER15',
+
+    // Over/Under 2.5 -> All point to OVER25 or UNDER25
+    'over2.5': 'OVER25', 'o2.5': 'OVER25', 'over25': 'OVER25',
+    'under2.5': 'UNDER25', 'u2.5': 'UNDER25', 'under25': 'UNDER25',
+
+    // Both Teams To Score -> All point to BTTS_YES or BTTS_NO
+    'btts': 'BTTS_YES', 'gg': 'BTTS_YES', 'btts_yes': 'BTTS_YES',
+    'nobtts': 'BTTS_NO', 'ng': 'BTTS_NO', 'btts_no': 'BTTS_NO',
+
+    // Match Winner -> All point to HOME_WIN, DRAW, or AWAY_WIN
+    '1': 'HOME_WIN', 'hw': 'HOME_WIN', 'home': 'HOME_WIN', 'homewin': 'HOME_WIN',
     'x': 'DRAW', 'd': 'DRAW',
-    '2': 'AWAY_WIN', 'aw': 'AWAY_WIN', 'away': 'AWAY', 'awaywin': 'AWAY_WIN'
+    '2': 'AWAY_WIN', 'aw': 'AWAY_WIN', 'away': 'AWAY_WIN', 'awaywin': 'AWAY_WIN'
 };
 
 // NEW: Helper function to display user-friendly bet type names
@@ -146,29 +153,53 @@ function generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, 
   return odds;
 }
 
-function generateMatches() {
+// Generate Match Function
+async function generateMatches(db) { // Note: We now pass the 'db' object here
     const matches = [];
     const leagues = Object.keys(TEAMS);
-    let matchId = 1;
+    let matchId = 1; // This will be reset later, so it's fine
+
+    // 1. Find all teams that are already in an upcoming match
+    const upcomingFixtures = await db.collection(BET_COLLECTIONS.MATCHES).find(
+        { status: 'upcoming' },
+        { projection: { homeTeam: 1, awayTeam: 1, _id: 0 } }
+    ).toArray();
+
+    const busyTeams = new Set();
+    upcomingFixtures.forEach(fixture => {
+        busyTeams.add(fixture.homeTeam);
+        busyTeams.add(fixture.awayTeam);
+    });
+
+    // 2. Generate matches for each league using only available teams
     leagues.forEach(league => {
-        let teamNames = Object.keys(TEAMS[league].teams);
-        for (let i = teamNames.length - 1; i > 0; i--) {
+        // Filter out teams that are already busy
+        let availableTeams = Object.keys(TEAMS[league].teams).filter(team => !busyTeams.has(team));
+
+        // Shuffle the available teams to create random fixtures
+        for (let i = availableTeams.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
-            [teamNames[i], teamNames[j]] = [teamNames[j], teamNames[i]];
+            [availableTeams[i], availableTeams[j]] = [availableTeams[j], availableTeams[i]];
         }
+
         const numMatches = league === 'EPL' ? 6 : 4;
+
+        // Create pairs from the shuffled, available list
         for (let i = 0; i < numMatches * 2; i += 2) {
-            if (!teamNames[i] || !teamNames[i + 1]) break;
-            const homeTeam = teamNames[i];
-            const awayTeam = teamNames[i + 1];
+            if (!availableTeams[i] || !availableTeams[i + 1]) break; // Stop if we run out of teams
+
+            const homeTeam = availableTeams[i];
+            const awayTeam = availableTeams[i + 1];
             const homeStrength = TEAMS[league].teams[homeTeam].strength;
             const awayStrength = TEAMS[league].teams[awayTeam].strength;
             const homeForm = TEAMS[league].teams[homeTeam].form;
             const awayForm = TEAMS[league].teams[awayTeam].form;
+
             const odds = generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm);
             const matchTime = moment().add(Math.floor(Math.random() * 72) + 1, 'hours');
+
             matches.push({
-                matchId: matchId++,
+                matchId: matchId++, // Temporary ID
                 league: TEAMS[league].name,
                 leagueCode: league,
                 homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm,
@@ -179,18 +210,24 @@ function generateMatches() {
     return matches;
 }
 
+// Initialize Matches
+
 async function initializeMatches() {
   try {
     const existingMatches = await db.collection(BET_COLLECTIONS.MATCHES).countDocuments({ status: 'upcoming' });
     if (existingMatches < 15) {
-      const newMatches = generateMatches();
-      const lastMatch = await db.collection(BET_COLLECTIONS.MATCHES).findOne({}, { sort: { matchId: -1 } });
-      let nextMatchId = lastMatch ? lastMatch.matchId + 1 : 1;
-      newMatches.forEach(match => {
-        match.matchId = nextMatchId++;
-      });
-      await db.collection(BET_COLLECTIONS.MATCHES).insertMany(newMatches);
-      console.log(`✅ Generated ${newMatches.length} new matches`);
+      // Pass the 'db' object to the updated function
+      const newMatches = await generateMatches(db);
+
+      if (newMatches.length > 0) {
+        const lastMatch = await db.collection(BET_COLLECTIONS.MATCHES).findOne({}, { sort: { matchId: -1 } });
+        let nextMatchId = lastMatch ? lastMatch.matchId + 1 : 1;
+        newMatches.forEach(match => {
+          match.matchId = nextMatchId++;
+        });
+        await db.collection(BET_COLLECTIONS.MATCHES).insertMany(newMatches);
+        console.log(`✅ Generated ${newMatches.length} new matches`);
+      }
     }
   } catch (error) {
     console.error('Error initializing matches:', error);
