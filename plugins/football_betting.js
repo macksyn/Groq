@@ -9,7 +9,7 @@ import { unifiedUserManager } from '../lib/pluginIntegration.js';
 // Plugin information export
 export const info = {
   name: 'Sports Betting System',
-  version: '2.6.0', // Updated version with GG/NG terminology
+  version: '2.6.0',
   author: 'Alex Macksyn',
   description: 'Complete sports betting simulation with EPL, La Liga, Bundesliga, Serie A teams and multi-bet slips',
   commands: [
@@ -68,19 +68,63 @@ async function initBettingDatabase() {
 const TEAMS = {
   EPL: {
     name: 'English Premier League',
-    teams: { 'Arsenal': { strength: 92, form: 90 }, 'Aston Villa': { strength: 80, form: 78 }, 'Bournemouth': { strength: 68, form: 65 }, 'Brentford': { strength: 70, form: 72 }, 'Brighton': { strength: 75, form: 78 }, 'Chelsea': { strength: 84, form: 80 }, 'Crystal Palace': { strength: 72, form: 70 }, 'Everton': { strength: 69, form: 66 }, 'Fulham': { strength: 71, form: 73 }, 'Ipswich Town': { strength: 62, form: 60 }, 'Leicester City': { strength: 73, form: 75 }, 'Liverpool': { strength: 91, form: 88 }, 'Manchester City': { strength: 96, form: 95 }, 'Manchester United': { strength: 85, form: 82 }, 'Newcastle United': { strength: 82, form: 80 }, 'Nottingham Forest': { strength: 67, form: 68 }, 'Southampton': { strength: 64, form: 62 }, 'Tottenham': { strength: 83, form: 81 }, 'West Ham': { strength: 78, form: 75 }, 'Wolves': { strength: 74, form: 72 } }
+    teams: { 
+      'Arsenal': { strength: 92, form: 90 }, 
+      'Aston Villa': { strength: 80, form: 78 }, 
+      'Bournemouth': { strength: 68, form: 65 }, 
+      'Brentford': { strength: 70, form: 72 }, 
+      'Brighton': { strength: 75, form: 78 }, 
+      'Chelsea': { strength: 84, form: 80 }, 
+      'Crystal Palace': { strength: 72, form: 70 }, 
+      'Everton': { strength: 69, form: 66 }, 
+      'Fulham': { strength: 71, form: 73 }, 
+      'Ipswich Town': { strength: 62, form: 60 }, 
+      'Leicester City': { strength: 73, form: 75 }, 
+      'Liverpool': { strength: 91, form: 88 }, 
+      'Manchester City': { strength: 96, form: 95 }, 
+      'Manchester United': { strength: 85, form: 82 }, 
+      'Newcastle United': { strength: 82, form: 80 }, 
+      'Nottingham Forest': { strength: 67, form: 68 }, 
+      'Southampton': { strength: 64, form: 62 }, 
+      'Tottenham': { strength: 83, form: 81 }, 
+      'West Ham': { strength: 78, form: 75 }, 
+      'Wolves': { strength: 74, form: 72 }
+    }
   },
   LALIGA: {
     name: 'Spanish La Liga',
-    teams: { 'Real Madrid': { strength: 97, form: 95 }, 'Barcelona': { strength: 90, form: 88 }, 'Girona': { strength: 80, form: 82 }, 'Atletico Madrid': { strength: 88, form: 85 }, 'Athletic Bilbao': { strength: 82, form: 80 }, 'Real Sociedad': { strength: 81, form: 83 }, 'Real Betis': { strength: 79, form: 77 }, 'Villarreal': { strength: 78, form: 76 }, 'Valencia': { strength: 77, form: 75 }, 'Sevilla': { strength: 80, form: 78 } }
+    teams: { 
+      'Real Madrid': { strength: 97, form: 95 }, 
+      'Barcelona': { strength: 90, form: 88 }, 
+      'Girona': { strength: 80, form: 82 }, 
+      'Atletico Madrid': { strength: 88, form: 85 }, 
+      'Athletic Bilbao': { strength: 82, form: 80 }, 
+      'Real Sociedad': { strength: 81, form: 83 }, 
+      'Real Betis': { strength: 79, form: 77 }, 
+      'Villarreal': { strength: 78, form: 76 }, 
+      'Valencia': { strength: 77, form: 75 }, 
+      'Sevilla': { strength: 80, form: 78 }
+    }
   },
   BUNDESLIGA: {
     name: 'German Bundesliga',
-    teams: { 'Bayern Munich': { strength: 94, form: 92 }, 'Bayer Leverkusen': { strength: 91, form: 93 }, 'Borussia Dortmund': { strength: 88, form: 86 }, 'RB Leipzig': { strength: 87, form: 88 }, 'VfB Stuttgart': { strength: 84, form: 85 } }
+    teams: { 
+      'Bayern Munich': { strength: 94, form: 92 }, 
+      'Bayer Leverkusen': { strength: 91, form: 93 }, 
+      'Borussia Dortmund': { strength: 88, form: 86 }, 
+      'RB Leipzig': { strength: 87, form: 88 }, 
+      'VfB Stuttgart': { strength: 84, form: 85 }
+    }
   },
   SERIEA: {
     name: 'Italian Serie A',
-    teams: { 'Inter Milan': { strength: 92, form: 90 }, 'AC Milan': { strength: 87, form: 85 }, 'Juventus': { strength: 86, form: 84 }, 'Atalanta': { strength: 83, form: 81 }, 'Napoli': { strength: 84, form: 82 } }
+    teams: { 
+      'Inter Milan': { strength: 92, form: 90 }, 
+      'AC Milan': { strength: 87, form: 85 }, 
+      'Juventus': { strength: 86, form: 84 }, 
+      'Atalanta': { strength: 83, form: 81 }, 
+      'Napoli': { strength: 84, form: 82 }
+    }
   }
 };
 
@@ -236,12 +280,29 @@ function simulateMatchResult(homeStrength, awayStrength, odds) {
   }
   let homeGoals, awayGoals;
   switch (result) {
-    case 'HOME_WIN': homeGoals = Math.floor(Math.random() * 3) + 1; awayGoals = Math.floor(Math.random() * homeGoals); break;
-    case 'AWAY_WIN': awayGoals = Math.floor(Math.random() * 3) + 1; homeGoals = Math.floor(Math.random() * awayGoals); break;
-    case 'DRAW': const drawScore = Math.floor(Math.random() * 4); homeGoals = awayGoals = drawScore; break;
+    case 'HOME_WIN': 
+      homeGoals = Math.floor(Math.random() * 3) + 1; 
+      awayGoals = Math.floor(Math.random() * homeGoals); 
+      break;
+    case 'AWAY_WIN': 
+      awayGoals = Math.floor(Math.random() * 3) + 1; 
+      homeGoals = Math.floor(Math.random() * awayGoals); 
+      break;
+    case 'DRAW': 
+      const drawScore = Math.floor(Math.random() * 4); 
+      homeGoals = awayGoals = drawScore; 
+      break;
   }
   const totalGoals = homeGoals + awayGoals;
-  return { result, homeGoals, awayGoals, totalGoals, over15: totalGoals > 1.5, over25: totalGoals > 2.5, btts: homeGoals > 0 && awayGoals > 0 };
+  return { 
+    result, 
+    homeGoals, 
+    awayGoals, 
+    totalGoals, 
+    over15: totalGoals > 1.5, 
+    over25: totalGoals > 2.5, 
+    btts: homeGoals > 0 && awayGoals > 0 
+  };
 }
 
 function isAdmin(userId) {
@@ -280,13 +341,16 @@ export default async function bettingHandler(m, sock, config) {
     await unifiedUserManager.initUser(senderId);
 
     const reply = async (text) => {
-      try { await sock.sendMessage(from, { text }, { quoted: m }); } 
-      catch (error) { console.error('❌ Error sending reply:', error.message); }
+      try { 
+        await sock.sendMessage(from, { text }, { quoted: m }); 
+      } catch (error) { 
+        console.error('❌ Error sending reply:', error.message); 
+      }
     };
     
     const context = { m, sock, config, senderId, from, reply };
 
-    // FIXED: Use the helper function for command matching
+    // FIXED: Use proper command matching for all commands
     if (commandMatches(command, 'bet', ['sportbet', 'sportybet'])) {
         if (args.length === 1) { 
             await showBettingMenu(reply, config.PREFIX); 
@@ -321,7 +385,10 @@ async function showBettingMenu(reply, prefix) {
                    `• *${prefix}bethistory* - View bet history\n` +
                    `• *${prefix}results* - View recent match results\n\n` +
                    `🏆 *Leagues Available:*\n` +
-                   `• 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League\n` + `• 🇪🇸 La Liga\n` + `• 🇩🇪 Bundesliga\n` + `• 🇮🇹 Serie A\n\n` +
+                   `• 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League\n` + 
+                   `• 🇪🇸 La Liga\n` + 
+                   `• 🇩🇪 Bundesliga\n` + 
+                   `• 🇮🇹 Serie A\n\n` +
                    `💡 *Start by viewing: ${prefix}fixtures*`;
   await reply(menuText);
 }
@@ -403,14 +470,29 @@ async function handleBetSlip(context, args) {
         }
         const action = args[0].toLowerCase();
         switch (action) {
-            case 'add': await handleAddToBetSlip(context, args.slice(1)); break;
-            case 'remove': await handleRemoveFromBetSlip(context, args.slice(1)); break;
-            case 'stake': await handleSetStake(context, args.slice(1)); break;
-            case 'place': await handlePlaceBet(context); break;
-            case 'clear': await handleClearBetSlip(context); break;
-            case 'share': await handleShareBetSlip(context); break;
-            case 'load': await handleLoadBetSlip(context, args.slice(1)); break;
-            default: await reply(`❓ *Unknown bet slip command*\n\n📋 *Available:* add, remove, stake, place, clear, share, load`);
+            case 'add': 
+                await handleAddToBetSlip(context, args.slice(1)); 
+                break;
+            case 'remove': 
+                await handleRemoveFromBetSlip(context, args.slice(1)); 
+                break;
+            case 'stake': 
+                await handleSetStake(context, args.slice(1)); 
+                break;
+            case 'place': 
+                await handlePlaceBet(context); 
+                break;
+            case 'clear': 
+                await handleClearBetSlip(context); 
+                break;
+            case 'share': 
+                await handleShareBetSlip(context); 
+                break;
+            case 'load': 
+                await handleLoadBetSlip(context, args.slice(1)); 
+                break;
+            default: 
+                await reply(`❓ *Unknown bet slip command*\n\n📋 *Available:* add, remove, stake, place, clear, share, load`);
         }
     } catch (error) {
         await reply('❌ *Error managing bet slip. Please try again.*');
@@ -453,7 +535,14 @@ async function handleAddToBetSlip(context, args) {
             betSlip = { userId: senderId, selections: [], stake: 0, createdAt: new Date() };
         }
         const existingIndex = betSlip.selections.findIndex(s => s.matchId === matchId);
-        const newSelection = { matchId, betType, odds, homeTeam: match.homeTeam, awayTeam: match.awayTeam, addedAt: new Date() };
+        const newSelection = { 
+            matchId, 
+            betType, 
+            odds, 
+            homeTeam: match.homeTeam, 
+            awayTeam: match.awayTeam, 
+            addedAt: new Date() 
+        };
         if (existingIndex !== -1) {
             betSlip.selections[existingIndex] = newSelection;
         } else {
@@ -572,9 +661,17 @@ async function handlePlaceBet(context) {
       return;
     }
     const betRecord = {
-      userId: senderId, betType: 'accumulator', selections: betSlip.selections,
-      stake: betSlip.stake, totalOdds: totalOdds, potentialWin: potentialWin,
-      status: 'pending', placedAt: new Date(), settledAt: null, result: null, payout: 0
+      userId: senderId, 
+      betType: 'accumulator', 
+      selections: betSlip.selections,
+      stake: betSlip.stake, 
+      totalOdds: totalOdds, 
+      potentialWin: potentialWin,
+      status: 'pending', 
+      placedAt: new Date(), 
+      settledAt: null, 
+      result: null, 
+      payout: 0
     };
     const betResult = await db.collection(BET_COLLECTIONS.BETS).insertOne(betRecord);
     await db.collection(BET_COLLECTIONS.BETSLIPS).deleteOne({ userId: senderId });
@@ -651,7 +748,7 @@ import { unifiedUserManager } from '../lib/pluginIntegration.js';
 // Plugin information export
 export const info = {
   name: 'Sports Betting System',
-  version: '2.6.0', // Updated version with GG/NG terminology
+  version: '2.6.0',
   author: 'Alex Macksyn',
   description: 'Complete sports betting simulation with EPL, La Liga, Bundesliga, Serie A teams and multi-bet slips',
   commands: [
@@ -710,19 +807,63 @@ async function initBettingDatabase() {
 const TEAMS = {
   EPL: {
     name: 'English Premier League',
-    teams: { 'Arsenal': { strength: 92, form: 90 }, 'Aston Villa': { strength: 80, form: 78 }, 'Bournemouth': { strength: 68, form: 65 }, 'Brentford': { strength: 70, form: 72 }, 'Brighton': { strength: 75, form: 78 }, 'Chelsea': { strength: 84, form: 80 }, 'Crystal Palace': { strength: 72, form: 70 }, 'Everton': { strength: 69, form: 66 }, 'Fulham': { strength: 71, form: 73 }, 'Ipswich Town': { strength: 62, form: 60 }, 'Leicester City': { strength: 73, form: 75 }, 'Liverpool': { strength: 91, form: 88 }, 'Manchester City': { strength: 96, form: 95 }, 'Manchester United': { strength: 85, form: 82 }, 'Newcastle United': { strength: 82, form: 80 }, 'Nottingham Forest': { strength: 67, form: 68 }, 'Southampton': { strength: 64, form: 62 }, 'Tottenham': { strength: 83, form: 81 }, 'West Ham': { strength: 78, form: 75 }, 'Wolves': { strength: 74, form: 72 } }
+    teams: { 
+      'Arsenal': { strength: 92, form: 90 }, 
+      'Aston Villa': { strength: 80, form: 78 }, 
+      'Bournemouth': { strength: 68, form: 65 }, 
+      'Brentford': { strength: 70, form: 72 }, 
+      'Brighton': { strength: 75, form: 78 }, 
+      'Chelsea': { strength: 84, form: 80 }, 
+      'Crystal Palace': { strength: 72, form: 70 }, 
+      'Everton': { strength: 69, form: 66 }, 
+      'Fulham': { strength: 71, form: 73 }, 
+      'Ipswich Town': { strength: 62, form: 60 }, 
+      'Leicester City': { strength: 73, form: 75 }, 
+      'Liverpool': { strength: 91, form: 88 }, 
+      'Manchester City': { strength: 96, form: 95 }, 
+      'Manchester United': { strength: 85, form: 82 }, 
+      'Newcastle United': { strength: 82, form: 80 }, 
+      'Nottingham Forest': { strength: 67, form: 68 }, 
+      'Southampton': { strength: 64, form: 62 }, 
+      'Tottenham': { strength: 83, form: 81 }, 
+      'West Ham': { strength: 78, form: 75 }, 
+      'Wolves': { strength: 74, form: 72 }
+    }
   },
   LALIGA: {
     name: 'Spanish La Liga',
-    teams: { 'Real Madrid': { strength: 97, form: 95 }, 'Barcelona': { strength: 90, form: 88 }, 'Girona': { strength: 80, form: 82 }, 'Atletico Madrid': { strength: 88, form: 85 }, 'Athletic Bilbao': { strength: 82, form: 80 }, 'Real Sociedad': { strength: 81, form: 83 }, 'Real Betis': { strength: 79, form: 77 }, 'Villarreal': { strength: 78, form: 76 }, 'Valencia': { strength: 77, form: 75 }, 'Sevilla': { strength: 80, form: 78 } }
+    teams: { 
+      'Real Madrid': { strength: 97, form: 95 }, 
+      'Barcelona': { strength: 90, form: 88 }, 
+      'Girona': { strength: 80, form: 82 }, 
+      'Atletico Madrid': { strength: 88, form: 85 }, 
+      'Athletic Bilbao': { strength: 82, form: 80 }, 
+      'Real Sociedad': { strength: 81, form: 83 }, 
+      'Real Betis': { strength: 79, form: 77 }, 
+      'Villarreal': { strength: 78, form: 76 }, 
+      'Valencia': { strength: 77, form: 75 }, 
+      'Sevilla': { strength: 80, form: 78 }
+    }
   },
   BUNDESLIGA: {
     name: 'German Bundesliga',
-    teams: { 'Bayern Munich': { strength: 94, form: 92 }, 'Bayer Leverkusen': { strength: 91, form: 93 }, 'Borussia Dortmund': { strength: 88, form: 86 }, 'RB Leipzig': { strength: 87, form: 88 }, 'VfB Stuttgart': { strength: 84, form: 85 } }
+    teams: { 
+      'Bayern Munich': { strength: 94, form: 92 }, 
+      'Bayer Leverkusen': { strength: 91, form: 93 }, 
+      'Borussia Dortmund': { strength: 88, form: 86 }, 
+      'RB Leipzig': { strength: 87, form: 88 }, 
+      'VfB Stuttgart': { strength: 84, form: 85 }
+    }
   },
   SERIEA: {
     name: 'Italian Serie A',
-    teams: { 'Inter Milan': { strength: 92, form: 90 }, 'AC Milan': { strength: 87, form: 85 }, 'Juventus': { strength: 86, form: 84 }, 'Atalanta': { strength: 83, form: 81 }, 'Napoli': { strength: 84, form: 82 } }
+    teams: { 
+      'Inter Milan': { strength: 92, form: 90 }, 
+      'AC Milan': { strength: 87, form: 85 }, 
+      'Juventus': { strength: 86, form: 84 }, 
+      'Atalanta': { strength: 83, form: 81 }, 
+      'Napoli': { strength: 84, form: 82 }
+    }
   }
 };
 
@@ -878,12 +1019,29 @@ function simulateMatchResult(homeStrength, awayStrength, odds) {
   }
   let homeGoals, awayGoals;
   switch (result) {
-    case 'HOME_WIN': homeGoals = Math.floor(Math.random() * 3) + 1; awayGoals = Math.floor(Math.random() * homeGoals); break;
-    case 'AWAY_WIN': awayGoals = Math.floor(Math.random() * 3) + 1; homeGoals = Math.floor(Math.random() * awayGoals); break;
-    case 'DRAW': const drawScore = Math.floor(Math.random() * 4); homeGoals = awayGoals = drawScore; break;
+    case 'HOME_WIN': 
+      homeGoals = Math.floor(Math.random() * 3) + 1; 
+      awayGoals = Math.floor(Math.random() * homeGoals); 
+      break;
+    case 'AWAY_WIN': 
+      awayGoals = Math.floor(Math.random() * 3) + 1; 
+      homeGoals = Math.floor(Math.random() * awayGoals); 
+      break;
+    case 'DRAW': 
+      const drawScore = Math.floor(Math.random() * 4); 
+      homeGoals = awayGoals = drawScore; 
+      break;
   }
   const totalGoals = homeGoals + awayGoals;
-  return { result, homeGoals, awayGoals, totalGoals, over15: totalGoals > 1.5, over25: totalGoals > 2.5, btts: homeGoals > 0 && awayGoals > 0 };
+  return { 
+    result, 
+    homeGoals, 
+    awayGoals, 
+    totalGoals, 
+    over15: totalGoals > 1.5, 
+    over25: totalGoals > 2.5, 
+    btts: homeGoals > 0 && awayGoals > 0 
+  };
 }
 
 function isAdmin(userId) {
@@ -922,13 +1080,16 @@ export default async function bettingHandler(m, sock, config) {
     await unifiedUserManager.initUser(senderId);
 
     const reply = async (text) => {
-      try { await sock.sendMessage(from, { text }, { quoted: m }); } 
-      catch (error) { console.error('❌ Error sending reply:', error.message); }
+      try { 
+        await sock.sendMessage(from, { text }, { quoted: m }); 
+      } catch (error) { 
+        console.error('❌ Error sending reply:', error.message); 
+      }
     };
     
     const context = { m, sock, config, senderId, from, reply };
 
-    // FIXED: Use the helper function for command matching
+    // FIXED: Use proper command matching for all commands
     if (commandMatches(command, 'bet', ['sportbet', 'sportybet'])) {
         if (args.length === 1) { 
             await showBettingMenu(reply, config.PREFIX); 
@@ -963,7 +1124,10 @@ async function showBettingMenu(reply, prefix) {
                    `• *${prefix}bethistory* - View bet history\n` +
                    `• *${prefix}results* - View recent match results\n\n` +
                    `🏆 *Leagues Available:*\n` +
-                   `• 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League\n` + `• 🇪🇸 La Liga\n` + `• 🇩🇪 Bundesliga\n` + `• 🇮🇹 Serie A\n\n` +
+                   `• 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League\n` + 
+                   `• 🇪🇸 La Liga\n` + 
+                   `• 🇩🇪 Bundesliga\n` + 
+                   `• 🇮🇹 Serie A\n\n` +
                    `💡 *Start by viewing: ${prefix}fixtures*`;
   await reply(menuText);
 }
@@ -1045,14 +1209,29 @@ async function handleBetSlip(context, args) {
         }
         const action = args[0].toLowerCase();
         switch (action) {
-            case 'add': await handleAddToBetSlip(context, args.slice(1)); break;
-            case 'remove': await handleRemoveFromBetSlip(context, args.slice(1)); break;
-            case 'stake': await handleSetStake(context, args.slice(1)); break;
-            case 'place': await handlePlaceBet(context); break;
-            case 'clear': await handleClearBetSlip(context); break;
-            case 'share': await handleShareBetSlip(context); break;
-            case 'load': await handleLoadBetSlip(context, args.slice(1)); break;
-            default: await reply(`❓ *Unknown bet slip command*\n\n📋 *Available:* add, remove, stake, place, clear, share, load`);
+            case 'add': 
+                await handleAddToBetSlip(context, args.slice(1)); 
+                break;
+            case 'remove': 
+                await handleRemoveFromBetSlip(context, args.slice(1)); 
+                break;
+            case 'stake': 
+                await handleSetStake(context, args.slice(1)); 
+                break;
+            case 'place': 
+                await handlePlaceBet(context); 
+                break;
+            case 'clear': 
+                await handleClearBetSlip(context); 
+                break;
+            case 'share': 
+                await handleShareBetSlip(context); 
+                break;
+            case 'load': 
+                await handleLoadBetSlip(context, args.slice(1)); 
+                break;
+            default: 
+                await reply(`❓ *Unknown bet slip command*\n\n📋 *Available:* add, remove, stake, place, clear, share, load`);
         }
     } catch (error) {
         await reply('❌ *Error managing bet slip. Please try again.*');
@@ -1095,7 +1274,14 @@ async function handleAddToBetSlip(context, args) {
             betSlip = { userId: senderId, selections: [], stake: 0, createdAt: new Date() };
         }
         const existingIndex = betSlip.selections.findIndex(s => s.matchId === matchId);
-        const newSelection = { matchId, betType, odds, homeTeam: match.homeTeam, awayTeam: match.awayTeam, addedAt: new Date() };
+        const newSelection = { 
+            matchId, 
+            betType, 
+            odds, 
+            homeTeam: match.homeTeam, 
+            awayTeam: match.awayTeam, 
+            addedAt: new Date() 
+        };
         if (existingIndex !== -1) {
             betSlip.selections[existingIndex] = newSelection;
         } else {
@@ -1113,23 +1299,6 @@ async function handleAddToBetSlip(context, args) {
     }
 }
 
-async function handleRemoveFromBetSlip(context, args) {
-    const { reply, senderId, config } = context;
-    try {
-        if (args.length === 0) {
-            await reply(`⚠️ *Usage:* ${config.PREFIX}betslip remove [number]`);
-            return;
-        }
-        const selectionNumber = parseInt(args[0]);
-        if (isNaN(selectionNumber)) {
-            await reply('⚠️ *Please provide a valid selection number*');
-            return;
-        }
-        const betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
-        if (!betSlip || betSlip.selections.length === 0) {
-            await reply('📋 *Your bet slip is empty*');
-            return;
-        }
 , '$options' : 'i' } });
 
     if (placedBet) {
@@ -1235,7 +1404,7 @@ import { unifiedUserManager } from '../lib/pluginIntegration.js';
 // Plugin information export
 export const info = {
   name: 'Sports Betting System',
-  version: '2.6.0', // Updated version with GG/NG terminology
+  version: '2.6.0',
   author: 'Alex Macksyn',
   description: 'Complete sports betting simulation with EPL, La Liga, Bundesliga, Serie A teams and multi-bet slips',
   commands: [
@@ -1294,19 +1463,63 @@ async function initBettingDatabase() {
 const TEAMS = {
   EPL: {
     name: 'English Premier League',
-    teams: { 'Arsenal': { strength: 92, form: 90 }, 'Aston Villa': { strength: 80, form: 78 }, 'Bournemouth': { strength: 68, form: 65 }, 'Brentford': { strength: 70, form: 72 }, 'Brighton': { strength: 75, form: 78 }, 'Chelsea': { strength: 84, form: 80 }, 'Crystal Palace': { strength: 72, form: 70 }, 'Everton': { strength: 69, form: 66 }, 'Fulham': { strength: 71, form: 73 }, 'Ipswich Town': { strength: 62, form: 60 }, 'Leicester City': { strength: 73, form: 75 }, 'Liverpool': { strength: 91, form: 88 }, 'Manchester City': { strength: 96, form: 95 }, 'Manchester United': { strength: 85, form: 82 }, 'Newcastle United': { strength: 82, form: 80 }, 'Nottingham Forest': { strength: 67, form: 68 }, 'Southampton': { strength: 64, form: 62 }, 'Tottenham': { strength: 83, form: 81 }, 'West Ham': { strength: 78, form: 75 }, 'Wolves': { strength: 74, form: 72 } }
+    teams: { 
+      'Arsenal': { strength: 92, form: 90 }, 
+      'Aston Villa': { strength: 80, form: 78 }, 
+      'Bournemouth': { strength: 68, form: 65 }, 
+      'Brentford': { strength: 70, form: 72 }, 
+      'Brighton': { strength: 75, form: 78 }, 
+      'Chelsea': { strength: 84, form: 80 }, 
+      'Crystal Palace': { strength: 72, form: 70 }, 
+      'Everton': { strength: 69, form: 66 }, 
+      'Fulham': { strength: 71, form: 73 }, 
+      'Ipswich Town': { strength: 62, form: 60 }, 
+      'Leicester City': { strength: 73, form: 75 }, 
+      'Liverpool': { strength: 91, form: 88 }, 
+      'Manchester City': { strength: 96, form: 95 }, 
+      'Manchester United': { strength: 85, form: 82 }, 
+      'Newcastle United': { strength: 82, form: 80 }, 
+      'Nottingham Forest': { strength: 67, form: 68 }, 
+      'Southampton': { strength: 64, form: 62 }, 
+      'Tottenham': { strength: 83, form: 81 }, 
+      'West Ham': { strength: 78, form: 75 }, 
+      'Wolves': { strength: 74, form: 72 }
+    }
   },
   LALIGA: {
     name: 'Spanish La Liga',
-    teams: { 'Real Madrid': { strength: 97, form: 95 }, 'Barcelona': { strength: 90, form: 88 }, 'Girona': { strength: 80, form: 82 }, 'Atletico Madrid': { strength: 88, form: 85 }, 'Athletic Bilbao': { strength: 82, form: 80 }, 'Real Sociedad': { strength: 81, form: 83 }, 'Real Betis': { strength: 79, form: 77 }, 'Villarreal': { strength: 78, form: 76 }, 'Valencia': { strength: 77, form: 75 }, 'Sevilla': { strength: 80, form: 78 } }
+    teams: { 
+      'Real Madrid': { strength: 97, form: 95 }, 
+      'Barcelona': { strength: 90, form: 88 }, 
+      'Girona': { strength: 80, form: 82 }, 
+      'Atletico Madrid': { strength: 88, form: 85 }, 
+      'Athletic Bilbao': { strength: 82, form: 80 }, 
+      'Real Sociedad': { strength: 81, form: 83 }, 
+      'Real Betis': { strength: 79, form: 77 }, 
+      'Villarreal': { strength: 78, form: 76 }, 
+      'Valencia': { strength: 77, form: 75 }, 
+      'Sevilla': { strength: 80, form: 78 }
+    }
   },
   BUNDESLIGA: {
     name: 'German Bundesliga',
-    teams: { 'Bayern Munich': { strength: 94, form: 92 }, 'Bayer Leverkusen': { strength: 91, form: 93 }, 'Borussia Dortmund': { strength: 88, form: 86 }, 'RB Leipzig': { strength: 87, form: 88 }, 'VfB Stuttgart': { strength: 84, form: 85 } }
+    teams: { 
+      'Bayern Munich': { strength: 94, form: 92 }, 
+      'Bayer Leverkusen': { strength: 91, form: 93 }, 
+      'Borussia Dortmund': { strength: 88, form: 86 }, 
+      'RB Leipzig': { strength: 87, form: 88 }, 
+      'VfB Stuttgart': { strength: 84, form: 85 }
+    }
   },
   SERIEA: {
     name: 'Italian Serie A',
-    teams: { 'Inter Milan': { strength: 92, form: 90 }, 'AC Milan': { strength: 87, form: 85 }, 'Juventus': { strength: 86, form: 84 }, 'Atalanta': { strength: 83, form: 81 }, 'Napoli': { strength: 84, form: 82 } }
+    teams: { 
+      'Inter Milan': { strength: 92, form: 90 }, 
+      'AC Milan': { strength: 87, form: 85 }, 
+      'Juventus': { strength: 86, form: 84 }, 
+      'Atalanta': { strength: 83, form: 81 }, 
+      'Napoli': { strength: 84, form: 82 }
+    }
   }
 };
 
@@ -1462,12 +1675,29 @@ function simulateMatchResult(homeStrength, awayStrength, odds) {
   }
   let homeGoals, awayGoals;
   switch (result) {
-    case 'HOME_WIN': homeGoals = Math.floor(Math.random() * 3) + 1; awayGoals = Math.floor(Math.random() * homeGoals); break;
-    case 'AWAY_WIN': awayGoals = Math.floor(Math.random() * 3) + 1; homeGoals = Math.floor(Math.random() * awayGoals); break;
-    case 'DRAW': const drawScore = Math.floor(Math.random() * 4); homeGoals = awayGoals = drawScore; break;
+    case 'HOME_WIN': 
+      homeGoals = Math.floor(Math.random() * 3) + 1; 
+      awayGoals = Math.floor(Math.random() * homeGoals); 
+      break;
+    case 'AWAY_WIN': 
+      awayGoals = Math.floor(Math.random() * 3) + 1; 
+      homeGoals = Math.floor(Math.random() * awayGoals); 
+      break;
+    case 'DRAW': 
+      const drawScore = Math.floor(Math.random() * 4); 
+      homeGoals = awayGoals = drawScore; 
+      break;
   }
   const totalGoals = homeGoals + awayGoals;
-  return { result, homeGoals, awayGoals, totalGoals, over15: totalGoals > 1.5, over25: totalGoals > 2.5, btts: homeGoals > 0 && awayGoals > 0 };
+  return { 
+    result, 
+    homeGoals, 
+    awayGoals, 
+    totalGoals, 
+    over15: totalGoals > 1.5, 
+    over25: totalGoals > 2.5, 
+    btts: homeGoals > 0 && awayGoals > 0 
+  };
 }
 
 function isAdmin(userId) {
@@ -1506,13 +1736,16 @@ export default async function bettingHandler(m, sock, config) {
     await unifiedUserManager.initUser(senderId);
 
     const reply = async (text) => {
-      try { await sock.sendMessage(from, { text }, { quoted: m }); } 
-      catch (error) { console.error('❌ Error sending reply:', error.message); }
+      try { 
+        await sock.sendMessage(from, { text }, { quoted: m }); 
+      } catch (error) { 
+        console.error('❌ Error sending reply:', error.message); 
+      }
     };
     
     const context = { m, sock, config, senderId, from, reply };
 
-    // FIXED: Use the helper function for command matching
+    // FIXED: Use proper command matching for all commands
     if (commandMatches(command, 'bet', ['sportbet', 'sportybet'])) {
         if (args.length === 1) { 
             await showBettingMenu(reply, config.PREFIX); 
@@ -1547,7 +1780,10 @@ async function showBettingMenu(reply, prefix) {
                    `• *${prefix}bethistory* - View bet history\n` +
                    `• *${prefix}results* - View recent match results\n\n` +
                    `🏆 *Leagues Available:*\n` +
-                   `• 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League\n` + `• 🇪🇸 La Liga\n` + `• 🇩🇪 Bundesliga\n` + `• 🇮🇹 Serie A\n\n` +
+                   `• 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League\n` + 
+                   `• 🇪🇸 La Liga\n` + 
+                   `• 🇩🇪 Bundesliga\n` + 
+                   `• 🇮🇹 Serie A\n\n` +
                    `💡 *Start by viewing: ${prefix}fixtures*`;
   await reply(menuText);
 }
@@ -1629,14 +1865,29 @@ async function handleBetSlip(context, args) {
         }
         const action = args[0].toLowerCase();
         switch (action) {
-            case 'add': await handleAddToBetSlip(context, args.slice(1)); break;
-            case 'remove': await handleRemoveFromBetSlip(context, args.slice(1)); break;
-            case 'stake': await handleSetStake(context, args.slice(1)); break;
-            case 'place': await handlePlaceBet(context); break;
-            case 'clear': await handleClearBetSlip(context); break;
-            case 'share': await handleShareBetSlip(context); break;
-            case 'load': await handleLoadBetSlip(context, args.slice(1)); break;
-            default: await reply(`❓ *Unknown bet slip command*\n\n📋 *Available:* add, remove, stake, place, clear, share, load`);
+            case 'add': 
+                await handleAddToBetSlip(context, args.slice(1)); 
+                break;
+            case 'remove': 
+                await handleRemoveFromBetSlip(context, args.slice(1)); 
+                break;
+            case 'stake': 
+                await handleSetStake(context, args.slice(1)); 
+                break;
+            case 'place': 
+                await handlePlaceBet(context); 
+                break;
+            case 'clear': 
+                await handleClearBetSlip(context); 
+                break;
+            case 'share': 
+                await handleShareBetSlip(context); 
+                break;
+            case 'load': 
+                await handleLoadBetSlip(context, args.slice(1)); 
+                break;
+            default: 
+                await reply(`❓ *Unknown bet slip command*\n\n📋 *Available:* add, remove, stake, place, clear, share, load`);
         }
     } catch (error) {
         await reply('❌ *Error managing bet slip. Please try again.*');
@@ -1679,7 +1930,14 @@ async function handleAddToBetSlip(context, args) {
             betSlip = { userId: senderId, selections: [], stake: 0, createdAt: new Date() };
         }
         const existingIndex = betSlip.selections.findIndex(s => s.matchId === matchId);
-        const newSelection = { matchId, betType, odds, homeTeam: match.homeTeam, awayTeam: match.awayTeam, addedAt: new Date() };
+        const newSelection = { 
+            matchId, 
+            betType, 
+            odds, 
+            homeTeam: match.homeTeam, 
+            awayTeam: match.awayTeam, 
+            addedAt: new Date() 
+        };
         if (existingIndex !== -1) {
             betSlip.selections[existingIndex] = newSelection;
         } else {
@@ -1697,23 +1955,6 @@ async function handleAddToBetSlip(context, args) {
     }
 }
 
-async function handleRemoveFromBetSlip(context, args) {
-    const { reply, senderId, config } = context;
-    try {
-        if (args.length === 0) {
-            await reply(`⚠️ *Usage:* ${config.PREFIX}betslip remove [number]`);
-            return;
-        }
-        const selectionNumber = parseInt(args[0]);
-        if (isNaN(selectionNumber)) {
-            await reply('⚠️ *Please provide a valid selection number*');
-            return;
-        }
-        const betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
-        if (!betSlip || betSlip.selections.length === 0) {
-            await reply('📋 *Your bet slip is empty*');
-            return;
-        }
 , '$options' : 'i' } 
     });
 
