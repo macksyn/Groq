@@ -754,17 +754,23 @@ async function handleSharePlacedBet(context, args) {
     }
     const betId = args[0].toUpperCase();
 
-    const placedBet = await db.collection(BET_COLLECTIONS.BETS).findOne({ 
+    // 1. Fetch all active (pending) bets for the user first.
+    const activeBets = await db.collection(BET_COLLECTIONS.BETS).find({ 
         userId: senderId, 
-        _id: { $regex: `${betId}$`, '$options' : 'i' } 
-    });
+        status: 'pending' 
+    }).toArray();
+
+    // 2. Now, find the correct bet in the results using JavaScript.
+    const placedBet = activeBets.find(bet => 
+        bet._id.toString().slice(-6).toUpperCase() === betId
+    );
 
     if (!placedBet) {
         return reply(`❌ Bet ID *${betId}* not found in your active bets. Check your \`.mybets\` list.`);
     }
 
+    // The rest of the function remains the same.
     const shareCode = placedBet._id.toString().slice(-6).toUpperCase();
-
     await reply(`🎟️ *Share Your Placed Bet!* \n\n*Code: ${shareCode}*\n\n📲 Your friends can now use \`.betslip load ${shareCode}\` to re-bet your exact selections.`);
 }
 
