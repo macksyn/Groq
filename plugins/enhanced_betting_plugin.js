@@ -116,57 +116,87 @@ const LEAGUES = {
 // Enhanced Bet Types with Better Odds
 const BET_TYPES = {
   // Match Result
-  HOME_WIN: { name: 'Home Win (1)', category: 'result', priority: 1 },
-  DRAW: { name: 'Draw (X)', category: 'result', priority: 2 },
-  AWAY_WIN: { name: 'Away Win (2)', category: 'result', priority: 3 },
+  HOME_WIN: { name: 'Home Win', category: 'result', priority: 1 },
+  DRAW: { name: 'Draw', category: 'result', priority: 2 },
+  AWAY_WIN: { name: 'Away Win', category: 'result', priority: 3 },
   
-  // Goals
+  // Goals - Over/Under 0.5
   OVER05: { name: 'Over 0.5 Goals', category: 'goals', priority: 4 },
   UNDER05: { name: 'Under 0.5 Goals', category: 'goals', priority: 5 },
+  
+  // Goals - Over/Under 1.5
   OVER15: { name: 'Over 1.5 Goals', category: 'goals', priority: 6 },
   UNDER15: { name: 'Under 1.5 Goals', category: 'goals', priority: 7 },
+  
+  // Goals - Over/Under 2.5
   OVER25: { name: 'Over 2.5 Goals', category: 'goals', priority: 8 },
   UNDER25: { name: 'Under 2.5 Goals', category: 'goals', priority: 9 },
+  
+  // Goals - Over/Under 3.5
   OVER35: { name: 'Over 3.5 Goals', category: 'goals', priority: 10 },
   UNDER35: { name: 'Under 3.5 Goals', category: 'goals', priority: 11 },
   
+  // Goals - Over/Under 4.5
+  OVER45: { name: 'Over 4.5 Goals', category: 'goals', priority: 12 },
+  UNDER45: { name: 'Under 4.5 Goals', category: 'goals', priority: 13 },
+  
   // Both Teams to Score
-  BTTS_YES: { name: 'GG (Both Score)', category: 'btts', priority: 12 },
-  BTTS_NO: { name: 'NG (Not Both Score)', category: 'btts', priority: 13 },
+  BTTS_YES: { name: 'GG (Both Score)', category: 'btts', priority: 14 },
+  BTTS_NO: { name: 'NG (Not Both Score)', category: 'btts', priority: 15 },
   
   // Double Chance
-  HOME_DRAW: { name: '1X (Home/Draw)', category: 'double', priority: 14 },
-  AWAY_DRAW: { name: '2X (Away/Draw)', category: 'double', priority: 15 },
-  HOME_AWAY: { name: '12 (Home/Away)', category: 'double', priority: 16 },
+  HOME_DRAW: { name: 'Home or Draw', category: 'double', priority: 16 },
+  AWAY_DRAW: { name: 'Away or Draw', category: 'double', priority: 17 },
+  HOME_AWAY: { name: 'Home or Away', category: 'double', priority: 18 },
   
   // Handicap
-  HOME_MINUS1: { name: 'Home -1', category: 'handicap', priority: 17 },
-  HOME_PLUS1: { name: 'Home +1', category: 'handicap', priority: 18 },
-  AWAY_MINUS1: { name: 'Away -1', category: 'handicap', priority: 19 },
-  AWAY_PLUS1: { name: 'Away +1', category: 'handicap', priority: 20 }
+  HOME_MINUS1: { name: 'Home -1', category: 'handicap', priority: 19 },
+  HOME_PLUS1: { name: 'Home +1', category: 'handicap', priority: 20 },
+  AWAY_MINUS1: { name: 'Away -1', category: 'handicap', priority: 21 },
+  AWAY_PLUS1: { name: 'Away +1', category: 'handicap', priority: 22 }
 };
 
 // Enhanced Bet Type Aliases
 const BET_ALIASES = {
   // Match Result
-  '1': 'HOME_WIN', 'home': 'HOME_WIN', 'hw': 'HOME_WIN',
-  'x': 'DRAW', 'draw': 'DRAW', 'd': 'DRAW',
-  '2': 'AWAY_WIN', 'away': 'AWAY_WIN', 'aw': 'AWAY_WIN',
+  'home': 'HOME_WIN', 'homewin': 'HOME_WIN', 'hw': 'HOME_WIN',
+  'draw': 'DRAW', 'd': 'DRAW',
+  'away': 'AWAY_WIN', 'awaywin': 'AWAY_WIN', 'aw': 'AWAY_WIN',
   
-  // Goals
-  'o0.5': 'OVER05', 'over0.5': 'OVER05', 'u0.5': 'UNDER05', 'under0.5': 'UNDER05',
-  'o1.5': 'OVER15', 'over1.5': 'OVER15', 'u1.5': 'UNDER15', 'under1.5': 'UNDER15',
-  'o2.5': 'OVER25', 'over2.5': 'OVER25', 'u2.5': 'UNDER25', 'under2.5': 'UNDER25',
-  'o3.5': 'OVER35', 'over3.5': 'OVER35', 'u3.5': 'UNDER35', 'under3.5': 'UNDER35',
+  // Goals - Over/Under 0.5
+  'over0.5': 'OVER05', 'over05': 'OVER05', 'o0.5': 'OVER05', 'o05': 'OVER05',
+  'under0.5': 'UNDER05', 'under05': 'UNDER05', 'u0.5': 'UNDER05', 'u05': 'UNDER05',
+  
+  // Goals - Over/Under 1.5
+  'over1.5': 'OVER15', 'over15': 'OVER15', 'o1.5': 'OVER15', 'o15': 'OVER15',
+  'under1.5': 'UNDER15', 'under15': 'UNDER15', 'u1.5': 'UNDER15', 'u15': 'UNDER15',
+  
+  // Goals - Over/Under 2.5
+  'over2.5': 'OVER25', 'over25': 'OVER25', 'o2.5': 'OVER25', 'o25': 'OVER25',
+  'under2.5': 'UNDER25', 'under25': 'UNDER25', 'u2.5': 'UNDER25', 'u25': 'UNDER25',
+  
+  // Goals - Over/Under 3.5
+  'over3.5': 'OVER35', 'over35': 'OVER35', 'o3.5': 'OVER35', 'o35': 'OVER35',
+  'under3.5': 'UNDER35', 'under35': 'UNDER35', 'u3.5': 'UNDER35', 'u35': 'UNDER35',
+  
+  // Goals - Over/Under 4.5
+  'over4.5': 'OVER45', 'over45': 'OVER45', 'o4.5': 'OVER45', 'o45': 'OVER45',
+  'under4.5': 'UNDER45', 'under45': 'UNDER45', 'u4.5': 'UNDER45', 'u45': 'UNDER45',
   
   // BTTS
-  'gg': 'BTTS_YES', 'btts': 'BTTS_YES', 'ng': 'BTTS_NO', 'nobtts': 'BTTS_NO',
+  'gg': 'BTTS_YES', 'btts': 'BTTS_YES', 'bothscore': 'BTTS_YES',
+  'ng': 'BTTS_NO', 'nobtts': 'BTTS_NO', 'nobothscore': 'BTTS_NO',
   
   // Double Chance
-  '1x': 'HOME_DRAW', '2x': 'AWAY_DRAW', '12': 'HOME_AWAY',
+  'homedraw': 'HOME_DRAW', 'homeordraw': 'HOME_DRAW', 'hd': 'HOME_DRAW',
+  'awaydraw': 'AWAY_DRAW', 'awayordraw': 'AWAY_DRAW', 'ad': 'AWAY_DRAW',
+  'homeaway': 'HOME_AWAY', 'homeoraway': 'HOME_AWAY', 'ha': 'HOME_AWAY',
   
   // Handicap
-  'h-1': 'HOME_MINUS1', 'h+1': 'HOME_PLUS1', 'a-1': 'AWAY_MINUS1', 'a+1': 'AWAY_PLUS1'
+  'home-1': 'HOME_MINUS1', 'h-1': 'HOME_MINUS1',
+  'home+1': 'HOME_PLUS1', 'h+1': 'HOME_PLUS1',
+  'away-1': 'AWAY_MINUS1', 'a-1': 'AWAY_MINUS1',
+  'away+1': 'AWAY_PLUS1', 'a+1': 'AWAY_PLUS1'
 };
 
 // Database Connection Pool
@@ -280,6 +310,8 @@ class OddsCalculator {
       UNDER25: this.calculateGoalOdds(effectiveHome, effectiveAway, 2.5, false),
       OVER35: this.calculateGoalOdds(effectiveHome, effectiveAway, 3.5, true),
       UNDER35: this.calculateGoalOdds(effectiveHome, effectiveAway, 3.5, false),
+      OVER45: this.calculateGoalOdds(effectiveHome, effectiveAway, 4.5, true),
+      UNDER45: this.calculateGoalOdds(effectiveHome, effectiveAway, 4.5, false),
       
       // BTTS calculation
       BTTS_YES: this.calculateBTTSOdds(home, away, true),
@@ -370,8 +402,8 @@ class MatchSimulator {
       under15: totalGoals <= 1.5,
       over25: totalGoals > 2.5,
       under25: totalGoals <= 2.5,
-      over35: totalGoals > 3.5,
-      under35: totalGoals <= 3.5,
+      over45: totalGoals > 4.5,
+      under45: totalGoals <= 4.5,
       btts: homeGoals > 0 && awayGoals > 0,
       homeWinHandicap: this.checkHandicap(homeGoals, awayGoals, -1),
       awayWinHandicap: this.checkHandicap(awayGoals, homeGoals, -1)
@@ -431,15 +463,17 @@ class UIFormatter {
         
         text += `${idx + 1}. *${match.homeTeam}* vs *${match.awayTeam}*\n`;
         text += `🕐 ${kickoff}${isToday ? ' 🔴 TODAY' : ''}\n`;
-        text += `📊 1: ${match.odds.HOME_WIN} | X: ${match.odds.DRAW} | 2: ${match.odds.AWAY_WIN}\n`;
-        text += `⚽ O2.5: ${match.odds.OVER25} | U2.5: ${match.odds.UNDER25}\n`;
+        text += `📊 Home: ${match.odds.HOME_WIN} | Draw: ${match.odds.DRAW} | Away: ${match.odds.AWAY_WIN}\n`;
+        text += `⚽ Over2.5: ${match.odds.OVER25} | Under2.5: ${match.odds.UNDER25}\n`;
+        text += `🎲 Over1.5: ${match.odds.OVER15} | Under1.5: ${match.odds.UNDER15}\n`;
         text += `🎯 GG: ${match.odds.BTTS_YES} | NG: ${match.odds.BTTS_NO}\n`;
         text += `🆔 *${match.matchId}*\n\n`;
       });
     });
     
     text += `💡 *Quick Bet:* ${prefix}quickbet [id] [type] [stake]\n`;
-    text += `📋 *Add to Slip:* ${prefix}betslip add [id] [type]`;
+    text += `📋 *Add to Slip:* ${prefix}betslip add [id] [type]\n`;
+    text += `🎯 *Example:* ${prefix}quickbet 123 over2.5 1000`;
     
     return text;
   }
@@ -452,8 +486,9 @@ class UIFormatter {
              `• ${prefix}quickbet [id] [type] [stake]\n` +
              `• ${prefix}betslip load [code]\n\n` +
              `💰 *Popular Markets:*\n` +
-             `• Match Result: 1, X, 2\n` +
-             `• Goals: o2.5, u2.5\n` +
+             `• Match Result: home, draw, away\n` +
+             `• Goals: over2.5, under2.5, over1.5, under1.5\n` +
+             `• Over/Under: 0.5, 1.5, 2.5, 3.5, 4.5\n` +
              `• Both Score: gg, ng`;
     }
     
@@ -928,8 +963,8 @@ class BettingSystem {
       case 'UNDER15': return matchResult.under15;
       case 'OVER25': return matchResult.over25;
       case 'UNDER25': return matchResult.under25;
-      case 'OVER35': return matchResult.over35;
-      case 'UNDER35': return matchResult.under35;
+      case 'OVER45': return matchResult.over45;
+      case 'UNDER45': return matchResult.under45;
       case 'BTTS_YES': return matchResult.btts;
       case 'BTTS_NO': return !matchResult.btts;
       case 'HOME_DRAW': return ['HOME_WIN', 'DRAW'].includes(matchResult.result);
@@ -1074,7 +1109,7 @@ class CommandHandlers {
       
       const betType = BET_ALIASES[betTypeInput] || betTypeInput.toUpperCase();
       if (!BET_TYPES[betType]) {
-        await reply('⚠️ *Invalid bet type. Use: 1, x, 2, o2.5, u2.5, gg, ng*');
+        await reply('⚠️ *Invalid bet type. Use: home, draw, away, over2.5, under2.5, gg, ng*');
         return;
       }
       
@@ -1489,7 +1524,7 @@ async function handleAddToSlip(context, args) {
     }
     
     if (!BET_TYPES[betType]) {
-      await reply(`⚠️ *Invalid bet type*\n\n🎯 *Available:* 1, x, 2, o2.5, u2.5, gg, ng, 1x, 2x`);
+      await reply(`⚠️ *Invalid bet type*\n\n🎯 *Available:* home, draw, away, over2.5, under2.5, over1.5, under1.5, gg, ng`);
       return;
     }
     
