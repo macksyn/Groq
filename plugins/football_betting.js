@@ -662,12 +662,14 @@ async function handleLoadBetSlip(context, args) {
     let originalSelections = null;
     let foundSource = null;
 
-    const placedBet = await db.collection(BET_COLLECTIONS.BETS).findOne({ _id: { $regex: `${shareCode}$`, '$options' : 'i' } });
+    // Correctly search for the shareCode in placed bets
+    const placedBet = await db.collection(BET_COLLECTIONS.BETS).findOne({ shareCode });
 
     if (placedBet) {
         originalSelections = placedBet.selections;
         foundSource = 'a placed bet';
     } else {
+        // Fallback to searching in pending slips (this part was already correct)
         const pendingSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ shareCode });
         if (pendingSlip) {
             originalSelections = pendingSlip.selections;
@@ -685,7 +687,16 @@ async function handleLoadBetSlip(context, args) {
     for (const selection of originalSelections) {
         const match = await db.collection(BET_COLLECTIONS.MATCHES).findOne({ matchId: selection.matchId, status: 'upcoming' });
         if (match) {
-            newSelections.push(selection);
+            // Re-create the selection with the LATEST odds
+            const latestOdds = match.odds[selection.betType];
+            newSelections.push({
+                matchId: selection.matchId,
+                betType: selection.betType,
+                odds: latestOdds,
+                homeTeam: match.homeTeam,
+                awayTeam: match.awayTeam,
+                addedAt: new Date()
+            });
         } else {
             expiredCount++;
         }
@@ -754,13 +765,11 @@ async function handleSharePlacedBet(context, args) {
     }
     const betId = args[0].toUpperCase();
 
-    // 1. Fetch all active (pending) bets for the user first.
     const activeBets = await db.collection(BET_COLLECTIONS.BETS).find({ 
         userId: senderId, 
         status: 'pending' 
     }).toArray();
 
-    // 2. Now, find the correct bet in the results using JavaScript.
     const placedBet = activeBets.find(bet => 
         bet._id.toString().slice(-6).toUpperCase() === betId
     );
@@ -769,8 +778,16 @@ async function handleSharePlacedBet(context, args) {
         return reply(`❌ Bet ID *${betId}* not found in your active bets. Check your \`.mybets\` list.`);
     }
 
-    // The rest of the function remains the same.
-    const shareCode = placedBet._id.toString().slice(-6).toUpperCase();
+    // Get the existing code or create and save a new one
+    let shareCode = placedBet.shareCode;
+    if (!shareCode) {
+        shareCode = placedBet._id.toString().slice(-6).toUpperCase();
+        await db.collection(BET_COLLECTIONS.BETS).updateOne(
+            { _id: placedBet._id },
+            { $set: { shareCode: shareCode } }
+        );
+    }
+
     await reply(`🎟️ *Share Your Placed Bet!* \n\n*Code: ${shareCode}*\n\n📲 Your friends can now use \`.betslip load ${shareCode}\` to re-bet your exact selections.`);
 }
 
