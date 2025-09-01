@@ -707,7 +707,7 @@ async function handleStatus(context) {
   if (hasPaid) {
     statusEmoji = '✅';
     statusText = 'PAID';
-    actionText = 'You\'re all set for this period!';
+    actionText = 'You are all set for this period!';
   } else if (!billingInfo.isOverdue) {
     statusEmoji = '⏳';
     statusText = 'PENDING';
@@ -718,18 +718,18 @@ async function handleStatus(context) {
     actionText = `${billingInfo.daysOverdue} day(s) late!`;
   }
   
-  const statusMsg = `📊 *YOUR RENT STATUS* 📊\n\n` +
-                   `${statusEmoji} *Status:* ${statusText}\n` +
-                   `📅 *Period:* ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
-                   `💰 *Rent Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
-                   `⏰ *${actionText}*\n\n` +
-                   `💳 *WALLET BALANCES:*\n` +
+  const statusMsg = `📊 YOUR RENT STATUS 📊\n\n` +
+                   `${statusEmoji} Status: ${statusText}\n` +
+                   `📅 Period: ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
+                   `💰 Rent Amount: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
+                   `⏰ ${actionText}\n\n` +
+                   `💳 WALLET BALANCES:\n` +
                    `🏦 Economy: ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
                    `🏠 Rent: ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n\n` +
                    `${!hasPaid && tenant.wallet < settings.rentAmount ? 
-                     `⚠️ *Insufficient rent funds!*\n💡 Transfer: \`rent wallet transfer ${settings.rentAmount - tenant.wallet}\`` :
-                     !hasPaid ? `✅ *Ready to pay!*\n💡 Pay now: \`rent pay\`` : 
-                     '🎉 *Thank you for your payment!*'}`;
+                     `⚠️ Insufficient rent funds!\n💡 Transfer: rent wallet transfer ${settings.rentAmount - tenant.wallet}` :
+                     !hasPaid ? `✅ Ready to pay!\n💡 Pay now: rent pay` : 
+                     '🎉 Thank you for your payment!'}`;
   
   await reply(statusMsg);
 }
@@ -795,19 +795,19 @@ async function handleWallet(context, args) {
     const economyData = await getUserEconomyData(senderId);
     const billingInfo = calculateCurrentBillingPeriod(settings);
     
-    const walletMsg = `💰 *YOUR WALLET OVERVIEW* 💰\n\n` +
-                     `🏦 *Economy Wallet:* ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
-                     `🏠 *Rent Wallet:* ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n` +
-                     `💵 *Total Available:* ${settings.currencySymbol}${((economyData.balance || 0) + tenant.wallet).toLocaleString()}\n\n` +
-                     `📋 *RENT INFORMATION:*\n` +
+    const walletMsg = `💰 YOUR WALLET OVERVIEW 💰\n\n` +
+                     `🏦 Economy Wallet: ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
+                     `🏠 Rent Wallet: ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n` +
+                     `💵 Total Available: ${settings.currencySymbol}${((economyData.balance || 0) + tenant.wallet).toLocaleString()}\n\n` +
+                     `📋 RENT INFORMATION:\n` +
                      `• Next Due: ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
                      `• Amount: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
                      `• Status: ${tenant.wallet >= settings.rentAmount ? '✅ Ready' : '❌ Insufficient'}\n\n` +
-                     `💡 *Quick Actions:*\n` +
+                     `💡 Quick Actions:\n` +
                      `${tenant.wallet < settings.rentAmount ? 
-                       `• Transfer: \`${config.PREFIX}rent wallet transfer ${settings.rentAmount - tenant.wallet}\`` : 
-                       `• Pay Rent: \`${config.PREFIX}rent pay\``}\n` +
-                     `• Check Status: \`${config.PREFIX}rent status\``;
+                       `• Transfer: ${config.PREFIX}rent wallet transfer ${settings.rentAmount - tenant.wallet}` : 
+                       `• Pay Rent: ${config.PREFIX}rent pay`}\n` +
+                     `• Check Status: ${config.PREFIX}rent status`;
     
     return reply(walletMsg);
   }
@@ -821,11 +821,11 @@ async function handleWallet(context, args) {
   } else if (action === 'check' && isAdmin) {
     await handleWalletCheck(context, args.slice(1));
   } else {
-    const helpMsg = `💰 *WALLET COMMANDS* 💰\n\n` +
-                   `*All Users:*\n` +
-                   `• \`${config.PREFIX}rent wallet\` - View your wallets\n` +
-                   `• \`${config.PREFIX}rent wallet transfer <amount>\` - Transfer funds\n\n` +
-                   `${isAdmin ? `*Admin Only:*\n• \`${config.PREFIX}rent wallet add @user <amount>\`\n• \`${config.PREFIX}rent wallet check @user\`\n\n` : ''}` +
+    const helpMsg = `💰 WALLET COMMANDS 💰\n\n` +
+                   `All Users:\n` +
+                   `• ${config.PREFIX}rent wallet - View your wallets\n` +
+                   `• ${config.PREFIX}rent wallet transfer <amount> - Transfer funds\n\n` +
+                   `${isAdmin ? `Admin Only:\n• ${config.PREFIX}rent wallet add @user <amount>\n• ${config.PREFIX}rent wallet check @user\n\n` : ''}` +
                    `💡 The rent wallet is separate from your economy wallet for better tracking.`;
     
     await reply(helpMsg);
@@ -838,7 +838,7 @@ async function handleWalletTransfer(context, args) {
   
   const amount = parseInt(args[0]);
   if (isNaN(amount) || amount <= 0) {
-    return reply(`❌ Please provide a valid amount.\n\n*Usage:* \`${config.PREFIX}rent wallet transfer <amount>\`\n*Example:* \`${config.PREFIX}rent wallet transfer 50000\``);
+    return reply(`❌ Please provide a valid amount.\n\nUsage: ${config.PREFIX}rent wallet transfer <amount>\nExample: ${config.PREFIX}rent wallet transfer 50000`);
   }
   
   // Check if user is tenant
@@ -859,7 +859,7 @@ async function handleWalletTransfer(context, args) {
     
     switch (transferResult.error) {
       case 'insufficient_funds':
-        errorMsg = `❌ *Insufficient Economy Wallet Funds!*\n\n` +
+        errorMsg = `❌ Insufficient Economy Wallet Funds!\n\n` +
                   `💰 Your Balance: ${settings.currencySymbol}${transferResult.economyBalance?.toLocaleString() || 0}\n` +
                   `💸 Amount Needed: ${settings.currencySymbol}${amount.toLocaleString()}\n` +
                   `📉 Shortfall: ${settings.currencySymbol}${(amount - (transferResult.economyBalance || 0)).toLocaleString()}\n\n` +
