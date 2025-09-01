@@ -123,52 +123,44 @@ function calculateCurrentBillingPeriod(settings) {
     const currentMonth = now.clone().startOf('month');
     const dueDay = Math.min(settings.monthlyDueDay, currentMonth.daysInMonth());
     
-    dueDate = currentMonth.clone().date(dueDay).hour(23).minute(59).second(59);
+    dueDate = currentMonth.clone().date(dueDay);
     
-    // If we're past the due date this month, calculate next month's period
-    if (now.isAfter(dueDate)) {
-      // Current period has ended, we're in the overdue phase
-      periodStart = dueDate.clone().subtract(1, 'month').add(1, 'day').startOf('day');
-      periodEnd = dueDate.clone();
+    // If due date has passed this month, next period starts now
+    if (now.isAfter(dueDate, 'day')) {
+      periodStart = dueDate.clone().add(1, 'day');
+      const nextMonth = now.clone().add(1, 'month').startOf('month');
+      const nextDueDay = Math.min(settings.monthlyDueDay, nextMonth.daysInMonth());
+      periodEnd = nextMonth.clone().date(nextDueDay);
+      dueDate = periodEnd.clone();
     } else {
-      // We're still in the current billing period
-      const lastMonth = currentMonth.clone().subtract(1, 'month');
-      const lastDueDay = Math.min(settings.monthlyDueDay, lastMonth.daysInMonth());
-      periodStart = lastMonth.clone().date(lastDueDay).add(1, 'day').startOf('day');
+      // Current period
+      periodStart = currentMonth.clone().date(dueDay).subtract(1, 'month').add(1, 'day');
       periodEnd = dueDate.clone();
     }
   } else {
     // Weekly billing
     const startOfWeek = now.clone().startOf('isoWeek'); // Monday
-    dueDate = startOfWeek.clone().isoWeekday(settings.weeklyDueDay).hour(23).minute(59).second(59);
+    dueDate = startOfWeek.clone().isoWeekday(settings.weeklyDueDay);
     
-    if (now.isAfter(dueDate)) {
-      // Past this week's due date
-      periodStart = dueDate.clone().subtract(1, 'week').add(1, 'day').startOf('day');
-      periodEnd = dueDate.clone();
+    if (now.isAfter(dueDate, 'day')) {
+      // Next week's period
+      periodStart = dueDate.clone().add(1, 'day');
+      periodEnd = startOfWeek.clone().add(1, 'week').isoWeekday(settings.weeklyDueDay);
+      dueDate = periodEnd.clone();
     } else {
-      // Still in current week
-      periodStart = startOfWeek.clone().subtract(1, 'week').isoWeekday(settings.weeklyDueDay).add(1, 'day').startOf('day');
+      // Current week's period
+      periodStart = startOfWeek.clone().subtract(1, 'week').isoWeekday(settings.weeklyDueDay).add(1, 'day');
       periodEnd = dueDate.clone();
     }
   }
   
-  const isOverdue = now.isAfter(dueDate);
-  const daysUntilDue = isOverdue ? 0 : Math.max(0, dueDate.diff(now, 'days'));
-  const daysOverdue = isOverdue ? Math.max(1, now.diff(dueDate, 'days')) : 0;
-  
-  console.log(`📅 Billing calculation for ${now.format('YYYY-MM-DD HH:mm')}:`);
-  console.log(`   Period: ${periodStart.format('MMM Do')} - ${periodEnd.format('MMM Do, YYYY')}`);
-  console.log(`   Due: ${dueDate.format('MMM Do, YYYY HH:mm')}`);
-  console.log(`   IsOverdue: ${isOverdue}, DaysOverdue: ${daysOverdue}, DaysUntilDue: ${daysUntilDue}`);
-  
   return { 
     periodStart: periodStart.startOf('day'), 
-    periodEnd: periodEnd, 
-    dueDate: dueDate,
-    isOverdue,
-    daysUntilDue,
-    daysOverdue
+    periodEnd: periodEnd.endOf('day'), 
+    dueDate: dueDate.endOf('day'),
+    isOverdue: now.isAfter(dueDate, 'day'),
+    daysUntilDue: dueDate.diff(now, 'days'),
+    daysOverdue: now.isAfter(dueDate, 'day') ? now.diff(dueDate, 'days') : 0
   };
 }
 
@@ -256,12 +248,12 @@ async function handleRentReminders(sock, tenant, group, settings, billingInfo) {
   
   for (const reminderDay of settings.reminderDays) {
     if (daysUntilDue === reminderDay) {
-      const reminderMsg = `🔔 RENT REMINDER 🔔\n\n` +
-                         `Your rent of ${settings.currencySymbol}${settings.rentAmount.toLocaleString()} is due in ${reminderDay} day(s)!\n\n` +
-                         `📅 Due Date: ${billingInfo.dueDate.format('dddd, MMM Do, YYYY')}\n` +
-                         `💰 Your Rent Wallet: ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n` +
+      const reminderMsg = `🔔 *RENT REMINDER* 🔔\n\n` +
+                         `Your rent of *${settings.currencySymbol}${settings.rentAmount.toLocaleString()}* is due in *${reminderDay} day(s)*!\n\n` +
+                         `📅 Due Date: *${billingInfo.dueDate.format('dddd, MMM Do, YYYY')}*\n` +
+                         `💰 Your Rent Wallet: *${settings.currencySymbol}${tenant.wallet.toLocaleString()}*\n` +
                          `📊 Status: ${tenant.wallet >= settings.rentAmount ? '✅ Ready!' : '❌ Insufficient funds'}\n\n` +
-                         `${tenant.wallet < settings.rentAmount ? `💡 Transfer funds: rent wallet transfer ${settings.rentAmount - tenant.wallet}` : '✨ You are all set!'}`;
+                         `${tenant.wallet < settings.rentAmount ? `💡 Transfer funds: \`rent wallet transfer ${settings.rentAmount - tenant.wallet}\`` : '✨ You\'re all set!'}`;
       
       await sock.sendMessage(tenant.tenantId, { text: reminderMsg });
       console.log(`📬 Sent ${reminderDay}-day reminder to ${tenant.tenantId.split('@')[0]}`);
@@ -275,10 +267,10 @@ async function handleOverdueRent(sock, tenant, group, settings, billingInfo) {
     // Auto-deduct rent
     await processRentPayment(tenant, group, settings, billingInfo, 'auto_deduct');
     
-    const paymentMsg = `✅ RENT AUTO-DEDUCTED ✅\n\n` +
-                      `Amount: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
+    const paymentMsg = `✅ *RENT AUTO-DEDUCTED* ✅\n\n` +
+                      `Amount: *${settings.currencySymbol}${settings.rentAmount.toLocaleString()}*\n` +
                       `Period: ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
-                      `New Balance: ${settings.currencySymbol}${(tenant.wallet - settings.rentAmount).toLocaleString()}\n\n` +
+                      `New Balance: *${settings.currencySymbol}${(tenant.wallet - settings.rentAmount).toLocaleString()}*\n\n` +
                       `✨ Thank you for your payment!`;
     
     await sock.sendMessage(tenant.tenantId, { text: paymentMsg });
@@ -286,11 +278,11 @@ async function handleOverdueRent(sock, tenant, group, settings, billingInfo) {
     return true;
   } else {
     // Send overdue notice
-    const lateNoticeMsg = `🚨 RENT OVERDUE 🚨\n\n` +
-                         `Your rent was due on ${billingInfo.dueDate.format('MMM Do, YYYY')} and is now ${billingInfo.daysOverdue} day(s) overdue!\n\n` +
-                         `💰 Amount Due: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
-                         `💳 Your Wallet: ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n` +
-                         `📉 Shortfall: ${settings.currencySymbol}${Math.max(0, settings.rentAmount - tenant.wallet).toLocaleString()}\n\n` +
+    const lateNoticeMsg = `🚨 *RENT OVERDUE* 🚨\n\n` +
+                         `Your rent was due on *${billingInfo.dueDate.format('MMM Do, YYYY')}* and is now *${billingInfo.daysOverdue} day(s) overdue*!\n\n` +
+                         `💰 Amount Due: *${settings.currencySymbol}${settings.rentAmount.toLocaleString()}*\n` +
+                         `💳 Your Wallet: *${settings.currencySymbol}${tenant.wallet.toLocaleString()}*\n` +
+                         `📉 Shortfall: *${settings.currencySymbol}${Math.max(0, settings.rentAmount - tenant.wallet).toLocaleString()}*\n\n` +
                          `⚠️ Grace Period: ${settings.gracePeriodDays} days\n` +
                          `🚪 Eviction in: ${Math.max(0, settings.gracePeriodDays - billingInfo.daysOverdue)} days\n\n` +
                          `💡 Pay now to avoid eviction!`;
@@ -585,21 +577,21 @@ async function showHelpMenu(context) {
   const { reply, config } = context;
   const prefix = config.PREFIX;
   
-  const menu = `🏘️ RENTAL SIMULATION v2.0 🏘️\n\n` +
-               `👤 Tenant Commands:\n` +
-               `• ${prefix}rent status - Check your rent status\n` +
-               `• ${prefix}rent pay - Pay rent manually\n` +
-               `• ${prefix}rent wallet - View wallet balances\n` +
-               `• ${prefix}rent wallet transfer <amount> - Move money to rent wallet\n\n` +
-               `👑 Admin Commands:\n` +
-               `• ${prefix}rent setup - Initialize rental system\n` +
-               `• ${prefix}rent addtenant @user - Add new tenant\n` +
-               `• ${prefix}rent defaulters - List overdue tenants\n` +
-               `• ${prefix}rent evict @user - Manual eviction\n` +
-               `• ${prefix}rent settings - Configure system\n` +
-               `• ${prefix}rent stats - View group statistics\n` +
-               `• ${prefix}rent disable - Disable rental system\n\n` +
-               `✨ Features: Auto-deduction, Smart reminders, Grace periods, Real-time tracking`;
+  const menu = `🏘️ *RENTAL SIMULATION v2.0* 🏘️\n\n` +
+               `*👤 Tenant Commands:*\n` +
+               `• \`${prefix}rent status\` - Check your rent status\n` +
+               `• \`${prefix}rent pay\` - Pay rent manually\n` +
+               `• \`${prefix}rent wallet\` - View wallet balances\n` +
+               `• \`${prefix}rent wallet transfer <amount>\` - Move money to rent wallet\n\n` +
+               `*👑 Admin Commands:*\n` +
+               `• \`${prefix}rent setup\` - Initialize rental system\n` +
+               `• \`${prefix}rent addtenant @user\` - Add new tenant\n` +
+               `• \`${prefix}rent defaulters\` - List overdue tenants\n` +
+               `• \`${prefix}rent evict @user\` - Manual eviction\n` +
+               `• \`${prefix}rent settings\` - Configure system\n` +
+               `• \`${prefix}rent stats\` - View group statistics\n` +
+               `• \`${prefix}rent disable\` - Disable rental system\n\n` +
+               `✨ *Features:* Auto-deduction, Smart reminders, Grace periods, Real-time tracking`;
   
   await reply(menu);
 }
@@ -665,12 +657,12 @@ async function handleSetup(context) {
     const settings = rentalSettings[from];
     const billingInfo = calculateCurrentBillingPeriod(settings);
     
-    const setupMsg = `✅ RENTAL SYSTEM ACTIVATED! ✅\n\n` +
-                    `👥 Tenants Enrolled: ${totalTenants}\n` +
-                    `💰 Monthly Rent: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
-                    `📅 Next Due Date: ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
-                    `⏰ Grace Period: ${settings.gracePeriodDays} days\n` +
-                    `🔄 Auto-deduction: ${settings.autoDeduct ? 'Enabled' : 'Disabled'}\n\n` +
+    const setupMsg = `✅ *RENTAL SYSTEM ACTIVATED!* ✅\n\n` +
+                    `👥 *Tenants Enrolled:* ${totalTenants}\n` +
+                    `💰 *Monthly Rent:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
+                    `📅 *Next Due Date:* ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
+                    `⏰ *Grace Period:* ${settings.gracePeriodDays} days\n` +
+                    `🔄 *Auto-deduction:* ${settings.autoDeduct ? 'Enabled' : 'Disabled'}\n\n` +
                     `💡 Tenants can now transfer money from their economy wallets to pay rent!`;
     
     await reply(setupMsg);
@@ -707,7 +699,7 @@ async function handleStatus(context) {
   if (hasPaid) {
     statusEmoji = '✅';
     statusText = 'PAID';
-    actionText = 'You are all set for this period!';
+    actionText = 'You\'re all set for this period!';
   } else if (!billingInfo.isOverdue) {
     statusEmoji = '⏳';
     statusText = 'PENDING';
@@ -718,18 +710,18 @@ async function handleStatus(context) {
     actionText = `${billingInfo.daysOverdue} day(s) late!`;
   }
   
-  const statusMsg = `📊 YOUR RENT STATUS 📊\n\n` +
-                   `${statusEmoji} Status: ${statusText}\n` +
-                   `📅 Period: ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
-                   `💰 Rent Amount: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
-                   `⏰ ${actionText}\n\n` +
-                   `💳 WALLET BALANCES:\n` +
+  const statusMsg = `📊 *YOUR RENT STATUS* 📊\n\n` +
+                   `${statusEmoji} *Status:* ${statusText}\n` +
+                   `📅 *Period:* ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
+                   `💰 *Rent Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
+                   `⏰ *${actionText}*\n\n` +
+                   `💳 *WALLET BALANCES:*\n` +
                    `🏦 Economy: ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
                    `🏠 Rent: ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n\n` +
                    `${!hasPaid && tenant.wallet < settings.rentAmount ? 
-                     `⚠️ Insufficient rent funds!\n💡 Transfer: rent wallet transfer ${settings.rentAmount - tenant.wallet}` :
-                     !hasPaid ? `✅ Ready to pay!\n💡 Pay now: rent pay` : 
-                     '🎉 Thank you for your payment!'}`;
+                     `⚠️ *Insufficient rent funds!*\n💡 Transfer: \`rent wallet transfer ${settings.rentAmount - tenant.wallet}\`` :
+                     !hasPaid ? `✅ *Ready to pay!*\n💡 Pay now: \`rent pay\`` : 
+                     '🎉 *Thank you for your payment!*'}`;
   
   await reply(statusMsg);
 }
@@ -795,19 +787,19 @@ async function handleWallet(context, args) {
     const economyData = await getUserEconomyData(senderId);
     const billingInfo = calculateCurrentBillingPeriod(settings);
     
-    const walletMsg = `💰 YOUR WALLET OVERVIEW 💰\n\n` +
-                     `🏦 Economy Wallet: ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
-                     `🏠 Rent Wallet: ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n` +
-                     `💵 Total Available: ${settings.currencySymbol}${((economyData.balance || 0) + tenant.wallet).toLocaleString()}\n\n` +
-                     `📋 RENT INFORMATION:\n` +
+    const walletMsg = `💰 *YOUR WALLET OVERVIEW* 💰\n\n` +
+                     `🏦 *Economy Wallet:* ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
+                     `🏠 *Rent Wallet:* ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n` +
+                     `💵 *Total Available:* ${settings.currencySymbol}${((economyData.balance || 0) + tenant.wallet).toLocaleString()}\n\n` +
+                     `📋 *RENT INFORMATION:*\n` +
                      `• Next Due: ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
                      `• Amount: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
                      `• Status: ${tenant.wallet >= settings.rentAmount ? '✅ Ready' : '❌ Insufficient'}\n\n` +
-                     `💡 Quick Actions:\n` +
+                     `💡 *Quick Actions:*\n` +
                      `${tenant.wallet < settings.rentAmount ? 
-                       `• Transfer: ${config.PREFIX}rent wallet transfer ${settings.rentAmount - tenant.wallet}` : 
-                       `• Pay Rent: ${config.PREFIX}rent pay`}\n` +
-                     `• Check Status: ${config.PREFIX}rent status`;
+                       `• Transfer: \`${config.PREFIX}rent wallet transfer ${settings.rentAmount - tenant.wallet}\`` : 
+                       `• Pay Rent: \`${config.PREFIX}rent pay\``}\n` +
+                     `• Check Status: \`${config.PREFIX}rent status\``;
     
     return reply(walletMsg);
   }
@@ -821,11 +813,11 @@ async function handleWallet(context, args) {
   } else if (action === 'check' && isAdmin) {
     await handleWalletCheck(context, args.slice(1));
   } else {
-    const helpMsg = `💰 WALLET COMMANDS 💰\n\n` +
-                   `All Users:\n` +
-                   `• ${config.PREFIX}rent wallet - View your wallets\n` +
-                   `• ${config.PREFIX}rent wallet transfer <amount> - Transfer funds\n\n` +
-                   `${isAdmin ? `Admin Only:\n• ${config.PREFIX}rent wallet add @user <amount>\n• ${config.PREFIX}rent wallet check @user\n\n` : ''}` +
+    const helpMsg = `💰 *WALLET COMMANDS* 💰\n\n` +
+                   `*All Users:*\n` +
+                   `• \`${config.PREFIX}rent wallet\` - View your wallets\n` +
+                   `• \`${config.PREFIX}rent wallet transfer <amount>\` - Transfer funds\n\n` +
+                   `${isAdmin ? `*Admin Only:*\n• \`${config.PREFIX}rent wallet add @user <amount>\`\n• \`${config.PREFIX}rent wallet check @user\`\n\n` : ''}` +
                    `💡 The rent wallet is separate from your economy wallet for better tracking.`;
     
     await reply(helpMsg);
@@ -838,7 +830,7 @@ async function handleWalletTransfer(context, args) {
   
   const amount = parseInt(args[0]);
   if (isNaN(amount) || amount <= 0) {
-    return reply(`❌ Please provide a valid amount.\n\nUsage: ${config.PREFIX}rent wallet transfer <amount>\nExample: ${config.PREFIX}rent wallet transfer 50000`);
+    return reply(`❌ Please provide a valid amount.\n\n*Usage:* \`${config.PREFIX}rent wallet transfer <amount>\`\n*Example:* \`${config.PREFIX}rent wallet transfer 50000\``);
   }
   
   // Check if user is tenant
@@ -859,7 +851,7 @@ async function handleWalletTransfer(context, args) {
     
     switch (transferResult.error) {
       case 'insufficient_funds':
-        errorMsg = `❌ Insufficient Economy Wallet Funds!\n\n` +
+        errorMsg = `❌ *Insufficient Economy Wallet Funds!*\n\n` +
                   `💰 Your Balance: ${settings.currencySymbol}${transferResult.economyBalance?.toLocaleString() || 0}\n` +
                   `💸 Amount Needed: ${settings.currencySymbol}${amount.toLocaleString()}\n` +
                   `📉 Shortfall: ${settings.currencySymbol}${(amount - (transferResult.economyBalance || 0)).toLocaleString()}\n\n` +
@@ -931,7 +923,7 @@ async function handleWalletAdd(context, args) {
 }
 
 async function handleWalletCheck(context, args) {
-  const { from, reply, m, sock } = context;
+  const { from, reply, m } = context;
   const settings = rentalSettings[from];
   const mentions = extractMentions(m);
   
@@ -947,18 +939,6 @@ async function handleWalletCheck(context, args) {
   
   if (!tenant) {
     return reply(`❌ @${userId.split('@')[0]} is not a tenant.`, [userId]);
-  }
-  
-  // Get display name
-  let displayName = userId.split('@')[0];
-  try {
-    const groupMetadata = await sock.groupMetadata(from);
-    const participant = groupMetadata.participants.find(p => p.id === userId);
-    if (participant) {
-      displayName = participant.notify || participant.id.split('@')[0];
-    }
-  } catch (error) {
-    console.log('Could not fetch display name');
   }
   
   // Get their economy data and payment history
@@ -982,7 +962,7 @@ async function handleWalletCheck(context, args) {
   }
   
   const checkMsg = `💰 *TENANT WALLET DETAILS* 💰\n\n` +
-                  `👤 *Tenant:* ${displayName}\n` +
+                  `👤 *Tenant:* @${userId.split('@')[0]}\n` +
                   `📅 *Join Date:* ${moment(tenant.joinDate).format('MMM Do, YYYY')}\n\n` +
                   `💳 *CURRENT BALANCES:*\n` +
                   `🏦 Economy: ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
@@ -994,143 +974,83 @@ async function handleWalletCheck(context, args) {
                   `• Total Payments: ${tenant.paymentCount || 0}${paymentHistory}`;
   
   await reply(checkMsg, [userId]);
-} STATUS:*\n` +
-                  `• Period: ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
-                  `• Amount Due: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
-                  `• Status: ${hasPaid ? '✅ PAID' : billingInfo.isOverdue ? '🚨 OVERDUE' : '⏳ PENDING'}\n` +
-                  `• Total Payments: ${tenant.paymentCount || 0}${paymentHistory}`;
-  
-  await reply(checkMsg, [userId]);
 }
 
 async function handleDefaulters(context) {
-  const { from, reply, sock } = context;
+  const { from, reply } = context;
   const settings = rentalSettings[from];
   const billingInfo = calculateCurrentBillingPeriod(settings);
   
   // Get all tenants for this group
   const tenants = await db.collection(COLLECTIONS.TENANTS).find({ groupId: from }).toArray();
   console.log(`🔍 Checking ${tenants.length} tenants for defaulters in group ${from}`);
-  console.log(`📅 Billing info: Due=${billingInfo.dueDate.format('YYYY-MM-DD HH:mm')}, IsOverdue=${billingInfo.isOverdue}, DaysOverdue=${billingInfo.daysOverdue}`);
   
-  // Get group metadata for usernames
-  let groupMetadata;
-  try {
-    groupMetadata = await sock.groupMetadata(from);
-  } catch (error) {
-    console.log('Could not fetch group metadata for usernames');
-  }
-  
-  const getUserDisplayName = (userId) => {
-    if (groupMetadata) {
-      const participant = groupMetadata.participants.find(p => p.id === userId);
-      if (participant) {
-        return participant.notify || participant.id.split('@')[0];
-      }
-    }
-    return userId.split('@')[0];
-  };
-  
-  const allTenantStatus = [];
   const defaulters = [];
-  const unpaidButNotOverdue = [];
-  
-  // Check each tenant's payment status
-  for (const tenant of tenants) {
+  const checkPromises = tenants.map(async (tenant) => {
     const hasPaid = await hasPaidCurrentPeriod(tenant.tenantId, from, billingInfo);
-    const displayName = getUserDisplayName(tenant.tenantId);
+    console.log(`👤 ${tenant.tenantId.split('@')[0]}: hasPaid=${hasPaid}, isOverdue=${billingInfo.isOverdue}, wallet=${tenant.wallet}`);
     
-    console.log(`👤 ${displayName}: hasPaid=${hasPaid}, wallet=${tenant.wallet}, isOverdue=${billingInfo.isOverdue}`);
-    
-    const tenantStatus = {
-      tenant,
-      displayName,
-      hasPaid,
-      canPayNow: tenant.wallet >= settings.rentAmount,
-      daysOverdue: billingInfo.daysOverdue,
-      daysUntilDue: billingInfo.daysUntilDue
-    };
-    
-    allTenantStatus.push(tenantStatus);
-    
-    if (!hasPaid) {
-      if (billingInfo.isOverdue) {
-        // Rent is overdue and they haven't paid = defaulter
-        const gracePeriodEnd = billingInfo.dueDate.clone().add(settings.gracePeriodDays, 'days');
-        const willBeEvicted = settings.autoEvict && moment().isAfter(gracePeriodEnd, 'day');
-        
-        defaulters.push({
-          ...tenantStatus,
-          willBeEvicted,
-          graceDaysLeft: Math.max(0, gracePeriodEnd.diff(moment(), 'days'))
-        });
-      } else {
-        // Rent due soon but not overdue yet
-        unpaidButNotOverdue.push(tenantStatus);
-      }
-    }
-  }
-  
-  console.log(`📊 Analysis: ${defaulters.length} defaulters, ${unpaidButNotOverdue.length} unpaid (not overdue), ${allTenantStatus.filter(t => t.hasPaid).length} paid`);
-  
-  // Build comprehensive response
-  let responseMsg = `📊 *RENTAL STATUS REPORT* 📊\n\n`;
-  responseMsg += `📅 *Current Period:* ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n`;
-  responseMsg += `💰 *Rent Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n`;
-  responseMsg += `📊 *Payment Status:* ${billingInfo.isOverdue ? `🚨 ${billingInfo.daysOverdue} day(s) OVERDUE` : billingInfo.daysUntilDue === 0 ? '⏰ DUE TODAY!' : `⏳ Due in ${billingInfo.daysUntilDue} day(s)`}\n\n`;
-  
-  // Show defaulters (overdue and unpaid)
-  if (defaulters.length > 0) {
-    responseMsg += `🚨 *DEFAULTERS (${defaulters.length}):*\n`;
-    const mentions = [];
-    
-    defaulters.forEach((defaulter, index) => {
-      mentions.push(defaulter.tenant.tenantId);
-      responseMsg += `${index + 1}. @${defaulter.displayName}\n`;
-      responseMsg += `   💳 Wallet: ${settings.currencySymbol}${defaulter.tenant.wallet.toLocaleString()}\n`;
-      responseMsg += `   📊 Status: ${defaulter.canPayNow ? '✅ Can pay now' : '❌ Insufficient funds'}\n`;
+    // Only consider as defaulter if rent is overdue AND they haven't paid
+    if (billingInfo.isOverdue && !hasPaid) {
+      const gracePeriodEnd = billingInfo.dueDate.clone().add(settings.gracePeriodDays, 'days');
+      const willBeEvicted = settings.autoEvict && moment().isAfter(gracePeriodEnd, 'day');
       
-      if (defaulter.willBeEvicted) {
-        responseMsg += `   🚪 ⚠️ *EVICTION IMMINENT*\n`;
-      } else if (defaulter.graceDaysLeft > 0) {
-        responseMsg += `   ⏳ Grace: ${defaulter.graceDaysLeft} day(s) left\n`;
-      } else {
-        responseMsg += `   🚨 Grace period expired\n`;
-      }
-      responseMsg += `\n`;
-    });
-    
-    await reply(responseMsg, mentions);
-    return;
-  }
-  
-  // Show unpaid but not overdue
-  if (unpaidButNotOverdue.length > 0) {
-    responseMsg += `⏳ *UNPAID (Not Overdue Yet) - ${unpaidButNotOverdue.length}:*\n`;
-    unpaidButNotOverdue.forEach((tenant, index) => {
-      responseMsg += `${index + 1}. ${tenant.displayName}\n`;
-      responseMsg += `   💳 Wallet: ${settings.currencySymbol}${tenant.tenant.wallet.toLocaleString()}\n`;
-      responseMsg += `   📊 Ready: ${tenant.canPayNow ? '✅ Yes' : '❌ Needs more funds'}\n`;
-      responseMsg += `   ⏰ Due in: ${tenant.daysUntilDue} day(s)\n\n`;
-    });
-  }
-  
-  // If no defaulters
-  if (defaulters.length === 0) {
-    const paidCount = allTenantStatus.filter(t => t.hasPaid).length;
-    responseMsg += `✅ *NO DEFAULTERS!*\n\n`;
-    responseMsg += `🎉 All tenants are compliant!\n`;
-    responseMsg += `• Paid: ${paidCount}/${allTenantStatus.length}\n`;
-    responseMsg += `• Payment Rate: ${Math.round((paidCount / allTenantStatus.length) * 100)}%\n\n`;
-    
-    if (unpaidButNotOverdue.length > 0) {
-      responseMsg += `⏳ *${unpaidButNotOverdue.length} tenant(s) have not paid yet* but rent is ${billingInfo.daysUntilDue === 0 ? 'due today' : `not due for ${billingInfo.daysUntilDue} day(s)`}.\n\n`;
+      defaulters.push({
+        tenant,
+        daysOverdue: billingInfo.daysOverdue,
+        willBeEvicted,
+        canPayNow: tenant.wallet >= settings.rentAmount
+      });
     }
+  });
+  
+  await Promise.all(checkPromises);
+  
+  console.log(`📊 Found ${defaulters.length} defaulters out of ${tenants.length} tenants`);
+  
+  if (defaulters.length === 0) {
+    const statusMsg = `✅ *NO DEFAULTERS FOUND!* ✅\n\n` +
+                     `All ${tenants.length} tenants are up to date with their rent.\n\n` +
+                     `📅 *Current Period:* ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
+                     `💰 *Rent Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
+                     `📊 *Status:* ${billingInfo.isOverdue ? 'Overdue but all paid!' : 'Not due yet'}\n\n` +
+                     `🎉 Excellent payment compliance!`;
     
-    responseMsg += `⚙️ *Settings:* Grace: ${settings.gracePeriodDays}d | Auto-evict: ${settings.autoEvict ? 'ON' : 'OFF'} | Auto-deduct: ${settings.autoDeduct ? 'ON' : 'OFF'}`;
+    return reply(statusMsg);
   }
   
-  await reply(responseMsg);
+  // Sort defaulters by days overdue (most urgent first)
+  defaulters.sort((a, b) => b.daysOverdue - a.daysOverdue);
+  
+  let defaultersMsg = `🚨 *RENT DEFAULTERS* (${defaulters.length}) 🚨\n\n` +
+                     `📅 *Due Date:* ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
+                     `💰 *Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
+                     `⏰ *Days Overdue:* ${billingInfo.daysOverdue}\n\n`;
+  
+  const mentions = [];
+  defaulters.forEach((defaulter, index) => {
+    const username = defaulter.tenant.tenantId.split('@')[0];
+    mentions.push(defaulter.tenant.tenantId);
+    
+    defaultersMsg += `${index + 1}. @${username}\n`;
+    defaultersMsg += `   💳 Wallet: ${settings.currencySymbol}${defaulter.tenant.wallet.toLocaleString()}\n`;
+    defaultersMsg += `   📊 Status: ${defaulter.canPayNow ? '✅ Can pay now' : '❌ Insufficient funds'}\n`;
+    
+    if (defaulter.willBeEvicted) {
+      defaultersMsg += `   🚪 ⚠️ *WILL BE EVICTED SOON*\n`;
+    } else {
+      const daysLeft = settings.gracePeriodDays - defaulter.daysOverdue;
+      defaultersMsg += `   ⏳ Grace period: ${daysLeft} days left\n`;
+    }
+    defaultersMsg += `\n`;
+  });
+  
+  defaultersMsg += `⚙️ *Settings:*\n` +
+                  `• Grace Period: ${settings.gracePeriodDays} days\n` +
+                  `• Auto-Eviction: ${settings.autoEvict ? 'ON' : 'OFF'}\n` +
+                  `• Auto-Deduction: ${settings.autoDeduct ? 'ON' : 'OFF'}`;
+  
+  await reply(defaultersMsg, mentions);
 }
 
 async function handleSettings(context, args) {
@@ -1403,18 +1323,18 @@ async function handleDisable(context) {
 }
 
 async function handleStats(context) {
-  const { from, reply, sock } = context;
+  const { from, reply } = context;
   const settings = rentalSettings[from];
   
   try {
     const [
-      allTenants,
+      tenantCount,
       totalPayments,
       totalRevenue,
       evictionCount,
       recentPayments
     ] = await Promise.all([
-      db.collection(COLLECTIONS.TENANTS).find({ groupId: from }).toArray(),
+      db.collection(COLLECTIONS.TENANTS).countDocuments({ groupId: from }),
       db.collection(COLLECTIONS.PAYMENT_HISTORY).countDocuments({ 
         groupId: from,
         method: { $ne: 'eviction' }
@@ -1436,106 +1356,41 @@ async function handleStats(context) {
     const billingInfo = calculateCurrentBillingPeriod(settings);
     const revenue = totalRevenue[0]?.total || 0;
     
-    // Get group metadata for usernames
-    let groupMetadata;
-    try {
-      groupMetadata = await sock.groupMetadata(from);
-    } catch (error) {
-      console.log('Could not fetch group metadata for usernames');
-    }
+    // Calculate current period stats
+    const currentPeriodPayments = await db.collection(COLLECTIONS.PAYMENT_HISTORY).countDocuments({
+      groupId: from,
+      date: { 
+        $gte: billingInfo.periodStart.toDate(), 
+        $lte: billingInfo.periodEnd.toDate() 
+      },
+      method: { $ne: 'eviction' }
+    });
     
-    // Create username lookup
-    const getUserDisplayName = (userId) => {
-      if (groupMetadata) {
-        const participant = groupMetadata.participants.find(p => p.id === userId);
-        if (participant) {
-          // Try to get name from participant info
-          return participant.notify || userId.split('@')[0];
-        }
-      }
-      return userId.split('@')[0];
-    };
+    const paymentRate = tenantCount > 0 ? Math.round((currentPeriodPayments / tenantCount) * 100) : 0;
     
-    // Analyze current period payment status
-    const paidTenants = [];
-    const unpaidTenants = [];
-    const defaulters = [];
-    
-    for (const tenant of allTenants) {
-      const hasPaid = await hasPaidCurrentPeriod(tenant.tenantId, from, billingInfo);
-      const displayName = getUserDisplayName(tenant.tenantId);
-      
-      if (hasPaid) {
-        paidTenants.push({ ...tenant, displayName });
-      } else {
-        unpaidTenants.push({ ...tenant, displayName });
-        
-        // Check if it's a defaulter (overdue)
-        if (billingInfo.isOverdue) {
-          const gracePeriodEnd = billingInfo.dueDate.clone().add(settings.gracePeriodDays, 'days');
-          const willBeEvicted = settings.autoEvict && moment().isAfter(gracePeriodEnd, 'day');
-          
-          defaulters.push({
-            ...tenant,
-            displayName,
-            daysOverdue: billingInfo.daysOverdue,
-            willBeEvicted,
-            canPayNow: tenant.wallet >= settings.rentAmount
-          });
-        }
-      }
-    }
-    
-    const paymentRate = allTenants.length > 0 ? Math.round((paidTenants.length / allTenants.length) * 100) : 0;
-    
-    // Build recent payments with names
     let recentPaymentsText = '';
     if (recentPayments.length > 0) {
       recentPaymentsText = '\n\n📜 *Recent Payments:*\n';
       recentPayments.forEach((payment, index) => {
-        const displayName = getUserDisplayName(payment.tenantId);
-        recentPaymentsText += `${index + 1}. ${displayName}: ${settings.currencySymbol}${payment.amount.toLocaleString()} (${moment(payment.date).format('MMM Do')})\n`;
+        const username = payment.tenantId.split('@')[0];
+        recentPaymentsText += `${index + 1}. ${username}: ${settings.currencySymbol}${payment.amount.toLocaleString()} (${moment(payment.date).format('MMM Do')})\n`;
       });
-    }
-    
-    // Build tenant status lists
-    let tenantStatusText = '\n\n👥 *TENANT STATUS:*\n';
-    
-    if (paidTenants.length > 0) {
-      tenantStatusText += `✅ *Paid (${paidTenants.length}):* `;
-      tenantStatusText += paidTenants.slice(0, 8).map(t => t.displayName).join(', ');
-      if (paidTenants.length > 8) tenantStatusText += ` +${paidTenants.length - 8} more`;
-      tenantStatusText += '\n';
-    }
-    
-    if (unpaidTenants.length > 0 && !billingInfo.isOverdue) {
-      tenantStatusText += `⏳ *Not Due Yet (${unpaidTenants.length}):* `;
-      tenantStatusText += unpaidTenants.slice(0, 8).map(t => t.displayName).join(', ');
-      if (unpaidTenants.length > 8) tenantStatusText += ` +${unpaidTenants.length - 8} more`;
-      tenantStatusText += '\n';
-    }
-    
-    if (defaulters.length > 0) {
-      tenantStatusText += `🚨 *Defaulters (${defaulters.length}):* `;
-      tenantStatusText += defaulters.slice(0, 6).map(d => `${d.displayName}${d.willBeEvicted ? '⚠️' : ''}`).join(', ');
-      if (defaulters.length > 6) tenantStatusText += ` +${defaulters.length - 6} more`;
-      tenantStatusText += '\n';
     }
     
     const statsMsg = `📊 *RENTAL SYSTEM STATISTICS* 📊\n\n` +
                     `🏘️ *Group Overview:*\n` +
-                    `• Active Tenants: ${allTenants.length}\n` +
+                    `• Active Tenants: ${tenantCount}\n` +
                     `• Total Payments: ${totalPayments}\n` +
                     `• Total Revenue: ${settings.currencySymbol}${revenue.toLocaleString()}\n` +
                     `• Evictions: ${evictionCount}\n\n` +
                     `📅 *Current Period:* ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do')}\n` +
-                    `💰 *Period Revenue Target:* ${settings.currencySymbol}${(allTenants.length * settings.rentAmount).toLocaleString()}\n` +
-                    `📊 *Payment Rate:* ${paymentRate}% (${paidTenants.length}/${allTenants.length})\n` +
-                    `⏰ *Status:* ${billingInfo.isOverdue ? `${billingInfo.daysOverdue} day(s) overdue` : billingInfo.daysUntilDue === 0 ? 'Due TODAY!' : `Due in ${billingInfo.daysUntilDue} day(s)`}\n\n` +
+                    `💰 *Period Revenue Target:* ${settings.currencySymbol}${(tenantCount * settings.rentAmount).toLocaleString()}\n` +
+                    `📊 *Payment Rate:* ${paymentRate}% (${currentPeriodPayments}/${tenantCount})\n` +
+                    `⏰ *Days ${billingInfo.isOverdue ? 'Overdue' : 'Until Due'}:* ${billingInfo.isOverdue ? billingInfo.daysOverdue : billingInfo.daysUntilDue}\n\n` +
                     `⚙️ *System Settings:*\n` +
                     `• Auto-deduct: ${settings.autoDeduct ? '✅' : '❌'}\n` +
                     `• Auto-evict: ${settings.autoEvict ? '✅' : '❌'}\n` +
-                    `• Grace Period: ${settings.gracePeriodDays} days${tenantStatusText}${recentPaymentsText}`;
+                    `• Grace Period: ${settings.gracePeriodDays} days${recentPaymentsText}`;
     
     await reply(statsMsg);
     
