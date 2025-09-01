@@ -185,9 +185,8 @@ class DatabaseManager {
         maxPoolSize: CONFIG.CONNECTION_POOL_SIZE,
         serverSelectionTimeoutMS: 5000,
         socketTimeoutMS: 45000,
-        bufferMaxEntries: 0,
-        useNewUrlParser: true,
-        useUnifiedTopology: true
+        maxIdleTimeMS: 30000,
+        connectTimeoutMS: 10000
       });
       
       await this.client.connect();
