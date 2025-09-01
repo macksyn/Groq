@@ -977,20 +977,28 @@ async function handleWalletCheck(context, args) {
 }
 
 async function handleDefaulters(context) {
-  const { from, reply } = context;
+  const { from, reply, sock } = context; // Added 'sock' to context destructuring
   const settings = rentalSettings[from];
   const billingInfo = calculateCurrentBillingPeriod(settings);
+
+  // --- FIX START ---
+  // Fetch group metadata once to get participant names efficiently
+  let groupMetadata;
+  try {
+    groupMetadata = await sock.groupMetadata(from);
+  } catch (e) {
+    console.error("Could not fetch group metadata for defaulters list:", e);
+    return reply("❌ Could not fetch group member details. Please try again.");
+  }
+  // --- FIX END ---
   
-  // Get all tenants for this group
   const tenants = await db.collection(COLLECTIONS.TENANTS).find({ groupId: from }).toArray();
   console.log(`🔍 Checking ${tenants.length} tenants for defaulters in group ${from}`);
   
   const defaulters = [];
   const checkPromises = tenants.map(async (tenant) => {
     const hasPaid = await hasPaidCurrentPeriod(tenant.tenantId, from, billingInfo);
-    console.log(`👤 ${tenant.tenantId.split('@')[0]}: hasPaid=${hasPaid}, isOverdue=${billingInfo.isOverdue}, wallet=${tenant.wallet}`);
     
-    // Only consider as defaulter if rent is overdue AND they haven't paid
     if (billingInfo.isOverdue && !hasPaid) {
       const gracePeriodEnd = billingInfo.dueDate.clone().add(settings.gracePeriodDays, 'days');
       const willBeEvicted = settings.autoEvict && moment().isAfter(gracePeriodEnd, 'day');
@@ -1019,7 +1027,6 @@ async function handleDefaulters(context) {
     return reply(statusMsg);
   }
   
-  // Sort defaulters by days overdue (most urgent first)
   defaulters.sort((a, b) => b.daysOverdue - a.daysOverdue);
   
   let defaultersMsg = `🚨 *RENT DEFAULTERS* (${defaulters.length}) 🚨\n\n` +
@@ -1029,17 +1036,24 @@ async function handleDefaulters(context) {
   
   const mentions = [];
   defaulters.forEach((defaulter, index) => {
-    const username = defaulter.tenant.tenantId.split('@')[0];
     mentions.push(defaulter.tenant.tenantId);
     
-    defaultersMsg += `${index + 1}. @${username}\n`;
+    // --- FIX START ---
+    // Look up the user's name from the fetched metadata
+    const participant = groupMetadata.participants.find(p => p.id === defaulter.tenant.tenantId);
+    const username = participant?.pushname || participant?.name || `User (${defaulter.tenant.tenantId.split('@')[0]})`;
+    const userMention = `@${defaulter.tenant.tenantId.split('@')[0]}`;
+    // --- FIX END ---
+
+    // Updated message to show the name and the mention
+    defaultersMsg += `${index + 1}. *${username}* (${userMention})\n`;
     defaultersMsg += `   💳 Wallet: ${settings.currencySymbol}${defaulter.tenant.wallet.toLocaleString()}\n`;
     defaultersMsg += `   📊 Status: ${defaulter.canPayNow ? '✅ Can pay now' : '❌ Insufficient funds'}\n`;
     
     if (defaulter.willBeEvicted) {
       defaultersMsg += `   🚪 ⚠️ *WILL BE EVICTED SOON*\n`;
     } else {
-      const daysLeft = settings.gracePeriodDays - defaulter.daysOverdue;
+      const daysLeft = Math.max(0, settings.gracePeriodDays - defaulter.daysOverdue);
       defaultersMsg += `   ⏳ Grace period: ${daysLeft} days left\n`;
     }
     defaultersMsg += `\n`;
@@ -1323,9 +1337,20 @@ async function handleDisable(context) {
 }
 
 async function handleStats(context) {
-  const { from, reply } = context;
+  const { from, reply, sock } = context; // Added 'sock' to context destructuring
   const settings = rentalSettings[from];
   
+  // --- FIX START ---
+  // Fetch group metadata once to get participant names efficiently
+  let groupMetadata;
+  try {
+    groupMetadata = await sock.groupMetadata(from);
+  } catch (e) {
+    console.error("Could not fetch group metadata for stats:", e);
+    // Continue without names if metadata fetch fails
+  }
+  // --- FIX END ---
+
   try {
     const [
       tenantCount,
@@ -1356,7 +1381,6 @@ async function handleStats(context) {
     const billingInfo = calculateCurrentBillingPeriod(settings);
     const revenue = totalRevenue[0]?.total || 0;
     
-    // Calculate current period stats
     const currentPeriodPayments = await db.collection(COLLECTIONS.PAYMENT_HISTORY).countDocuments({
       groupId: from,
       date: { 
@@ -1372,8 +1396,13 @@ async function handleStats(context) {
     if (recentPayments.length > 0) {
       recentPaymentsText = '\n\n📜 *Recent Payments:*\n';
       recentPayments.forEach((payment, index) => {
-        const username = payment.tenantId.split('@')[0];
-        recentPaymentsText += `${index + 1}. ${username}: ${settings.currencySymbol}${payment.amount.toLocaleString()} (${moment(payment.date).format('MMM Do')})\n`;
+        // --- FIX START ---
+        // Look up the user's name from the fetched metadata
+        const participant = groupMetadata?.participants.find(p => p.id === payment.tenantId);
+        const username = participant?.pushname || participant?.name || payment.tenantId.split('@')[0];
+        // --- FIX END ---
+
+        recentPaymentsText += `${index + 1}. *${username}*: ${settings.currencySymbol}${payment.amount.toLocaleString()} (${moment(payment.date).format('MMM Do')})\n`;
       });
     }
     
