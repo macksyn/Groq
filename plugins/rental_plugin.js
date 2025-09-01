@@ -256,12 +256,12 @@ async function handleRentReminders(sock, tenant, group, settings, billingInfo) {
   
   for (const reminderDay of settings.reminderDays) {
     if (daysUntilDue === reminderDay) {
-      const reminderMsg = `🔔 *RENT REMINDER* 🔔\n\n` +
-                         `Your rent of *${settings.currencySymbol}${settings.rentAmount.toLocaleString()}* is due in *${reminderDay} day(s)*!\n\n` +
-                         `📅 Due Date: *${billingInfo.dueDate.format('dddd, MMM Do, YYYY')}*\n` +
-                         `💰 Your Rent Wallet: *${settings.currencySymbol}${tenant.wallet.toLocaleString()}*\n` +
+      const reminderMsg = `🔔 RENT REMINDER 🔔\n\n` +
+                         `Your rent of ${settings.currencySymbol}${settings.rentAmount.toLocaleString()} is due in ${reminderDay} day(s)!\n\n` +
+                         `📅 Due Date: ${billingInfo.dueDate.format('dddd, MMM Do, YYYY')}\n` +
+                         `💰 Your Rent Wallet: ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n` +
                          `📊 Status: ${tenant.wallet >= settings.rentAmount ? '✅ Ready!' : '❌ Insufficient funds'}\n\n` +
-                         `${tenant.wallet < settings.rentAmount ? `💡 Transfer funds: \`rent wallet transfer ${settings.rentAmount - tenant.wallet}\`` : '✨ You\'re all set!'}`;
+                         `${tenant.wallet < settings.rentAmount ? `💡 Transfer funds: rent wallet transfer ${settings.rentAmount - tenant.wallet}` : '✨ You are all set!'}`;
       
       await sock.sendMessage(tenant.tenantId, { text: reminderMsg });
       console.log(`📬 Sent ${reminderDay}-day reminder to ${tenant.tenantId.split('@')[0]}`);
@@ -275,10 +275,10 @@ async function handleOverdueRent(sock, tenant, group, settings, billingInfo) {
     // Auto-deduct rent
     await processRentPayment(tenant, group, settings, billingInfo, 'auto_deduct');
     
-    const paymentMsg = `✅ *RENT AUTO-DEDUCTED* ✅\n\n` +
-                      `Amount: *${settings.currencySymbol}${settings.rentAmount.toLocaleString()}*\n` +
+    const paymentMsg = `✅ RENT AUTO-DEDUCTED ✅\n\n` +
+                      `Amount: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
                       `Period: ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
-                      `New Balance: *${settings.currencySymbol}${(tenant.wallet - settings.rentAmount).toLocaleString()}*\n\n` +
+                      `New Balance: ${settings.currencySymbol}${(tenant.wallet - settings.rentAmount).toLocaleString()}\n\n` +
                       `✨ Thank you for your payment!`;
     
     await sock.sendMessage(tenant.tenantId, { text: paymentMsg });
@@ -286,11 +286,11 @@ async function handleOverdueRent(sock, tenant, group, settings, billingInfo) {
     return true;
   } else {
     // Send overdue notice
-    const lateNoticeMsg = `🚨 *RENT OVERDUE* 🚨\n\n` +
-                         `Your rent was due on *${billingInfo.dueDate.format('MMM Do, YYYY')}* and is now *${billingInfo.daysOverdue} day(s) overdue*!\n\n` +
-                         `💰 Amount Due: *${settings.currencySymbol}${settings.rentAmount.toLocaleString()}*\n` +
-                         `💳 Your Wallet: *${settings.currencySymbol}${tenant.wallet.toLocaleString()}*\n` +
-                         `📉 Shortfall: *${settings.currencySymbol}${Math.max(0, settings.rentAmount - tenant.wallet).toLocaleString()}*\n\n` +
+    const lateNoticeMsg = `🚨 RENT OVERDUE 🚨\n\n` +
+                         `Your rent was due on ${billingInfo.dueDate.format('MMM Do, YYYY')} and is now ${billingInfo.daysOverdue} day(s) overdue!\n\n` +
+                         `💰 Amount Due: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
+                         `💳 Your Wallet: ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n` +
+                         `📉 Shortfall: ${settings.currencySymbol}${Math.max(0, settings.rentAmount - tenant.wallet).toLocaleString()}\n\n` +
                          `⚠️ Grace Period: ${settings.gracePeriodDays} days\n` +
                          `🚪 Eviction in: ${Math.max(0, settings.gracePeriodDays - billingInfo.daysOverdue)} days\n\n` +
                          `💡 Pay now to avoid eviction!`;
@@ -585,21 +585,21 @@ async function showHelpMenu(context) {
   const { reply, config } = context;
   const prefix = config.PREFIX;
   
-  const menu = `🏘️ *RENTAL SIMULATION v2.0* 🏘️\n\n` +
-               `*👤 Tenant Commands:*\n` +
-               `• \`${prefix}rent status\` - Check your rent status\n` +
-               `• \`${prefix}rent pay\` - Pay rent manually\n` +
-               `• \`${prefix}rent wallet\` - View wallet balances\n` +
-               `• \`${prefix}rent wallet transfer <amount>\` - Move money to rent wallet\n\n` +
-               `*👑 Admin Commands:*\n` +
-               `• \`${prefix}rent setup\` - Initialize rental system\n` +
-               `• \`${prefix}rent addtenant @user\` - Add new tenant\n` +
-               `• \`${prefix}rent defaulters\` - List overdue tenants\n` +
-               `• \`${prefix}rent evict @user\` - Manual eviction\n` +
-               `• \`${prefix}rent settings\` - Configure system\n` +
-               `• \`${prefix}rent stats\` - View group statistics\n` +
-               `• \`${prefix}rent disable\` - Disable rental system\n\n` +
-               `✨ *Features:* Auto-deduction, Smart reminders, Grace periods, Real-time tracking`;
+  const menu = `🏘️ RENTAL SIMULATION v2.0 🏘️\n\n` +
+               `👤 Tenant Commands:\n` +
+               `• ${prefix}rent status - Check your rent status\n` +
+               `• ${prefix}rent pay - Pay rent manually\n` +
+               `• ${prefix}rent wallet - View wallet balances\n` +
+               `• ${prefix}rent wallet transfer <amount> - Move money to rent wallet\n\n` +
+               `👑 Admin Commands:\n` +
+               `• ${prefix}rent setup - Initialize rental system\n` +
+               `• ${prefix}rent addtenant @user - Add new tenant\n` +
+               `• ${prefix}rent defaulters - List overdue tenants\n` +
+               `• ${prefix}rent evict @user - Manual eviction\n` +
+               `• ${prefix}rent settings - Configure system\n` +
+               `• ${prefix}rent stats - View group statistics\n` +
+               `• ${prefix}rent disable - Disable rental system\n\n` +
+               `✨ Features: Auto-deduction, Smart reminders, Grace periods, Real-time tracking`;
   
   await reply(menu);
 }
@@ -665,12 +665,12 @@ async function handleSetup(context) {
     const settings = rentalSettings[from];
     const billingInfo = calculateCurrentBillingPeriod(settings);
     
-    const setupMsg = `✅ *RENTAL SYSTEM ACTIVATED!* ✅\n\n` +
-                    `👥 *Tenants Enrolled:* ${totalTenants}\n` +
-                    `💰 *Monthly Rent:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
-                    `📅 *Next Due Date:* ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
-                    `⏰ *Grace Period:* ${settings.gracePeriodDays} days\n` +
-                    `🔄 *Auto-deduction:* ${settings.autoDeduct ? 'Enabled' : 'Disabled'}\n\n` +
+    const setupMsg = `✅ RENTAL SYSTEM ACTIVATED! ✅\n\n` +
+                    `👥 Tenants Enrolled: ${totalTenants}\n` +
+                    `💰 Monthly Rent: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
+                    `📅 Next Due Date: ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
+                    `⏰ Grace Period: ${settings.gracePeriodDays} days\n` +
+                    `🔄 Auto-deduction: ${settings.autoDeduct ? 'Enabled' : 'Disabled'}\n\n` +
                     `💡 Tenants can now transfer money from their economy wallets to pay rent!`;
     
     await reply(setupMsg);
