@@ -1337,20 +1337,9 @@ async function handleDisable(context) {
 }
 
 async function handleStats(context) {
-  const { from, reply, sock } = context; // Added 'sock' to context destructuring
+  const { from, reply, sock } = context;
   const settings = rentalSettings[from];
   
-  // --- FIX START ---
-  // Fetch group metadata once to get participant names efficiently
-  let groupMetadata;
-  try {
-    groupMetadata = await sock.groupMetadata(from);
-  } catch (e) {
-    console.error("Could not fetch group metadata for stats:", e);
-    // Continue without names if metadata fetch fails
-  }
-  // --- FIX END ---
-
   try {
     const [
       tenantCount,
@@ -1392,19 +1381,23 @@ async function handleStats(context) {
     
     const paymentRate = tenantCount > 0 ? Math.round((currentPeriodPayments / tenantCount) * 100) : 0;
     
+    // --- FIX START ---
     let recentPaymentsText = '';
+    const mentions = []; // ADDED: Array to hold the JIDs of users to be mentioned.
+
     if (recentPayments.length > 0) {
       recentPaymentsText = '\n\n📜 *Recent Payments:*\n';
       recentPayments.forEach((payment, index) => {
-        // --- FIX START ---
-        // Look up the user's name from the fetched metadata
-        const participant = groupMetadata?.participants.find(p => p.id === payment.tenantId);
-        const username = participant?.pushname || participant?.name || payment.tenantId.split('@')[0];
-        // --- FIX END ---
-
-        recentPaymentsText += `${index + 1}. *${username}*: ${settings.currencySymbol}${payment.amount.toLocaleString()} (${moment(payment.date).format('MMM Do')})\n`;
+        // Create the text part of the mention (e.g., @1234567890)
+        const userMention = `@${payment.tenantId.split('@')[0]}`;
+        // Add the full JID to our mentions array
+        mentions.push(payment.tenantId);
+        
+        // CHANGED: Use the userMention variable, which will be rendered as a clickable name.
+        recentPaymentsText += `${index + 1}. ${userMention}: ${settings.currencySymbol}${payment.amount.toLocaleString()} (${moment(payment.date).format('MMM Do')})\n`;
       });
     }
+    // --- FIX END ---
     
     const statsMsg = `📊 *RENTAL SYSTEM STATISTICS* 📊\n\n` +
                     `🏘️ *Group Overview:*\n` +
@@ -1421,7 +1414,8 @@ async function handleStats(context) {
                     `• Auto-evict: ${settings.autoEvict ? '✅' : '❌'}\n` +
                     `• Grace Period: ${settings.gracePeriodDays} days${recentPaymentsText}`;
     
-    await reply(statsMsg);
+    // CHANGED: Pass the mentions array to the reply function.
+    await reply(statsMsg, mentions);
     
   } catch (error) {
     console.error('❌ Stats error:', error);
