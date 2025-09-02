@@ -162,15 +162,15 @@ function calculateCurrentBillingPeriod(settings) {
   };
 }
 
-// Check if tenant has paid for current period
+// Check if tenant has paid for current period (Corrected)
 async function hasPaidCurrentPeriod(tenantId, groupId, billingInfo) {
+  // This query now checks for a payment RECORDED FOR the correct period,
+  // regardless of the actual transaction date.
   const payment = await db.collection(COLLECTIONS.PAYMENT_HISTORY).findOne({
     tenantId,
     groupId,
-    date: { 
-      $gte: billingInfo.periodStart.toDate(), 
-      $lte: billingInfo.periodEnd.toDate() 
-    }
+    periodStart: billingInfo.periodStart.toDate() 
+    // We only need to check the periodStart for a unique match, as it's the anchor of a billing cycle.
   });
   
   return !!payment;
