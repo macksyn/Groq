@@ -906,7 +906,7 @@ async function handleWalletAdd(context, args) {
   const amount = parseInt(args[args.length - 1]);
   
   if (mentions.length === 0 || isNaN(amount) || amount <= 0) {
-    return reply('❌ *Invalid Usage*\n\n*Format:* `rent wallet add @user <amount>`\n*Example:* `rent wallet add @john 25000`');
+    return reply('❌ Invalid Usage\n\nFormat: rent wallet add @user <amount>\nExample: rent wallet add @john 25000');
   }
   
   const userId = mentions[0];
@@ -935,7 +935,7 @@ async function handleWalletAdd(context, args) {
     reason: 'Admin wallet addition'
   });
   
-  const addMsg = `✅ *WALLET CREDIT SUCCESSFUL!* ✅\n\n` +
+  const addMsg = `✅ WALLET CREDIT SUCCESSFUL! ✅\n\n` +
                 `👤 Tenant: @${userId.split('@')[0]}\n` +
                 `💰 Amount Added: ${settings.currencySymbol}${amount.toLocaleString()}\n` +
                 `💳 New Balance: ${settings.currencySymbol}${newBalance.toLocaleString()}\n` +
@@ -995,13 +995,13 @@ async function handleWalletCheck(context, args) {
     });
   }
   
-  const checkMsg = `💰 *TENANT WALLET DETAILS* 💰\n\n` +
-                  `👤 *Tenant:* ${displayName}\n` +
-                  `📅 *Join Date:* ${moment(tenant.joinDate).format('MMM Do, YYYY')}\n\n` +
-                  `💳 *CURRENT BALANCES:*\n` +
+  const checkMsg = `💰 TENANT WALLET DETAILS 💰\n\n` +
+                  `👤 Tenant: ${displayName}\n` +
+                  `📅 Join Date: ${moment(tenant.joinDate).format('MMM Do, YYYY')}\n\n` +
+                  `💳 CURRENT BALANCES:\n` +
                   `🏦 Economy: ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
                   `🏠 Rent: ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n\n` +
-                  `📊 *RENT STATUS:*\n` +
+                  `📊 RENT STATUS:\n` +
                   `• Period: ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
                   `• Amount Due: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
                   `• Status: ${hasPaid ? '✅ PAID' : billingInfo.isOverdue ? '🚨 OVERDUE' : '⏳ PENDING'}\n` +
@@ -1088,14 +1088,14 @@ async function handleDefaulters(context) {
   console.log(`📊 Analysis: ${defaulters.length} defaulters, ${unpaidButNotOverdue.length} unpaid (not overdue), ${allTenantStatus.filter(t => t.hasPaid).length} paid`);
   
   // Build comprehensive response
-  let responseMsg = `📊 *RENTAL STATUS REPORT* 📊\n\n`;
-  responseMsg += `📅 *Current Period:* ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n`;
-  responseMsg += `💰 *Rent Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n`;
-  responseMsg += `📊 *Payment Status:* ${billingInfo.isOverdue ? `🚨 ${billingInfo.daysOverdue} day(s) OVERDUE` : billingInfo.daysUntilDue === 0 ? '⏰ DUE TODAY!' : `⏳ Due in ${billingInfo.daysUntilDue} day(s)`}\n\n`;
+  let responseMsg = `📊 RENTAL STATUS REPORT 📊\n\n`;
+  responseMsg += `📅 Current Period: ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n`;
+  responseMsg += `💰 Rent Amount: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n`;
+  responseMsg += `📊 Payment Status: ${billingInfo.isOverdue ? `🚨 ${billingInfo.daysOverdue} day(s) OVERDUE` : billingInfo.daysUntilDue === 0 ? '⏰ DUE TODAY!' : `⏳ Due in ${billingInfo.daysUntilDue} day(s)`}\n\n`;
   
   // Show defaulters (overdue and unpaid)
   if (defaulters.length > 0) {
-    responseMsg += `🚨 *DEFAULTERS (${defaulters.length}):*\n`;
+    responseMsg += `🚨 DEFAULTERS (${defaulters.length}):\n`;
     const mentions = [];
     
     defaulters.forEach((defaulter, index) => {
@@ -1105,7 +1105,7 @@ async function handleDefaulters(context) {
       responseMsg += `   📊 Status: ${defaulter.canPayNow ? '✅ Can pay now' : '❌ Insufficient funds'}\n`;
       
       if (defaulter.willBeEvicted) {
-        responseMsg += `   🚪 ⚠️ *EVICTION IMMINENT*\n`;
+        responseMsg += `   🚪 ⚠️ EVICTION IMMINENT\n`;
       } else if (defaulter.graceDaysLeft > 0) {
         responseMsg += `   ⏳ Grace: ${defaulter.graceDaysLeft} day(s) left\n`;
       } else {
@@ -1120,7 +1120,7 @@ async function handleDefaulters(context) {
   
   // Show unpaid but not overdue
   if (unpaidButNotOverdue.length > 0) {
-    responseMsg += `⏳ *UNPAID (Not Overdue Yet) - ${unpaidButNotOverdue.length}:*\n`;
+    responseMsg += `⏳ UNPAID (Not Overdue Yet) - ${unpaidButNotOverdue.length}:\n`;
     unpaidButNotOverdue.forEach((tenant, index) => {
       responseMsg += `${index + 1}. ${tenant.displayName}\n`;
       responseMsg += `   💳 Wallet: ${settings.currencySymbol}${tenant.tenant.wallet.toLocaleString()}\n`;
@@ -1132,16 +1132,16 @@ async function handleDefaulters(context) {
   // If no defaulters
   if (defaulters.length === 0) {
     const paidCount = allTenantStatus.filter(t => t.hasPaid).length;
-    responseMsg += `✅ *NO DEFAULTERS!*\n\n`;
+    responseMsg += `✅ NO DEFAULTERS!\n\n`;
     responseMsg += `🎉 All tenants are compliant!\n`;
     responseMsg += `• Paid: ${paidCount}/${allTenantStatus.length}\n`;
     responseMsg += `• Payment Rate: ${Math.round((paidCount / allTenantStatus.length) * 100)}%\n\n`;
     
     if (unpaidButNotOverdue.length > 0) {
-      responseMsg += `⏳ *${unpaidButNotOverdue.length} tenant(s) have not paid yet* but rent is ${billingInfo.daysUntilDue === 0 ? 'due today' : `not due for ${billingInfo.daysUntilDue} day(s)`}.\n\n`;
+      responseMsg += `⏳ ${unpaidButNotOverdue.length} tenant(s) have not paid yet but rent is ${billingInfo.daysUntilDue === 0 ? 'due today' : `not due for ${billingInfo.daysUntilDue} day(s)`}.\n\n`;
     }
     
-    responseMsg += `⚙️ *Settings:* Grace: ${settings.gracePeriodDays}d | Auto-evict: ${settings.autoEvict ? 'ON' : 'OFF'} | Auto-deduct: ${settings.autoDeduct ? 'ON' : 'OFF'}`;
+    responseMsg += `⚙️ Settings: Grace: ${settings.gracePeriodDays}d | Auto-evict: ${settings.autoEvict ? 'ON' : 'OFF'} | Auto-deduct: ${settings.autoDeduct ? 'ON' : 'OFF'}`;
   }
   
   await reply(responseMsg);
@@ -1154,25 +1154,25 @@ async function handleSettings(context, args) {
   if (args.length === 0) {
     const billingInfo = calculateCurrentBillingPeriod(settings);
     
-    const settingsMsg = `⚙️ *RENTAL SYSTEM SETTINGS* ⚙️\n\n` +
-                       `💰 *Rent Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
-                       `📅 *Frequency:* ${settings.paymentFrequency}\n` +
-                       `📆 *Due Day:* ${settings.paymentFrequency === 'monthly' ? 
+    const settingsMsg = `⚙️ RENTAL SYSTEM SETTINGS ⚙️\n\n` +
+                       `💰 Rent Amount: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
+                       `📅 Frequency: ${settings.paymentFrequency}\n` +
+                       `📆 Due Day: ${settings.paymentFrequency === 'monthly' ? 
                          `${settings.monthlyDueDay}${getOrdinalSuffix(settings.monthlyDueDay)} of each month` :
                          moment().isoWeekday(settings.weeklyDueDay).format('dddd')}\n` +
-                       `📅 *Next Due:* ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
-                       `⏰ *Grace Period:* ${settings.gracePeriodDays} days\n` +
-                       `🔔 *Reminders:* ${settings.reminderDays.join(', ')} days before\n` +
-                       `🔄 *Auto-deduct:* ${settings.autoDeduct ? 'ON' : 'OFF'}\n` +
-                       `🚪 *Auto-evict:* ${settings.autoEvict ? 'ON' : 'OFF'}\n` +
-                       `👑 *Admin Only:* ${settings.adminOnly ? 'ON' : 'OFF'}\n\n` +
-                       `*🛠️ Configuration Commands:*\n` +
-                       `• \`${config.PREFIX}rent settings amount <number>\`\n` +
-                       `• \`${config.PREFIX}rent settings frequency monthly <day>\`\n` +
-                       `• \`${config.PREFIX}rent settings frequency weekly <day_name>\`\n` +
-                       `• \`${config.PREFIX}rent settings grace <days>\`\n` +
-                       `• \`${config.PREFIX}rent settings autoevict on/off\`\n` +
-                       `• \`${config.PREFIX}rent settings autodeduct on/off\``;
+                       `📅 Next Due: ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
+                       `⏰ Grace Period: ${settings.gracePeriodDays} days\n` +
+                       `🔔 Reminders: ${settings.reminderDays.join(', ')} days before\n` +
+                       `🔄 Auto-deduct: ${settings.autoDeduct ? 'ON' : 'OFF'}\n` +
+                       `🚪 Auto-evict: ${settings.autoEvict ? 'ON' : 'OFF'}\n` +
+                       `👑 Admin Only: ${settings.adminOnly ? 'ON' : 'OFF'}\n\n` +
+                       `🛠️ Configuration Commands:\n` +
+                       `• ${config.PREFIX}rent settings amount <number>\n` +
+                       `• ${config.PREFIX}rent settings frequency monthly <day>\n` +
+                       `• ${config.PREFIX}rent settings frequency weekly <day_name>\n` +
+                       `• ${config.PREFIX}rent settings grace <days>\n` +
+                       `• ${config.PREFIX}rent settings autoevict on/off\n` +
+                       `• ${config.PREFIX}rent settings autodeduct on/off`;
     
     return reply(settingsMsg);
   }
@@ -1201,7 +1201,7 @@ async function handleSettingsChange(context, args) {
       const amount = parseInt(value1);
       if (!isNaN(amount) && amount > 0 && amount <= 10000000) {
         settings.rentAmount = amount;
-        response = `✅ Rent amount updated to *${settings.currencySymbol}${amount.toLocaleString()}*`;
+        response = `✅ Rent amount updated to ${settings.currencySymbol}${amount.toLocaleString()}`;
         settingsChanged = true;
       } else {
         response = `❌ Invalid amount. Must be between 1 and 10,000,000.`;
@@ -1214,18 +1214,18 @@ async function handleSettingsChange(context, args) {
         if (day >= 1 && day <= 28) {
           settings.paymentFrequency = 'monthly';
           settings.monthlyDueDay = day;
-          response = `✅ Frequency set to *monthly* on the *${day}${getOrdinalSuffix(day)}* of each month.`;
+          response = `✅ Frequency set to monthly on the ${day}${getOrdinalSuffix(day)} of each month.`;
           settingsChanged = true;
         } else {
-          response = `❌ Monthly due day must be between 1-28.\n*Usage:* \`${config.PREFIX}rent settings frequency monthly <day>\``;
+          response = `❌ Monthly due day must be between 1-28.\nUsage: ${config.PREFIX}rent settings frequency monthly <day>`;
         }
       } else if (value1 === 'weekly' && value2 && dayMap[value2]) {
         settings.paymentFrequency = 'weekly';
         settings.weeklyDueDay = dayMap[value2];
-        response = `✅ Frequency set to *weekly* every *${value2.charAt(0).toUpperCase() + value2.slice(1)}*.`;
+        response = `✅ Frequency set to weekly every ${value2.charAt(0).toUpperCase() + value2.slice(1)}.`;
         settingsChanged = true;
       } else {
-        response = `❌ Invalid frequency setting.\n\n*Valid Options:*\n• \`${config.PREFIX}rent settings frequency monthly <1-28>\`\n• \`${config.PREFIX}rent settings frequency weekly <day_name>\``;
+        response = `❌ Invalid frequency setting.\n\nValid Options:\n• ${config.PREFIX}rent settings frequency monthly <1-28>\n• ${config.PREFIX}rent settings frequency weekly <day_name>`;
       }
       break;
       
@@ -1233,7 +1233,7 @@ async function handleSettingsChange(context, args) {
       const graceDays = parseInt(value1);
       if (!isNaN(graceDays) && graceDays >= 0 && graceDays <= 30) {
         settings.gracePeriodDays = graceDays;
-        response = `✅ Grace period updated to *${graceDays} day(s)*`;
+        response = `✅ Grace period updated to ${graceDays} day(s)`;
         settingsChanged = true;
       } else {
         response = `❌ Grace period must be between 0-30 days.`;
@@ -1243,7 +1243,7 @@ async function handleSettingsChange(context, args) {
     case 'autoevict':
       if (['on', 'off'].includes(value1)) {
         settings.autoEvict = value1 === 'on';
-        response = `✅ Auto-eviction *${value1.toUpperCase()}*`;
+        response = `✅ Auto-eviction ${value1.toUpperCase()}`;
         settingsChanged = true;
       } else {
         response = `❌ Use 'on' or 'off' for auto-eviction.`;
@@ -1253,7 +1253,7 @@ async function handleSettingsChange(context, args) {
     case 'autodeduct':
       if (['on', 'off'].includes(value1)) {
         settings.autoDeduct = value1 === 'on';
-        response = `✅ Auto-deduction *${value1.toUpperCase()}*`;
+        response = `✅ Auto-deduction ${value1.toUpperCase()}`;
         settingsChanged = true;
       } else {
         response = `❌ Use 'on' or 'off' for auto-deduction.`;
@@ -1261,7 +1261,7 @@ async function handleSettingsChange(context, args) {
       break;
       
     default:
-      response = `❓ Unknown setting '*${key}*'.\n\n*Available Settings:*\n• amount, frequency, grace, autoevict, autodeduct\n\n*Help:* \`${config.PREFIX}rent settings\``;
+      response = `❓ Unknown setting '${key}'.\n\nAvailable Settings:\n• amount, frequency, grace, autoevict, autodeduct\n\nHelp: ${config.PREFIX}rent settings`;
   }
   
   if (settingsChanged) {
@@ -1314,7 +1314,7 @@ async function handleAddTenant(context, args) {
     { $inc: { tenantCount: 1 } }
   );
   
-  const addMsg = `✅ *TENANT ADDED SUCCESSFULLY!* ✅\n\n` +
+  const addMsg = `✅ TENANT ADDED SUCCESSFULLY! ✅\n\n` +
                 `👤 New Tenant: @${userId.split('@')[0]}\n` +
                 `🏠 Rent Wallet: ${settings.currencySymbol}0\n` +
                 `💰 Monthly Rent: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n\n` +
@@ -1367,7 +1367,7 @@ async function handleEvict(context, args) {
       { $inc: { tenantCount: -1 } }
     );
     
-    const evictionMsg = `🚨 *MANUAL EVICTION EXECUTED* 🚨\n\n` +
+    const evictionMsg = `🚨 MANUAL EVICTION EXECUTED 🚨\n\n` +
                        `@${userId.split('@')[0]} has been removed from the rental system.\n\n` +
                        `📅 Eviction Date: ${moment().format('MMM Do, YYYY h:mm A')}\n` +
                        `👑 Evicted By: Admin\n` +
@@ -1399,13 +1399,13 @@ async function handleDisable(context) {
       method: { $ne: 'eviction' }
     });
     
-    const disableMsg = `🛑 *RENTAL SYSTEM DISABLED* 🛑\n\n` +
+    const disableMsg = `🛑 RENTAL SYSTEM DISABLED 🛑\n\n` +
                       `The rental simulation has been deactivated for this group.\n\n` +
-                      `📊 *Final Statistics:*\n` +
+                      `📊 Final Statistics:\n` +
                       `• Total Tenants: ${tenantCount}\n` +
                       `• Total Payments: ${totalPayments}\n` +
                       `• Disabled: ${moment().format('MMM Do, YYYY h:mm A')}\n\n` +
-                      `💡 Use \`rent setup\` to reactivate anytime.`;
+                      `💡 Use rent setup to reactivate anytime.`;
     
     await reply(disableMsg);
     console.log(`🛑 Disabled rental system for group ${from}`);
@@ -1513,40 +1513,40 @@ async function handleStats(context) {
     }
     
     // Build tenant status lists
-    let tenantStatusText = '\n\n👥 *TENANT STATUS:*\n';
+    let tenantStatusText = '\n\n👥 TENANT STATUS:\n';
     
     if (paidTenants.length > 0) {
-      tenantStatusText += `✅ *Paid (${paidTenants.length}):* `;
+      tenantStatusText += `✅ Paid (${paidTenants.length}): `;
       tenantStatusText += paidTenants.slice(0, 8).map(t => t.displayName).join(', ');
       if (paidTenants.length > 8) tenantStatusText += ` +${paidTenants.length - 8} more`;
       tenantStatusText += '\n';
     }
     
     if (unpaidTenants.length > 0 && !billingInfo.isOverdue) {
-      tenantStatusText += `⏳ *Not Due Yet (${unpaidTenants.length}):* `;
+      tenantStatusText += `⏳ Not Due Yet (${unpaidTenants.length}): `;
       tenantStatusText += unpaidTenants.slice(0, 8).map(t => t.displayName).join(', ');
       if (unpaidTenants.length > 8) tenantStatusText += ` +${unpaidTenants.length - 8} more`;
       tenantStatusText += '\n';
     }
     
     if (defaulters.length > 0) {
-      tenantStatusText += `🚨 *Defaulters (${defaulters.length}):* `;
+      tenantStatusText += `🚨 Defaulters (${defaulters.length}): `;
       tenantStatusText += defaulters.slice(0, 6).map(d => `${d.displayName}${d.willBeEvicted ? '⚠️' : ''}`).join(', ');
       if (defaulters.length > 6) tenantStatusText += ` +${defaulters.length - 6} more`;
       tenantStatusText += '\n';
     }
     
-    const statsMsg = `📊 *RENTAL SYSTEM STATISTICS* 📊\n\n` +
-                    `🏘️ *Group Overview:*\n` +
+    const statsMsg = `📊 RENTAL SYSTEM STATISTICS 📊\n\n` +
+                    `🏘️ Group Overview:\n` +
                     `• Active Tenants: ${allTenants.length}\n` +
                     `• Total Payments: ${totalPayments}\n` +
                     `• Total Revenue: ${settings.currencySymbol}${revenue.toLocaleString()}\n` +
                     `• Evictions: ${evictionCount}\n\n` +
-                    `📅 *Current Period:* ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do')}\n` +
-                    `💰 *Period Revenue Target:* ${settings.currencySymbol}${(allTenants.length * settings.rentAmount).toLocaleString()}\n` +
-                    `📊 *Payment Rate:* ${paymentRate}% (${paidTenants.length}/${allTenants.length})\n` +
-                    `⏰ *Status:* ${billingInfo.isOverdue ? `${billingInfo.daysOverdue} day(s) overdue` : billingInfo.daysUntilDue === 0 ? 'Due TODAY!' : `Due in ${billingInfo.daysUntilDue} day(s)`}\n\n` +
-                    `⚙️ *System Settings:*\n` +
+                    `📅 Current Period: ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do')}\n` +
+                    `💰 Period Revenue Target: ${settings.currencySymbol}${(allTenants.length * settings.rentAmount).toLocaleString()}\n` +
+                    `📊 Payment Rate: ${paymentRate}% (${paidTenants.length}/${allTenants.length})\n` +
+                    `⏰ Status: ${billingInfo.isOverdue ? `${billingInfo.daysOverdue} day(s) overdue` : billingInfo.daysUntilDue === 0 ? 'Due TODAY!' : `Due in ${billingInfo.daysUntilDue} day(s)`}\n\n` +
+                    `⚙️ System Settings:\n` +
                     `• Auto-deduct: ${settings.autoDeduct ? '✅' : '❌'}\n` +
                     `• Auto-evict: ${settings.autoEvict ? '✅' : '❌'}\n` +
                     `• Grace Period: ${settings.gracePeriodDays} days${tenantStatusText}${recentPaymentsText}`;
