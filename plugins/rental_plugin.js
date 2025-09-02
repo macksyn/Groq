@@ -691,21 +691,34 @@ async function handleStatus(context) {
   await initEconomyUser(senderId);
   const economyData = await getUserEconomyData(senderId);
   
-  // Calculate payment status
+  // FIX: Calculate payment status correctly considering grace period
   let statusEmoji, statusText, actionText = '';
   
   if (hasPaid) {
+    // FIXED: If paid, always show as PAID regardless of due date
     statusEmoji = '✅';
     statusText = 'PAID';
     actionText = 'You\'re all set for this period!';
   } else if (!billingInfo.isOverdue) {
+    // Rent not due yet
     statusEmoji = '⏳';
     statusText = 'PENDING';
     actionText = `Due in ${billingInfo.daysUntilDue} day(s)`;
   } else {
-    statusEmoji = '🚨';
-    statusText = 'OVERDUE';
-    actionText = `${billingInfo.daysOverdue} day(s) late!`;
+    // FIXED: Check if still within grace period
+    const gracePeriodEnd = billingInfo.dueDate.clone().add(settings.gracePeriodDays, 'days');
+    const isWithinGracePeriod = moment().isBefore(gracePeriodEnd, 'day') || moment().isSame(gracePeriodEnd, 'day');
+    
+    if (isWithinGracePeriod) {
+      statusEmoji = '⚠️';
+      statusText = 'LATE (Grace Period)';
+      const daysLeftInGrace = Math.max(0, gracePeriodEnd.diff(moment(), 'days'));
+      actionText = `${billingInfo.daysOverdue} day(s) late | ${daysLeftInGrace} grace days left`;
+    } else {
+      statusEmoji = '🚨';
+      statusText = 'OVERDUE';
+      actionText = `${billingInfo.daysOverdue} day(s) late! Grace period ended.`;
+    }
   }
   
   const statusMsg = `📊 *YOUR RENT STATUS* 📊\n\n` +
