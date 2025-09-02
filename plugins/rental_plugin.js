@@ -111,56 +111,54 @@ async function saveSettings(groupId) {
 }
 
 // =======================
-// 📅 IMPROVED BILLING LOGIC
+// 📅 IMPROVED BILLING LOGIC (Corrected)
 // =======================
 
 function calculateCurrentBillingPeriod(settings) {
   const now = moment();
   let periodStart, periodEnd, dueDate;
-  
+
   if (settings.paymentFrequency === 'monthly') {
-    // Monthly billing: rent due on specific day each month
-    const currentMonth = now.clone().startOf('month');
-    const dueDay = Math.min(settings.monthlyDueDay, currentMonth.daysInMonth());
-    
-    dueDate = currentMonth.clone().date(dueDay);
-    
-    // If due date has passed this month, next period starts now
-    if (now.isAfter(dueDate, 'day')) {
-      periodStart = dueDate.clone().add(1, 'day');
-      const nextMonth = now.clone().add(1, 'month').startOf('month');
-      const nextDueDay = Math.min(settings.monthlyDueDay, nextMonth.daysInMonth());
-      periodEnd = nextMonth.clone().date(nextDueDay);
-      dueDate = periodEnd.clone();
+    const dueDayInCurrentMonth = Math.min(settings.monthlyDueDay, now.clone().daysInMonth());
+    const dueDateForThisMonth = now.clone().date(dueDayInCurrentMonth);
+
+    if (now.isAfter(dueDateForThisMonth, 'day')) {
+      // The due date for this month has passed. We are in an overdue period.
+      dueDate = dueDateForThisMonth;
+      periodStart = dueDate.clone().subtract(1, 'month');
+      periodEnd = dueDate.clone();
     } else {
-      // Current period
-      periodStart = currentMonth.clone().date(dueDay).subtract(1, 'month').add(1, 'day');
+      // The due date for this month has not passed yet.
+      dueDate = dueDateForThisMonth;
+      periodStart = dueDate.clone().subtract(1, 'month');
       periodEnd = dueDate.clone();
     }
-  } else {
-    // Weekly billing
-    const startOfWeek = now.clone().startOf('isoWeek'); // Monday
-    dueDate = startOfWeek.clone().isoWeekday(settings.weeklyDueDay);
+  } else { // weekly
+    const weeklyDueDay = settings.weeklyDueDay;
+    const dueDateThisWeek = now.clone().isoWeekday(weeklyDueDay);
     
-    if (now.isAfter(dueDate, 'day')) {
-      // Next week's period
-      periodStart = dueDate.clone().add(1, 'day');
-      periodEnd = startOfWeek.clone().add(1, 'week').isoWeekday(settings.weeklyDueDay);
-      dueDate = periodEnd.clone();
+    if (now.isAfter(dueDateThisWeek, 'day')) {
+      // Due date for this week has passed.
+      dueDate = dueDateThisWeek;
+      periodStart = dueDate.clone().subtract(1, 'week');
+      periodEnd = dueDate.clone();
     } else {
-      // Current week's period
-      periodStart = startOfWeek.clone().subtract(1, 'week').isoWeekday(settings.weeklyDueDay).add(1, 'day');
+      // Due date for this week is upcoming.
+      dueDate = dueDateThisWeek;
+      periodStart = dueDate.clone().subtract(1, 'week');
       periodEnd = dueDate.clone();
     }
   }
+
+  const isOverdue = now.isAfter(dueDate, 'day');
   
   return { 
     periodStart: periodStart.startOf('day'), 
     periodEnd: periodEnd.endOf('day'), 
     dueDate: dueDate.endOf('day'),
-    isOverdue: now.isAfter(dueDate, 'day'),
-    daysUntilDue: dueDate.diff(now, 'days'),
-    daysOverdue: now.isAfter(dueDate, 'day') ? now.diff(dueDate, 'days') : 0
+    isOverdue: isOverdue,
+    daysUntilDue: isOverdue ? 0 : dueDate.diff(now, 'days'),
+    daysOverdue: isOverdue ? now.diff(dueDate, 'days') : 0
   };
 }
 
