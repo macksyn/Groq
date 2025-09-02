@@ -111,54 +111,48 @@ async function saveSettings(groupId) {
 }
 
 // =======================
-// 📅 IMPROVED BILLING LOGIC (Corrected)
+// 📅 IMPROVED BILLING LOGIC (Definitive Version)
 // =======================
 
 function calculateCurrentBillingPeriod(settings) {
   const now = moment();
-  let periodStart, periodEnd, dueDate;
+  let dueDate, periodStart;
 
   if (settings.paymentFrequency === 'monthly') {
-    const dueDayInCurrentMonth = Math.min(settings.monthlyDueDay, now.clone().daysInMonth());
-    const dueDateForThisMonth = now.clone().date(dueDayInCurrentMonth);
+    const dueDay = settings.monthlyDueDay;
 
-    if (now.isAfter(dueDateForThisMonth, 'day')) {
-      // The due date for this month has passed. We are in an overdue period.
-      dueDate = dueDateForThisMonth;
-      periodStart = dueDate.clone().subtract(1, 'month');
-      periodEnd = dueDate.clone();
-    } else {
-      // The due date for this month has not passed yet.
-      dueDate = dueDateForThisMonth;
-      periodStart = dueDate.clone().subtract(1, 'month');
-      periodEnd = dueDate.clone();
+    // The due date for the current cycle is the *next* upcoming instance of the due day.
+    dueDate = now.clone().date(dueDay);
+    if (now.date() >= dueDay) {
+      // If we are on or after the due day for this month (e.g., today is Sep 2nd, dueDay is 1st),
+      // then the relevant due date for the CURRENT ACTIVE cycle is next month.
+      dueDate.add(1, 'month');
     }
+    
+    // The start of the period is always one month before its due date.
+    periodStart = dueDate.clone().subtract(1, 'month');
+
   } else { // weekly
     const weeklyDueDay = settings.weeklyDueDay;
-    const dueDateThisWeek = now.clone().isoWeekday(weeklyDueDay);
-    
-    if (now.isAfter(dueDateThisWeek, 'day')) {
-      // Due date for this week has passed.
-      dueDate = dueDateThisWeek;
-      periodStart = dueDate.clone().subtract(1, 'week');
-      periodEnd = dueDate.clone();
-    } else {
-      // Due date for this week is upcoming.
-      dueDate = dueDateThisWeek;
-      periodStart = dueDate.clone().subtract(1, 'week');
-      periodEnd = dueDate.clone();
+    dueDate = now.clone().isoWeekday(weeklyDueDay);
+    if (now.isoWeekday() >= weeklyDueDay) {
+        dueDate.add(1, 'week');
     }
+    periodStart = dueDate.clone().subtract(1, 'week');
   }
 
-  const isOverdue = now.isAfter(dueDate, 'day');
+  // NOTE: For status checks, 'isOverdue' needs to refer to the PREVIOUS cycle's due date.
+  // The handleStatus function will now manage this logic.
+  const previousDueDate = periodStart.clone();
+  const isOverdue = now.isAfter(previousDueDate, 'day');
   
   return { 
-    periodStart: periodStart.startOf('day'), 
-    periodEnd: periodEnd.endOf('day'), 
-    dueDate: dueDate.endOf('day'),
+    periodStart: periodStart.startOf('day'), // Start of the active cycle
+    dueDate: dueDate.endOf('day'),           // Due date of the active cycle
+    previousDueDate: previousDueDate.endOf('day'), // The due date that just passed
     isOverdue: isOverdue,
-    daysUntilDue: isOverdue ? 0 : dueDate.diff(now, 'days'),
-    daysOverdue: isOverdue ? now.diff(dueDate, 'days') : 0
+    daysUntilDue: dueDate.diff(now, 'days'),
+    daysOverdue: isOverdue ? now.diff(previousDueDate, 'days') : 0
   };
 }
 
@@ -685,7 +679,17 @@ async function handleStatus(context) {
   }
   
   const billingInfo = calculateCurrentBillingPeriod(settings);
-  const hasPaid = await hasPaidCurrentPeriod(senderId, from, billingInfo);
+  let periodToCheck = billingInfo;
+
+  // If rent is overdue, we need to check the status of the PREVIOUS period.
+  if (billingInfo.isOverdue) {
+    periodToCheck = {
+        periodStart: billingInfo.periodStart.clone().subtract(1, 'month'),
+        dueDate: billingInfo.previousDueDate
+    };
+  }
+
+  const hasPaid = await hasPaidCurrentPeriod(senderId, from, periodToCheck);
   
   // Get economy wallet
   await initEconomyUser(senderId);
@@ -710,7 +714,7 @@ async function handleStatus(context) {
   
   const statusMsg = `📊 *YOUR RENT STATUS* 📊\n\n` +
                    `${statusEmoji} *Status:* ${statusText}\n` +
-                   `📅 *Period:* ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
+                   `📅 *Period:* ${periodToCheck.periodStart.format('MMM Do')} - ${periodToCheck.dueDate.format('MMM Do, YYYY')}\n` +
                    `💰 *Rent Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
                    `⏰ *${actionText}*\n\n` +
                    `💳 *WALLET BALANCES:*\n` +
