@@ -114,55 +114,101 @@ async function saveSettings(groupId) {
 // 📅 IMPROVED BILLING LOGIC (Corrected)
 // =======================
 
+// Fixed billing logic to handle grace period correctly
+// This replaces the calculateCurrentBillingPeriod function in your rental plugin
+
 function calculateCurrentBillingPeriod(settings) {
   const now = moment();
-  let periodStart, periodEnd, dueDate;
+  let periodStart, periodEnd, dueDate, isOverdue, daysUntilDue, daysOverdue;
 
   if (settings.paymentFrequency === 'monthly') {
     const dueDayInCurrentMonth = Math.min(settings.monthlyDueDay, now.clone().daysInMonth());
     const dueDateForThisMonth = now.clone().date(dueDayInCurrentMonth);
 
+    // Calculate grace period end
+    const gracePeriodEnd = dueDateForThisMonth.clone().add(settings.gracePeriodDays, 'days');
+
     if (now.isAfter(dueDateForThisMonth, 'day')) {
-      // The due date for this month has passed. We are in an overdue period.
-      dueDate = dueDateForThisMonth;
-      periodStart = dueDate.clone().subtract(1, 'month');
-      periodEnd = dueDate.clone();
+      // Past the due date - check if we're still in grace period
+      if (now.isSameOrBefore(gracePeriodEnd, 'day')) {
+        // WITHIN GRACE PERIOD - still consider this the current billing period
+        dueDate = dueDateForThisMonth;
+        periodStart = dueDate.clone().subtract(1, 'month').date(dueDayInCurrentMonth);
+        periodEnd = dueDate.clone();
+        isOverdue = true;
+        daysOverdue = now.diff(dueDateForThisMonth, 'days');
+        daysUntilDue = 0;
+      } else {
+        // PAST GRACE PERIOD - move to next billing cycle
+        const nextMonthDueDate = now.clone().add(1, 'month').date(Math.min(settings.monthlyDueDay, now.clone().add(1, 'month').daysInMonth()));
+        dueDate = nextMonthDueDate;
+        periodStart = dueDateForThisMonth;
+        periodEnd = nextMonthDueDate.clone();
+        isOverdue = false;
+        daysUntilDue = nextMonthDueDate.diff(now, 'days');
+        daysOverdue = 0;
+      }
     } else {
-      // The due date for this month has not passed yet.
+      // Before the due date for this month
       dueDate = dueDateForThisMonth;
-      periodStart = dueDate.clone().subtract(1, 'month');
+      periodStart = dueDate.clone().subtract(1, 'month').date(dueDayInCurrentMonth);
       periodEnd = dueDate.clone();
+      isOverdue = false;
+      daysUntilDue = dueDateForThisMonth.diff(now, 'days');
+      daysOverdue = 0;
     }
+
   } else { // weekly
     const weeklyDueDay = settings.weeklyDueDay;
     const dueDateThisWeek = now.clone().isoWeekday(weeklyDueDay);
     
+    // Calculate grace period end
+    const gracePeriodEnd = dueDateThisWeek.clone().add(settings.gracePeriodDays, 'days');
+    
     if (now.isAfter(dueDateThisWeek, 'day')) {
-      // Due date for this week has passed.
-      dueDate = dueDateThisWeek;
-      periodStart = dueDate.clone().subtract(1, 'week');
-      periodEnd = dueDate.clone();
+      // Past the due date - check if we're still in grace period
+      if (now.isSameOrBefore(gracePeriodEnd, 'day')) {
+        // WITHIN GRACE PERIOD - still consider this the current billing period
+        dueDate = dueDateThisWeek;
+        periodStart = dueDate.clone().subtract(1, 'week');
+        periodEnd = dueDate.clone();
+        isOverdue = true;
+        daysOverdue = now.diff(dueDateThisWeek, 'days');
+        daysUntilDue = 0;
+      } else {
+        // PAST GRACE PERIOD - move to next billing cycle
+        const nextWeekDueDate = now.clone().add(1, 'week').isoWeekday(weeklyDueDay);
+        dueDate = nextWeekDueDate;
+        periodStart = dueDateThisWeek;
+        periodEnd = nextWeekDueDate.clone();
+        isOverdue = false;
+        daysUntilDue = nextWeekDueDate.diff(now, 'days');
+        daysOverdue = 0;
+      }
     } else {
-      // Due date for this week is upcoming.
+      // Before the due date for this week
       dueDate = dueDateThisWeek;
       periodStart = dueDate.clone().subtract(1, 'week');
       periodEnd = dueDate.clone();
+      isOverdue = false;
+      daysUntilDue = dueDateThisWeek.diff(now, 'days');
+      daysOverdue = 0;
     }
   }
 
-  const isOverdue = now.isAfter(dueDate, 'day');
-  
   return { 
     periodStart: periodStart.startOf('day'), 
     periodEnd: periodEnd.endOf('day'), 
     dueDate: dueDate.endOf('day'),
     isOverdue: isOverdue,
-    daysUntilDue: isOverdue ? 0 : dueDate.diff(now, 'days'),
-    daysOverdue: isOverdue ? now.diff(dueDate, 'days') : 0
+    daysUntilDue: daysUntilDue,
+    daysOverdue: daysOverdue,
+    isInGracePeriod: isOverdue && daysOverdue <= settings.gracePeriodDays
   };
 }
 
-// Check if tenant has paid for current period
+// Enhanced function to check if tenant has paid for current period
+// This also needs to be updated to handle the grace period logic
 async function hasPaidCurrentPeriod(tenantId, groupId, billingInfo) {
   const payment = await db.collection(COLLECTIONS.PAYMENT_HISTORY).findOne({
     tenantId,
@@ -291,11 +337,10 @@ async function handleOverdueRent(sock, tenant, group, settings, billingInfo) {
   }
 }
 
+// Updated eviction check to properly handle grace period
 async function handleEvictionCheck(sock, tenant, group, settings, billingInfo) {
-  const gracePeriodEnd = billingInfo.dueDate.clone().add(settings.gracePeriodDays, 'days');
-  const today = moment();
-  
-  if (today.isAfter(gracePeriodEnd, 'day')) {
+  // Only evict if completely past grace period (not just overdue)
+  if (!billingInfo.isInGracePeriod && billingInfo.daysOverdue > settings.gracePeriodDays) {
     try {
       // Remove from group
       await sock.groupParticipantsUpdate(group.groupId, [tenant.tenantId], "remove");
@@ -313,7 +358,7 @@ async function handleEvictionCheck(sock, tenant, group, settings, billingInfo) {
         amount: 0,
         date: new Date(),
         method: 'eviction',
-        reason: `Evicted after ${billingInfo.daysOverdue} days overdue (grace period: ${settings.gracePeriodDays} days)`
+        reason: `Evicted after ${billingInfo.daysOverdue} days overdue (grace period: ${settings.gracePeriodDays} days expired)`
       });
       
       // Notify group
@@ -321,11 +366,12 @@ async function handleEvictionCheck(sock, tenant, group, settings, billingInfo) {
                          `@${tenant.tenantId.split('@')[0]} has been removed for non-payment.\n\n` +
                          `📅 Rent was due: ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
                          `⏰ Days overdue: ${billingInfo.daysOverdue}\n` +
+                         `🛡️ Grace period expired: ${settings.gracePeriodDays} days\n` +
                          `💰 Amount owed: ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}`;
       
       await sock.sendMessage(group.groupId, { text: evictionMsg, mentions: [tenant.tenantId] });
       
-      console.log(`🚪 Evicted ${tenant.tenantId.split('@')[0]} from group ${group.groupId}`);
+      console.log(`🚪 Evicted ${tenant.tenantId.split('@')[0]} from group ${group.groupId} after grace period`);
       return true;
     } catch (error) {
       console.error(`❌ Failed to evict ${tenant.tenantId}:`, error);
@@ -672,6 +718,7 @@ async function handleSetup(context) {
   }
 }
 
+// Enhanced status display that shows grace period information clearly
 async function handleStatus(context) {
   const { from, reply, senderId } = context;
   const settings = rentalSettings[from];
@@ -691,33 +738,41 @@ async function handleStatus(context) {
   await initEconomyUser(senderId);
   const economyData = await getUserEconomyData(senderId);
   
-  // FIX: Calculate payment status correctly considering grace period
+  // Enhanced status calculation with grace period awareness
   let statusEmoji, statusText, actionText = '';
   
   if (hasPaid) {
-    // FIXED: If paid, always show as PAID regardless of due date
     statusEmoji = '✅';
     statusText = 'PAID';
     actionText = 'You\'re all set for this period!';
   } else if (!billingInfo.isOverdue) {
-    // Rent not due yet
     statusEmoji = '⏳';
     statusText = 'PENDING';
     actionText = `Due in ${billingInfo.daysUntilDue} day(s)`;
   } else {
-    // FIXED: Check if still within grace period
-    const gracePeriodEnd = billingInfo.dueDate.clone().add(settings.gracePeriodDays, 'days');
-    const isWithinGracePeriod = moment().isBefore(gracePeriodEnd, 'day') || moment().isSame(gracePeriodEnd, 'day');
-    
-    if (isWithinGracePeriod) {
+    // Overdue - check if in grace period
+    if (billingInfo.isInGracePeriod) {
       statusEmoji = '⚠️';
       statusText = 'LATE (Grace Period)';
-      const daysLeftInGrace = Math.max(0, gracePeriodEnd.diff(moment(), 'days'));
-      actionText = `${billingInfo.daysOverdue} day(s) late | ${daysLeftInGrace} grace days left`;
+      const graceDaysLeft = Math.max(0, settings.gracePeriodDays - billingInfo.daysOverdue);
+      actionText = `${billingInfo.daysOverdue} day(s) late | ${graceDaysLeft} grace days remaining`;
     } else {
       statusEmoji = '🚨';
-      statusText = 'OVERDUE';
+      statusText = 'OVERDUE - EVICTION RISK';
       actionText = `${billingInfo.daysOverdue} day(s) late! Grace period ended.`;
+    }
+  }
+  
+  // Add grace period explanation if relevant
+  let gracePeriodInfo = '';
+  if (billingInfo.isOverdue && !hasPaid) {
+    const gracePeriodEnd = billingInfo.dueDate.clone().add(settings.gracePeriodDays, 'days');
+    gracePeriodInfo = `\n🛡️ *Grace Period:* Until ${gracePeriodEnd.format('MMM Do, YYYY')}`;
+    
+    if (billingInfo.isInGracePeriod) {
+      gracePeriodInfo += ` (${Math.max(0, settings.gracePeriodDays - billingInfo.daysOverdue)} days left)`;
+    } else {
+      gracePeriodInfo += ` (EXPIRED)`;
     }
   }
   
@@ -725,7 +780,7 @@ async function handleStatus(context) {
                    `${statusEmoji} *Status:* ${statusText}\n` +
                    `📅 *Period:* ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
                    `💰 *Rent Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
-                   `⏰ *${actionText}*\n\n` +
+                   `⏰ *${actionText}*${gracePeriodInfo}\n\n` +
                    `💳 *WALLET BALANCES:*\n` +
                    `🏦 Economy: ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
                    `🏠 Rent: ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n\n` +
