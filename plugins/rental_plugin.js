@@ -118,106 +118,134 @@ async function saveSettings(groupId) {
 // This replaces the calculateCurrentBillingPeriod function in your rental plugin
 
 function calculateCurrentBillingPeriod(settings) {
-  const now = moment();
+  // Use consistent timezone throughout
+  const now = moment.tz('Africa/Lagos');
   let periodStart, periodEnd, dueDate, isOverdue, daysUntilDue, daysOverdue;
 
   if (settings.paymentFrequency === 'monthly') {
-    const dueDayInCurrentMonth = Math.min(settings.monthlyDueDay, now.clone().daysInMonth());
-    const dueDateForThisMonth = now.clone().date(dueDayInCurrentMonth);
-
-    // Calculate grace period end
-    const gracePeriodEnd = dueDateForThisMonth.clone().add(settings.gracePeriodDays, 'days');
-
-    if (now.isAfter(dueDateForThisMonth, 'day')) {
-      // Past the due date - check if we're still in grace period
-      if (now.isSameOrBefore(gracePeriodEnd, 'day')) {
-        // WITHIN GRACE PERIOD - still consider this the current billing period
-        dueDate = dueDateForThisMonth;
-        periodStart = dueDate.clone().subtract(1, 'month').date(dueDayInCurrentMonth);
-        periodEnd = dueDate.clone();
-        isOverdue = true;
-        daysOverdue = now.diff(dueDateForThisMonth, 'days');
-        daysUntilDue = 0;
-      } else {
-        // PAST GRACE PERIOD - move to next billing cycle
-        const nextMonthDueDate = now.clone().add(1, 'month').date(Math.min(settings.monthlyDueDay, now.clone().add(1, 'month').daysInMonth()));
-        dueDate = nextMonthDueDate;
-        periodStart = dueDateForThisMonth;
-        periodEnd = nextMonthDueDate.clone();
-        isOverdue = false;
-        daysUntilDue = nextMonthDueDate.diff(now, 'days');
-        daysOverdue = 0;
-      }
-    } else {
-      // Before the due date for this month
-      dueDate = dueDateForThisMonth;
-      periodStart = dueDate.clone().subtract(1, 'month').date(dueDayInCurrentMonth);
-      periodEnd = dueDate.clone();
+    const currentMonth = now.clone().startOf('month');
+    const dueDayInCurrentMonth = Math.min(settings.monthlyDueDay, currentMonth.daysInMonth());
+    const currentMonthDueDate = currentMonth.clone().date(dueDayInCurrentMonth).endOf('day');
+    
+    // Calculate the grace period end date
+    const gracePeriodEnd = currentMonthDueDate.clone().add(settings.gracePeriodDays, 'days').endOf('day');
+    
+    if (now.isAfter(currentMonthDueDate) && now.isSameOrBefore(gracePeriodEnd)) {
+      // WITHIN GRACE PERIOD - This is the key fix!
+      // We're past due date but still in grace period
+      // Keep the SAME billing period (don't advance to next month)
+      dueDate = currentMonthDueDate;
+      periodStart = currentMonth.clone().subtract(1, 'month').date(dueDayInCurrentMonth).startOf('day');
+      periodEnd = currentMonthDueDate;
+      isOverdue = true;
+      daysOverdue = now.diff(currentMonthDueDate, 'days');
+      daysUntilDue = 0;
+    } else if (now.isAfter(gracePeriodEnd)) {
+      // PAST GRACE PERIOD - Move to next billing cycle
+      const nextMonth = now.clone().add(1, 'month').startOf('month');
+      const nextMonthDueDay = Math.min(settings.monthlyDueDay, nextMonth.daysInMonth());
+      const nextMonthDueDate = nextMonth.clone().date(nextMonthDueDay).endOf('day');
+      
+      dueDate = nextMonthDueDate;
+      periodStart = currentMonthDueDate.clone().add(1, 'day').startOf('day'); // Day after last due date
+      periodEnd = nextMonthDueDate;
       isOverdue = false;
-      daysUntilDue = dueDateForThisMonth.diff(now, 'days');
+      daysUntilDue = nextMonthDueDate.diff(now, 'days');
+      daysOverdue = 0;
+    } else {
+      // BEFORE DUE DATE - Normal case
+      dueDate = currentMonthDueDate;
+      periodStart = currentMonth.clone().subtract(1, 'month').date(dueDayInCurrentMonth).startOf('day');
+      periodEnd = currentMonthDueDate;
+      isOverdue = false;
+      daysUntilDue = currentMonthDueDate.diff(now, 'days');
       daysOverdue = 0;
     }
 
-  } else { // weekly
-    const weeklyDueDay = settings.weeklyDueDay;
-    const dueDateThisWeek = now.clone().isoWeekday(weeklyDueDay);
+  } else { // weekly - similar logic
+    const currentWeek = now.clone().startOf('isoWeek');
+    const dueDateThisWeek = currentWeek.clone().isoWeekday(settings.weeklyDueDay).endOf('day');
+    const gracePeriodEnd = dueDateThisWeek.clone().add(settings.gracePeriodDays, 'days').endOf('day');
     
-    // Calculate grace period end
-    const gracePeriodEnd = dueDateThisWeek.clone().add(settings.gracePeriodDays, 'days');
-    
-    if (now.isAfter(dueDateThisWeek, 'day')) {
-      // Past the due date - check if we're still in grace period
-      if (now.isSameOrBefore(gracePeriodEnd, 'day')) {
-        // WITHIN GRACE PERIOD - still consider this the current billing period
-        dueDate = dueDateThisWeek;
-        periodStart = dueDate.clone().subtract(1, 'week');
-        periodEnd = dueDate.clone();
-        isOverdue = true;
-        daysOverdue = now.diff(dueDateThisWeek, 'days');
-        daysUntilDue = 0;
-      } else {
-        // PAST GRACE PERIOD - move to next billing cycle
-        const nextWeekDueDate = now.clone().add(1, 'week').isoWeekday(weeklyDueDay);
-        dueDate = nextWeekDueDate;
-        periodStart = dueDateThisWeek;
-        periodEnd = nextWeekDueDate.clone();
-        isOverdue = false;
-        daysUntilDue = nextWeekDueDate.diff(now, 'days');
-        daysOverdue = 0;
-      }
-    } else {
-      // Before the due date for this week
+    if (now.isAfter(dueDateThisWeek) && now.isSameOrBefore(gracePeriodEnd)) {
+      // Within grace period
       dueDate = dueDateThisWeek;
-      periodStart = dueDate.clone().subtract(1, 'week');
-      periodEnd = dueDate.clone();
+      periodStart = dueDateThisWeek.clone().subtract(1, 'week').startOf('day');
+      periodEnd = dueDateThisWeek;
+      isOverdue = true;
+      daysOverdue = now.diff(dueDateThisWeek, 'days');
+      daysUntilDue = 0;
+    } else if (now.isAfter(gracePeriodEnd)) {
+      // Past grace period
+      const nextWeekDueDate = dueDateThisWeek.clone().add(1, 'week');
+      dueDate = nextWeekDueDate;
+      periodStart = dueDateThisWeek.clone().add(1, 'day').startOf('day');
+      periodEnd = nextWeekDueDate;
+      isOverdue = false;
+      daysUntilDue = nextWeekDueDate.diff(now, 'days');
+      daysOverdue = 0;
+    } else {
+      // Before due date
+      dueDate = dueDateThisWeek;
+      periodStart = dueDateThisWeek.clone().subtract(1, 'week').startOf('day');
+      periodEnd = dueDateThisWeek;
       isOverdue = false;
       daysUntilDue = dueDateThisWeek.diff(now, 'days');
       daysOverdue = 0;
     }
   }
 
+  const isInGracePeriod = isOverdue && daysOverdue <= settings.gracePeriodDays;
+
   return { 
-    periodStart: periodStart.startOf('day'), 
-    periodEnd: periodEnd.endOf('day'), 
-    dueDate: dueDate.endOf('day'),
+    periodStart: periodStart, 
+    periodEnd: periodEnd, 
+    dueDate: dueDate,
     isOverdue: isOverdue,
     daysUntilDue: daysUntilDue,
     daysOverdue: daysOverdue,
-    isInGracePeriod: isOverdue && daysOverdue <= settings.gracePeriodDays
+    isInGracePeriod: isInGracePeriod,
+    gracePeriodEnd: dueDate.clone().add(settings.gracePeriodDays, 'days').endOf('day')
   };
 }
 
-// Enhanced function to check if tenant has paid for current period
-// This also needs to be updated to handle the grace period logic
+// 2. FIXED PAYMENT CHECKING WITH TIMEZONE AWARENESS
 async function hasPaidCurrentPeriod(tenantId, groupId, billingInfo) {
+  console.log(`🔍 Checking payment for ${tenantId.split('@')[0]}`);
+  console.log(`📅 Period: ${billingInfo.periodStart.format('YYYY-MM-DD HH:mm')} to ${billingInfo.periodEnd.format('YYYY-MM-DD HH:mm')}`);
+  
+  // CRITICAL FIX: Convert moment dates to proper Date objects for MongoDB query
+  const startDate = billingInfo.periodStart.toDate();
+  const endDate = billingInfo.periodEnd.toDate();
+  
+  console.log(`🗄️ DB Query: ${startDate.toISOString()} to ${endDate.toISOString()}`);
+  
   const payment = await db.collection(COLLECTIONS.PAYMENT_HISTORY).findOne({
     tenantId,
     groupId,
     date: { 
-      $gte: billingInfo.periodStart.toDate(), 
-      $lte: billingInfo.periodEnd.toDate() 
+      $gte: startDate, 
+      $lte: endDate 
     }
   });
+  
+  if (payment) {
+    console.log(`✅ Found payment: ${payment.date.toISOString()} (${payment.method})`);
+  } else {
+    console.log(`❌ No payment found for period`);
+    
+    // DEBUG: Show what payments exist for this tenant
+    const allPayments = await db.collection(COLLECTIONS.PAYMENT_HISTORY)
+      .find({ tenantId, groupId })
+      .sort({ date: -1 })
+      .limit(5)
+      .toArray();
+    
+    console.log(`🔍 Recent payments for ${tenantId.split('@')[0]}:`);
+    allPayments.forEach(p => {
+      console.log(`   ${p.date.toISOString()} - ${p.amount} (${p.method})`);
+    });
+  }
   
   return !!payment;
 }
@@ -382,10 +410,16 @@ async function handleEvictionCheck(sock, tenant, group, settings, billingInfo) {
   return false;
 }
 
-// Process rent payment with proper tracking
+// 3. ENHANCED PAYMENT PROCESSING WITH PROPER DATE HANDLING
 async function processRentPayment(tenant, group, settings, billingInfo, method = 'manual') {
   const newBalance = tenant.wallet - settings.rentAmount;
-  const paymentDate = new Date();
+  
+  // CRITICAL FIX: Store payment date in the same timezone as billing calculations
+  const paymentDate = moment.tz('Africa/Lagos').toDate();
+  
+  console.log(`💳 Processing payment for ${tenant.tenantId.split('@')[0]}`);
+  console.log(`📅 Payment date: ${paymentDate.toISOString()}`);
+  console.log(`📊 Period: ${billingInfo.periodStart.format('YYYY-MM-DD')} to ${billingInfo.periodEnd.format('YYYY-MM-DD')}`);
   
   // Update tenant wallet and last payment
   await db.collection(COLLECTIONS.TENANTS).updateOne(
@@ -395,21 +429,31 @@ async function processRentPayment(tenant, group, settings, billingInfo, method =
         wallet: newBalance, 
         lastPaidDate: paymentDate,
         lastPaymentPeriod: billingInfo.periodStart.toISOString()
-      } 
+      },
+      $inc: {
+        totalPaid: settings.rentAmount,
+        paymentCount: 1
+      }
     }
   );
   
-  // Record payment history
-  await db.collection(COLLECTIONS.PAYMENT_HISTORY).insertOne({
+  // Record payment history with explicit period tracking
+  const paymentRecord = {
     tenantId: tenant.tenantId,
     groupId: group.groupId,
     amount: settings.rentAmount,
     date: paymentDate,
     method: method,
     periodStart: billingInfo.periodStart.toDate(),
-    periodEnd: billingInfo.dueDate.toDate(),
-    daysLate: billingInfo.daysOverdue || 0
-  });
+    periodEnd: billingInfo.periodEnd.toDate(),
+    dueDate: billingInfo.dueDate.toDate(),
+    daysLate: billingInfo.daysOverdue || 0,
+    paidInGracePeriod: billingInfo.isInGracePeriod || false
+  };
+  
+  await db.collection(COLLECTIONS.PAYMENT_HISTORY).insertOne(paymentRecord);
+  
+  console.log(`✅ Payment recorded successfully`);
   
   return { newBalance, paymentDate };
 }
@@ -718,7 +762,7 @@ async function handleSetup(context) {
   }
 }
 
-// Enhanced status display that shows grace period information clearly
+// 4. ENHANCED STATUS WITH DETAILED DEBUG INFO
 async function handleStatus(context) {
   const { from, reply, senderId } = context;
   const settings = rentalSettings[from];
@@ -738,8 +782,14 @@ async function handleStatus(context) {
   await initEconomyUser(senderId);
   const economyData = await getUserEconomyData(senderId);
   
-  // Enhanced status calculation with grace period awareness
+  // Enhanced status with debug info
   let statusEmoji, statusText, actionText = '';
+  let debugInfo = `\n\n🐛 *DEBUG INFO:*\n`;
+  debugInfo += `• Current Time: ${moment.tz('Africa/Lagos').format('YYYY-MM-DD HH:mm:ss')} WAT\n`;
+  debugInfo += `• Period: ${billingInfo.periodStart.format('MMM Do')} to ${billingInfo.periodEnd.format('MMM Do')}\n`;
+  debugInfo += `• Due: ${billingInfo.dueDate.format('MMM Do, YYYY')}\n`;
+  debugInfo += `• Grace End: ${billingInfo.gracePeriodEnd.format('MMM Do, YYYY')}\n`;
+  debugInfo += `• Payment Found: ${hasPaid ? 'YES' : 'NO'}\n`;
   
   if (hasPaid) {
     statusEmoji = '✅';
@@ -750,12 +800,11 @@ async function handleStatus(context) {
     statusText = 'PENDING';
     actionText = `Due in ${billingInfo.daysUntilDue} day(s)`;
   } else {
-    // Overdue - check if in grace period
     if (billingInfo.isInGracePeriod) {
       statusEmoji = '⚠️';
-      statusText = 'LATE (Grace Period)';
+      statusText = 'LATE (Grace Period Active)';
       const graceDaysLeft = Math.max(0, settings.gracePeriodDays - billingInfo.daysOverdue);
-      actionText = `${billingInfo.daysOverdue} day(s) late | ${graceDaysLeft} grace days remaining`;
+      actionText = `${billingInfo.daysOverdue} day(s) late | ${graceDaysLeft} grace days left`;
     } else {
       statusEmoji = '🚨';
       statusText = 'OVERDUE - EVICTION RISK';
@@ -763,31 +812,18 @@ async function handleStatus(context) {
     }
   }
   
-  // Add grace period explanation if relevant
-  let gracePeriodInfo = '';
-  if (billingInfo.isOverdue && !hasPaid) {
-    const gracePeriodEnd = billingInfo.dueDate.clone().add(settings.gracePeriodDays, 'days');
-    gracePeriodInfo = `\n🛡️ *Grace Period:* Until ${gracePeriodEnd.format('MMM Do, YYYY')}`;
-    
-    if (billingInfo.isInGracePeriod) {
-      gracePeriodInfo += ` (${Math.max(0, settings.gracePeriodDays - billingInfo.daysOverdue)} days left)`;
-    } else {
-      gracePeriodInfo += ` (EXPIRED)`;
-    }
-  }
-  
   const statusMsg = `📊 *YOUR RENT STATUS* 📊\n\n` +
                    `${statusEmoji} *Status:* ${statusText}\n` +
-                   `📅 *Period:* ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
+                   `📅 *Billing Period:* ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
                    `💰 *Rent Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
-                   `⏰ *${actionText}*${gracePeriodInfo}\n\n` +
+                   `⏰ *${actionText}*\n\n` +
                    `💳 *WALLET BALANCES:*\n` +
                    `🏦 Economy: ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
                    `🏠 Rent: ${settings.currencySymbol}${tenant.wallet.toLocaleString()}\n\n` +
                    `${!hasPaid && tenant.wallet < settings.rentAmount ? 
                      `⚠️ *Insufficient rent funds!*\n💡 Transfer: \`rent wallet transfer ${settings.rentAmount - tenant.wallet}\`` :
                      !hasPaid ? `✅ *Ready to pay!*\n💡 Pay now: \`rent pay\`` : 
-                     '🎉 *Thank you for your payment!*'}`;
+                     '🎉 *Thank you for your payment!*'}${debugInfo}`;
   
   await reply(statusMsg);
 }
