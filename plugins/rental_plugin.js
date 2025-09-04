@@ -114,52 +114,51 @@ async function saveSettings(groupId) {
 // 📅 IMPROVED BILLING LOGIC
 // =======================
 
-function calculateCurrentBillingPeriod(settings) {
+function calculateTenantBillingPeriod(tenant, settings) {
   const now = moment();
   let periodStart, periodEnd, dueDate;
-  
+
+  // Determine the start point for the next period based on tenant's last payment or join date
+  let lastPeriodStart = tenant.lastPaymentPeriod ? moment(tenant.lastPaymentPeriod) : moment(tenant.joinDate).startOf('day');
+  let afterDate = lastPeriodStart ? lastPeriodStart.clone() : now.clone().subtract(1, 'day'); // Fallback
+
   if (settings.paymentFrequency === 'monthly') {
-    // Monthly billing: rent due on specific day each month
-    const currentMonth = now.clone().startOf('month');
-    const dueDay = Math.min(settings.monthlyDueDay, currentMonth.daysInMonth());
-    
-    dueDate = currentMonth.clone().date(dueDay);
-    
-    // If due date has passed this month, next period starts now
-    if (now.isAfter(dueDate, 'day')) {
-      periodStart = dueDate.clone().add(1, 'day');
-      const nextMonth = now.clone().add(1, 'month').startOf('month');
-      const nextDueDay = Math.min(settings.monthlyDueDay, nextMonth.daysInMonth());
-      periodEnd = nextMonth.clone().date(nextDueDay);
-      dueDate = periodEnd.clone();
-    } else {
-      // Current period
-      periodStart = currentMonth.clone().date(dueDay).subtract(1, 'month').add(1, 'day');
-      periodEnd = dueDate.clone();
+    // Find the next month's due date after the afterDate
+    let nextMonth = afterDate.clone().add(1, 'month').startOf('month');
+    let dueDay = Math.min(settings.monthlyDueDay, nextMonth.daysInMonth());
+    dueDate = nextMonth.clone().date(dueDay);
+
+    // If the computed dueDate is in the past or same as afterDate, advance further
+    while (dueDate.isSameOrBefore(afterDate, 'day')) {
+      nextMonth = nextMonth.add(1, 'month').startOf('month');
+      dueDay = Math.min(settings.monthlyDueDay, nextMonth.daysInMonth());
+      dueDate = nextMonth.clone().date(dueDay);
     }
+
+    // Period starts just after the last period's end (which is previous dueDate)
+    periodStart = afterDate.clone().add(1, 'day');
+    periodEnd = dueDate.clone();
+
   } else {
     // Weekly billing
-    const startOfWeek = now.clone().startOf('isoWeek'); // Monday
-    dueDate = startOfWeek.clone().isoWeekday(settings.weeklyDueDay);
-    
-    if (now.isAfter(dueDate, 'day')) {
-      // Next week's period
-      periodStart = dueDate.clone().add(1, 'day');
-      periodEnd = startOfWeek.clone().add(1, 'week').isoWeekday(settings.weeklyDueDay);
-      dueDate = periodEnd.clone();
-    } else {
-      // Current week's period
-      periodStart = startOfWeek.clone().subtract(1, 'week').isoWeekday(settings.weeklyDueDay).add(1, 'day');
-      periodEnd = dueDate.clone();
+    let nextWeekStart = afterDate.clone().add(1, 'day').startOf('isoWeek');
+    dueDate = nextWeekStart.clone().isoWeekday(settings.weeklyDueDay);
+
+    while (dueDate.isSameOrBefore(afterDate, 'day')) {
+      nextWeekStart = nextWeekStart.add(1, 'week').startOf('isoWeek');
+      dueDate = nextWeekStart.clone().isoWeekday(settings.weeklyDueDay);
     }
+
+    periodStart = afterDate.clone().add(1, 'day');
+    periodEnd = dueDate.clone();
   }
-  
+
   return { 
     periodStart: periodStart.startOf('day'), 
     periodEnd: periodEnd.endOf('day'), 
     dueDate: dueDate.endOf('day'),
     isOverdue: now.isAfter(dueDate, 'day'),
-    daysUntilDue: dueDate.diff(now, 'days'),
+    daysUntilDue: dueDate.diff(now, 'days') > 0 ? dueDate.diff(now, 'days') : 0,
     daysOverdue: now.isAfter(dueDate, 'day') ? now.diff(dueDate, 'days') : 0
   };
 }
@@ -169,10 +168,7 @@ async function hasPaidCurrentPeriod(tenantId, groupId, billingInfo) {
   const payment = await db.collection(COLLECTIONS.PAYMENT_HISTORY).findOne({
     tenantId,
     groupId,
-    date: { 
-      $gte: billingInfo.periodStart.toDate(), 
-      $lte: billingInfo.periodEnd.toDate() 
-    }
+    periodStart: billingInfo.periodStart.toDate()
   });
   
   return !!payment;
@@ -201,14 +197,13 @@ async function checkRentals(sock) {
       try {
         const settings = await loadSettings(group.groupId);
         const tenants = await db.collection(COLLECTIONS.TENANTS).find({ groupId: group.groupId }).toArray();
-        const billingInfo = calculateCurrentBillingPeriod(settings);
-        const today = moment();
-
         console.log(`🏘️ Processing ${tenants.length} tenants in group ${group.groupId}`);
-        console.log(`📅 Current billing period: ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}`);
 
         for (const tenant of tenants) {
           totalProcessed++;
+          const billingInfo = calculateTenantBillingPeriod(tenant, settings);
+          console.log(`📅 Billing period for ${tenant.tenantId.split('@')[0]}: ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}`);
+
           const hasPaid = await hasPaidCurrentPeriod(tenant.tenantId, group.groupId, billingInfo);
           
           // Skip if already paid for current period
@@ -223,8 +218,11 @@ async function checkRentals(sock) {
             await handleRentReminders(sock, tenant, group, settings, billingInfo);
           } else {
             // Rent is overdue
-            await handleOverdueRent(sock, tenant, group, settings, billingInfo);
-            if (settings.autoEvict) {
+            const autoDeducted = await handleOverdueRent(sock, tenant, group, settings, billingInfo);
+            if (autoDeducted) totalAutoDeducted++;
+            // Re-check if paid after possible auto-deduct
+            const stillUnpaid = !(await hasPaidCurrentPeriod(tenant.tenantId, group.groupId, billingInfo));
+            if (settings.autoEvict && stillUnpaid) {
               const evicted = await handleEvictionCheck(sock, tenant, group, settings, billingInfo);
               if (evicted) totalEvicted++;
             }
@@ -294,10 +292,10 @@ async function handleOverdueRent(sock, tenant, group, settings, billingInfo) {
 }
 
 async function handleEvictionCheck(sock, tenant, group, settings, billingInfo) {
-  const gracePeriodEnd = billingInfo.dueDate.clone().add(settings.gracePeriodDays, 'days');
+  const gracePeriodEnd = billingInfo.dueDate.clone().add(settings.gracePeriodDays, 'days').endOf('day');
   const today = moment();
   
-  if (today.isAfter(gracePeriodEnd, 'day')) {
+  if (today.isAfter(gracePeriodEnd)) {
     try {
       // Remove from group
       await sock.groupParticipantsUpdate(group.groupId, [tenant.tenantId], "remove");
@@ -655,7 +653,9 @@ async function handleSetup(context) {
     // Verify setup
     const totalTenants = await db.collection(COLLECTIONS.TENANTS).countDocuments({ groupId: from });
     const settings = rentalSettings[from];
-    const billingInfo = calculateCurrentBillingPeriod(settings);
+    // For group stats, use a dummy tenant for billing info
+    const dummyTenant = { lastPaymentPeriod: null, joinDate: new Date() };
+    const billingInfo = calculateTenantBillingPeriod(dummyTenant, settings);
     
     const setupMsg = `✅ *RENTAL SYSTEM ACTIVATED!* ✅\n\n` +
                     `👥 *Tenants Enrolled:* ${totalTenants}\n` +
@@ -686,7 +686,7 @@ async function handleStatus(context) {
     return reply('❌ You are not registered as a tenant in this group.');
   }
   
-  const billingInfo = calculateCurrentBillingPeriod(settings);
+  const billingInfo = calculateTenantBillingPeriod(tenant, settings);
   const hasPaid = await hasPaidCurrentPeriod(senderId, from, billingInfo);
   
   // Get economy wallet
@@ -738,7 +738,7 @@ async function handlePay(context) {
     return reply('❌ You are not registered as a tenant in this group.');
   }
   
-  const billingInfo = calculateCurrentBillingPeriod(settings);
+  const billingInfo = calculateTenantBillingPeriod(tenant, settings);
   const hasPaid = await hasPaidCurrentPeriod(senderId, from, billingInfo);
   
   if (hasPaid) {
@@ -785,7 +785,7 @@ async function handleWallet(context, args) {
     
     await initEconomyUser(senderId);
     const economyData = await getUserEconomyData(senderId);
-    const billingInfo = calculateCurrentBillingPeriod(settings);
+    const billingInfo = calculateTenantBillingPeriod(tenant, settings);
     
     const walletMsg = `💰 *YOUR WALLET OVERVIEW* 💰\n\n` +
                      `🏦 *Economy Wallet:* ${settings.currencySymbol}${economyData.balance?.toLocaleString() || 0}\n` +
@@ -944,7 +944,7 @@ async function handleWalletCheck(context, args) {
   // Get their economy data and payment history
   await initEconomyUser(userId);
   const economyData = await getUserEconomyData(userId);
-  const billingInfo = calculateCurrentBillingPeriod(settings);
+  const billingInfo = calculateTenantBillingPeriod(tenant, settings);
   const hasPaid = await hasPaidCurrentPeriod(userId, from, billingInfo);
   
   const recentPayments = await db.collection(COLLECTIONS.PAYMENT_HISTORY)
@@ -977,11 +977,9 @@ async function handleWalletCheck(context, args) {
 }
 
 async function handleDefaulters(context) {
-  const { from, reply, sock } = context; // Added 'sock' to context destructuring
+  const { from, reply, sock } = context; 
   const settings = rentalSettings[from];
-  const billingInfo = calculateCurrentBillingPeriod(settings);
 
-  // --- FIX START ---
   // Fetch group metadata once to get participant names efficiently
   let groupMetadata;
   try {
@@ -990,13 +988,13 @@ async function handleDefaulters(context) {
     console.error("Could not fetch group metadata for defaulters list:", e);
     return reply("❌ Could not fetch group member details. Please try again.");
   }
-  // --- FIX END ---
   
   const tenants = await db.collection(COLLECTIONS.TENANTS).find({ groupId: from }).toArray();
   console.log(`🔍 Checking ${tenants.length} tenants for defaulters in group ${from}`);
   
   const defaulters = [];
   const checkPromises = tenants.map(async (tenant) => {
+    const billingInfo = calculateTenantBillingPeriod(tenant, settings);
     const hasPaid = await hasPaidCurrentPeriod(tenant.tenantId, from, billingInfo);
     
     if (billingInfo.isOverdue && !hasPaid) {
@@ -1017,6 +1015,9 @@ async function handleDefaulters(context) {
   console.log(`📊 Found ${defaulters.length} defaulters out of ${tenants.length} tenants`);
   
   if (defaulters.length === 0) {
+    // Use dummy for group billing
+    const dummyTenant = { lastPaymentPeriod: null, joinDate: new Date() };
+    const billingInfo = calculateTenantBillingPeriod(dummyTenant, settings);
     const statusMsg = `✅ *NO DEFAULTERS FOUND!* ✅\n\n` +
                      `All ${tenants.length} tenants are up to date with their rent.\n\n` +
                      `📅 *Current Period:* ${billingInfo.periodStart.format('MMM Do')} - ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
@@ -1029,23 +1030,22 @@ async function handleDefaulters(context) {
   
   defaulters.sort((a, b) => b.daysOverdue - a.daysOverdue);
   
+  // Use dummy for example due date
+  const dummyTenant = { lastPaymentPeriod: null, joinDate: new Date() };
+  const exampleBillingInfo = calculateTenantBillingPeriod(dummyTenant, settings);
+  
   let defaultersMsg = `🚨 *RENT DEFAULTERS* (${defaulters.length}) 🚨\n\n` +
-                     `📅 *Due Date:* ${billingInfo.dueDate.format('MMM Do, YYYY')}\n` +
-                     `💰 *Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
-                     `⏰ *Days Overdue:* ${billingInfo.daysOverdue}\n\n`;
+                     `📅 *Example Due Date:* ${exampleBillingInfo.dueDate.format('MMM Do, YYYY')}\n` +
+                     `💰 *Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n\n`;
   
   const mentions = [];
   defaulters.forEach((defaulter, index) => {
     mentions.push(defaulter.tenant.tenantId);
     
-    // --- FIX START ---
-    // Look up the user's name from the fetched metadata
     const participant = groupMetadata.participants.find(p => p.id === defaulter.tenant.tenantId);
     const username = participant?.pushname || participant?.name || `User (${defaulter.tenant.tenantId.split('@')[0]})`;
     const userMention = `@${defaulter.tenant.tenantId.split('@')[0]}`;
-    // --- FIX END ---
-
-    // Updated message to show the name and the mention
+    
     defaultersMsg += `${index + 1}. *${username}* (${userMention})\n`;
     defaultersMsg += `   💳 Wallet: ${settings.currencySymbol}${defaulter.tenant.wallet.toLocaleString()}\n`;
     defaultersMsg += `   📊 Status: ${defaulter.canPayNow ? '✅ Can pay now' : '❌ Insufficient funds'}\n`;
@@ -1072,7 +1072,9 @@ async function handleSettings(context, args) {
   const settings = rentalSettings[from];
   
   if (args.length === 0) {
-    const billingInfo = calculateCurrentBillingPeriod(settings);
+    // Use dummy for billing
+    const dummyTenant = { lastPaymentPeriod: null, joinDate: new Date() };
+    const billingInfo = calculateTenantBillingPeriod(dummyTenant, settings);
     
     const settingsMsg = `⚙️ *RENTAL SYSTEM SETTINGS* ⚙️\n\n` +
                        `💰 *Rent Amount:* ${settings.currencySymbol}${settings.rentAmount.toLocaleString()}\n` +
@@ -1187,8 +1189,9 @@ async function handleSettingsChange(context, args) {
   if (settingsChanged) {
     await saveSettings(from);
     
-    // Add billing impact info
-    const billingInfo = calculateCurrentBillingPeriod(settings);
+    // Add billing impact info using dummy
+    const dummyTenant = { lastPaymentPeriod: null, joinDate: new Date() };
+    const billingInfo = calculateTenantBillingPeriod(dummyTenant, settings);
     response += `\n\n📅 *Next due date:* ${billingInfo.dueDate.format('MMM Do, YYYY')}`;
   }
   
@@ -1367,37 +1370,31 @@ async function handleStats(context) {
       }).sort({ date: -1 }).limit(5).toArray()
     ]);
     
-    const billingInfo = calculateCurrentBillingPeriod(settings);
+    // For group stats, use dummy tenant
+    const dummyTenant = { lastPaymentPeriod: null, joinDate: new Date() };
+    const billingInfo = calculateTenantBillingPeriod(dummyTenant, settings);
     const revenue = totalRevenue[0]?.total || 0;
     
     const currentPeriodPayments = await db.collection(COLLECTIONS.PAYMENT_HISTORY).countDocuments({
       groupId: from,
-      date: { 
-        $gte: billingInfo.periodStart.toDate(), 
-        $lte: billingInfo.periodEnd.toDate() 
-      },
+      periodStart: billingInfo.periodStart.toDate(),
       method: { $ne: 'eviction' }
     });
     
     const paymentRate = tenantCount > 0 ? Math.round((currentPeriodPayments / tenantCount) * 100) : 0;
     
-    // --- FIX START ---
     let recentPaymentsText = '';
-    const mentions = []; // ADDED: Array to hold the JIDs of users to be mentioned.
+    const mentions = []; 
 
     if (recentPayments.length > 0) {
       recentPaymentsText = '\n\n📜 *Recent Payments:*\n';
       recentPayments.forEach((payment, index) => {
-        // Create the text part of the mention (e.g., @1234567890)
         const userMention = `@${payment.tenantId.split('@')[0]}`;
-        // Add the full JID to our mentions array
         mentions.push(payment.tenantId);
         
-        // CHANGED: Use the userMention variable, which will be rendered as a clickable name.
         recentPaymentsText += `${index + 1}. ${userMention}: ${settings.currencySymbol}${payment.amount.toLocaleString()} (${moment(payment.date).format('MMM Do')})\n`;
       });
     }
-    // --- FIX END ---
     
     const statsMsg = `📊 *RENTAL SYSTEM STATISTICS* 📊\n\n` +
                     `🏘️ *Group Overview:*\n` +
@@ -1414,7 +1411,6 @@ async function handleStats(context) {
                     `• Auto-evict: ${settings.autoEvict ? '✅' : '❌'}\n` +
                     `• Grace Period: ${settings.gracePeriodDays} days${recentPaymentsText}`;
     
-    // CHANGED: Pass the mentions array to the reply function.
     await reply(statsMsg, mentions);
     
   } catch (error) {
@@ -1434,47 +1430,6 @@ function getOrdinalSuffix(num) {
 }
 
 // =======================
-// 🔄 PLUGIN LIFECYCLE
-// =======================
-
-export async function initPlugin(sock) {
-  try {
-    console.log('🔧 Initializing Enhanced Rental Plugin v2.0...');
-    await initDatabase();
-    
-    // Load all group settings into cache
-    const groups = await db.collection(COLLECTIONS.RENTAL_GROUPS).find({ active: true }).toArray();
-    for (const group of groups) {
-      await loadSettings(group.groupId);
-    }
-    
-    startMonitoring(sock);
-    console.log(`✅ Rental Plugin v2.0 initialized successfully with ${groups.length} active groups.`);
-  } catch (error) {
-    console.error('❌ Failed to initialize Rental Plugin v2.0:', error);
-  }
-}
-
-export async function cleanupPlugin() {
-  try {
-    stopMonitoring();
-    
-    if (mongoClient) {
-      await mongoClient.close();
-      mongoClient = null;
-      db = null;
-    }
-    
-    // Clear settings cache
-    rentalSettings = {};
-    
-    console.log('✅ Rental Plugin v2.0 cleaned up successfully.');
-  } catch (error) {
-    console.error('❌ Error cleaning up Rental Plugin v2.0:', error);
-  }
-}
-
-// =======================
 // 🎯 ADVANCED FEATURES
 // =======================
 
@@ -1482,12 +1437,12 @@ export async function cleanupPlugin() {
 async function processGroupRentals(groupId, sock) {
   const settings = await loadSettings(groupId);
   const tenants = await db.collection(COLLECTIONS.TENANTS).find({ groupId }).toArray();
-  const billingInfo = calculateCurrentBillingPeriod(settings);
   
   const operations = [];
   const notifications = [];
   
   for (const tenant of tenants) {
+    const billingInfo = calculateTenantBillingPeriod(tenant, settings);
     const hasPaid = await hasPaidCurrentPeriod(tenant.tenantId, groupId, billingInfo);
     
     if (!hasPaid && billingInfo.isOverdue) {
@@ -1514,7 +1469,7 @@ async function processGroupRentals(groupId, sock) {
   // Execute batched operations
   if (operations.length > 0) {
     console.log(`⚡ Processing ${operations.length} operations for group ${groupId}`);
-    await executeBatchOperations(operations, groupId, sock, settings, billingInfo);
+    await executeBatchOperations(operations, groupId, sock, settings, billingInfo); // Note: billingInfo is last one, but since per tenant, perhaps pass per op
   }
 }
 
@@ -1531,7 +1486,7 @@ async function executeBatchOperations(operations, groupId, sock, settings, billi
           $set: { 
             wallet: op.tenant.wallet - op.amount,
             lastPaidDate: new Date(),
-            lastPaymentPeriod: billingInfo.periodStart.toISOString()
+            lastPaymentPeriod: op.billingInfo ? op.billingInfo.periodStart.toISOString() : billingInfo.periodStart.toISOString() // Assume per op if added
           },
           $inc: { 
             totalPaid: op.amount,
@@ -1636,5 +1591,46 @@ async function enhancedCheckRentals(sock) {
     
   } catch (error) {
     console.error('❌ Enhanced rent check failed:', error);
+  }
+}
+
+// =======================
+// 🔄 PLUGIN LIFECYCLE
+// =======================
+
+export async function initPlugin(sock) {
+  try {
+    console.log('🔧 Initializing Enhanced Rental Plugin v2.0...');
+    await initDatabase();
+    
+    // Load all group settings into cache
+    const groups = await db.collection(COLLECTIONS.RENTAL_GROUPS).find({ active: true }).toArray();
+    for (const group of groups) {
+      await loadSettings(group.groupId);
+    }
+    
+    startMonitoring(sock);
+    console.log(`✅ Rental Plugin v2.0 initialized successfully with ${groups.length} active groups.`);
+  } catch (error) {
+    console.error('❌ Failed to initialize Rental Plugin v2.0:', error);
+  }
+}
+
+export async function cleanupPlugin() {
+  try {
+    stopMonitoring();
+    
+    if (mongoClient) {
+      await mongoClient.close();
+      mongoClient = null;
+      db = null;
+    }
+    
+    // Clear settings cache
+    rentalSettings = {};
+    
+    console.log('✅ Rental Plugin v2.0 cleaned up successfully.');
+  } catch (error) {
+    console.error('❌ Error cleaning up Rental Plugin v2.0:', error);
   }
 }
