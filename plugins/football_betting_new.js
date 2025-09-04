@@ -1,747 +1,2575 @@
-/**
- * @name football-betting-interactive
- * @version 2.1.0
- * @description An interactive football betting simulation plugin for eWhatsapp-bot.
- * @author Macksyn
- *
- * v2.1.0: Converted to ES Module syntax (import/export) to support "type": "module" in package.json.
- * This major rewrite introduces a fully interactive UI using WhatsApp buttons and lists,
- * a more realistic minute-by-minute match simulation engine, dynamic team form,
- * performance optimizations like fixture caching and batch DB operations, and new features.
- */
+// plugins/Football_betting.js - ENHANCED VERSION with WhatsApp Interactive Buttons
 
-// --- ES Module Imports ---
-import {
-    getEconomy,
-    getPlugin,
-    isUser,
-    isGroup,
-    isOwner,
-} from '../lib/pluginIntegration.js'; // Note the '.js' extension is often needed in ESM
-import {
-    MessageType
-} from '@whiskeysockets/baileys';
-import {
-    ObjectId
-} from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
+import moment from 'moment-timezone';
 
-// --- Constants ---
-const COLLECTIONS = {
-    MATCHES: 'bet_matches',
-    TEAMS: 'bet_teams',
-    BETS: 'bet_slips',
-    USERS: 'users' // Assuming economy plugin uses this
-};
-const MIN_BET = 100;
-const MAX_BET = 10000;
-const MAX_SELECTIONS = 10;
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes for fixture cache
+// Use the central manager to interact with user data
+import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
-// --- In-Memory Cache ---
-const fixtureCache = {
-    leagues: null,
-    timestamp: 0,
+// Plugin information export
+export const info = {
+  name: 'Sports Betting System',
+  version: '3.0.0', // Updated version with Button UI
+  author: 'Alex Macksyn',
+  description: 'Complete sports betting simulation with interactive buttons for EPL, La Liga, Bundesliga, Serie A teams',
+  commands: [
+    { name: 'bet', aliases: ['sportbet', 'sportybet'], description: 'Access sports betting system with interactive buttons' },
+    { name: 'fixtures', aliases: ['matches', 'games'], description: 'View upcoming matches with betting buttons' },
+    { name: 'betslip', aliases: ['slip'], description: 'Manage your bet slip with interactive options' },
+    { name: 'mybets', aliases: ['bets'], description: 'View your active bets' },
+    { name: 'bethistory', aliases: ['betlog'], description: 'View betting history' },
+    { name: 'leagues', aliases: ['competitions'], description: 'View available leagues' },
+    { name: 'results', aliases: ['recent', 'scores'], description: 'View recent match results' }
+  ],
+  // New: Indicate this plugin supports interactive messages
+  supportsInteractive: true
 };
 
-// --- Main Plugin ---
-const plugin = {
-    name: 'football_betting',
-    description: 'An interactive football betting simulation game.',
-    isOwner: false,
-    isGroup: true,
-    isPrivate: false,
-    isBotAdmin: false,
-    isAdmin: false,
-    command: 'bet',
-    // We use a single entry point and handle sub-commands internally
-    execute: async (message, {
-        command,
-        args,
-        db
-    }) => {
-        const userId = message.sender;
-        const economy = getEconomy(userId);
-        const [subCommand, ...subArgs] = args;
+// MongoDB Configuration
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+const DATABASE_NAME = 'whatsapp_bot';
+const BET_COLLECTIONS = {
+  MATCHES: 'betting_matches',
+  BETS: 'betting_bets',
+  BETSLIPS: 'betting_betslips',
+};
 
-        // --- INTERACTIVE MESSAGE ROUTER ---
-        // Handles clicks on buttons and list items
-        if (message.isInteractive) {
-            const {
-                listResponse,
-                buttonResponse
-            } = message.interactive;
+// Local constant for currency display
+const CURRENCY_SYMBOL = '₦';
 
-            if (listResponse) {
-                const [action, league] = listResponse.selectedRowId.split(':');
-                if (action === 'show_league') {
-                    return handleShowMatchesForLeague(message, db, league);
-                }
+// Database connection
+let db = null;
+let mongoClient = null;
+
+// Initialize betting database
+async function initBettingDatabase() {
+  if (db) return db;
+  
+  try {
+    mongoClient = new MongoClient(MONGODB_URI);
+    await mongoClient.connect();
+    db = mongoClient.db(DATABASE_NAME);
+    
+    await db.collection(BET_COLLECTIONS.MATCHES).createIndex({ matchId: 1 }, { unique: true });
+    await db.collection(BET_COLLECTIONS.BETS).createIndex({ userId: 1, timestamp: -1 });
+    await db.collection(BET_COLLECTIONS.BETSLIPS).createIndex({ userId: 1 });
+    await db.collection(BET_COLLECTIONS.BETSLIPS).createIndex({ shareCode: 1 });
+    
+    console.log('✅ Sports Betting MongoDB connected successfully');
+    
+    startAutoSimulation();
+    
+    return db;
+  } catch (error) {
+    console.error('❌ Sports Betting MongoDB connection failed:', error);
+    throw error;
+  }
+}
+
+// Team data for the 2025/2026 season (same as before)
+const TEAMS = {
+  EPL: {
+    name: 'English Premier League',
+    teams: { 'Arsenal': { strength: 92, form: 90 }, 'Aston Villa': { strength: 80, form: 78 }, 'Bournemouth': { strength: 68, form: 65 }, 'Brentford': { strength: 70, form: 72 }, 'Brighton': { strength: 75, form: 78 }, 'Chelsea': { strength: 84, form: 80 }, 'Crystal Palace': { strength: 72, form: 70 }, 'Everton': { strength: 69, form: 66 }, 'Fulham': { strength: 71, form: 73 }, 'Ipswich Town': { strength: 62, form: 60 }, 'Leicester City': { strength: 73, form: 75 }, 'Liverpool': { strength: 91, form: 88 }, 'Manchester City': { strength: 96, form: 95 }, 'Manchester United': { strength: 85, form: 82 }, 'Newcastle United': { strength: 82, form: 80 }, 'Nottingham Forest': { strength: 67, form: 68 }, 'Southampton': { strength: 64, form: 62 }, 'Tottenham': { strength: 83, form: 81 }, 'West Ham': { strength: 78, form: 75 }, 'Wolves': { strength: 74, form: 72 } }
+  },
+  LALIGA: {
+    name: 'Spanish La Liga',
+    teams: { 'Real Madrid': { strength: 97, form: 95 }, 'Barcelona': { strength: 90, form: 88 }, 'Girona': { strength: 80, form: 82 }, 'Atletico Madrid': { strength: 88, form: 85 }, 'Athletic Bilbao': { strength: 82, form: 80 }, 'Real Sociedad': { strength: 81, form: 83 }, 'Real Betis': { strength: 79, form: 77 }, 'Villarreal': { strength: 78, form: 76 }, 'Valencia': { strength: 77, form: 75 }, 'Sevilla': { strength: 80, form: 78 } }
+  },
+  BUNDESLIGA: {
+    name: 'German Bundesliga',
+    teams: { 'Bayern Munich': { strength: 94, form: 92 }, 'Bayer Leverkusen': { strength: 91, form: 93 }, 'Borussia Dortmund': { strength: 88, form: 86 }, 'RB Leipzig': { strength: 87, form: 88 }, 'VfB Stuttgart': { strength: 84, form: 85 } }
+  },
+  SERIEA: {
+    name: 'Italian Serie A',
+    teams: { 'Inter Milan': { strength: 92, form: 90 }, 'AC Milan': { strength: 87, form: 85 }, 'Juventus': { strength: 86, form: 84 }, 'Atalanta': { strength: 83, form: 81 }, 'Napoli': { strength: 84, form: 82 } }
+  }
+};
+
+// Maps user-friendly aliases to internal bet type keys
+const betTypeAliases = {
+    'over1.5': 'OVER15', 'o1.5': 'OVER15', 'over15': 'OVER15',
+    'under1.5': 'UNDER15', 'u1.5': 'UNDER15', 'under15': 'UNDER15',
+    'over2.5': 'OVER25', 'o2.5': 'OVER25', 'over25': 'OVER25',
+    'under2.5': 'UNDER25', 'u2.5': 'UNDER25', 'under25': 'UNDER25',
+    'btts': 'BTTS_YES', 'gg': 'BTTS_YES', 'btts_yes': 'BTTS_YES',
+    'nobtts': 'BTTS_NO', 'ng': 'BTTS_NO', 'btts_no': 'BTTS_NO',
+    '1': 'HOME_WIN', 'hw': 'HOME_WIN', 'home': 'HOME_WIN', 'homewin': 'HOME_WIN',
+    'x': 'DRAW', 'd': 'DRAW',
+    '2': 'AWAY_WIN', 'aw': 'AWAY_WIN', 'away': 'AWAY_WIN', 'awaywin': 'AWAY_WIN'
+};
+
+// Helper function to display user-friendly bet type names
+function formatBetType(betTypeKey) {
+    switch (betTypeKey) {
+        case 'HOME_WIN': return 'Home Win (1)';
+        case 'AWAY_WIN': return 'Away Win (2)';
+        case 'DRAW': return 'Draw (X)';
+        case 'OVER15': return 'Over 1.5 Goals';
+        case 'UNDER15': return 'Under 1.5 Goals';
+        case 'OVER25': return 'Over 2.5 Goals';
+        case 'UNDER25': return 'Under 2.5 Goals';
+        case 'BTTS_YES': return 'GG (Both Teams To Score)';
+        case 'BTTS_NO': return 'NG (No Goal)';
+        default: return betTypeKey.replace('_', ' ');
+    }
+}
+
+// NEW: Interactive button helper functions
+function createButton(id, title, description = null) {
+    const button = { id, title };
+    if (description) button.description = description;
+    return button;
+}
+
+function createInteractiveMessage(text, buttons, header = null, footer = null) {
+    const message = {
+        text,
+        buttons: buttons.map((btn, index) => ({
+            type: "reply",
+            reply: {
+                id: btn.id,
+                title: btn.title.substring(0, 20) // WhatsApp button title limit
             }
+        }))
+    };
+    
+    // Add header and footer if provided
+    if (header) message.header = { type: "text", text: header };
+    if (footer) message.footer = { text: footer };
+    
+    return { interactive: { type: "button", ...message } };
+}
 
-            if (buttonResponse) {
-                const [action, ...params] = buttonResponse.selectedButtonId.split(':');
-                switch (action) {
-                    case 'add_bet':
-                        return handleAddSelectionToSlip(message, db, params[0], params[1]);
-                    case 'show_slip':
-                        return handleShowSlip(message, db, economy);
-                    case 'place_bet':
-                        return handlePlaceBet(message, db, economy, params[0]);
-                    case 'clear_slip':
-                        return handleClearSlip(message, db);
-                    case 'show_fixtures':
-                        return handleShowFixtures(message, db);
-                }
+function createListMessage(text, buttonText, sections, header = null, footer = null) {
+    const message = {
+        text,
+        button: buttonText,
+        sections
+    };
+    
+    if (header) message.header = { type: "text", text: header };
+    if (footer) message.footer = { text: footer };
+    
+    return { interactive: { type: "list", ...message } };
+}
+
+// NEW: Enhanced reply function that supports both buttons and text
+const createReplyFunction = (sock, from, m) => {
+    return async (content, options = {}) => {
+        try {
+            let messageContent;
+            
+            if (typeof content === 'string') {
+                // Simple text message
+                messageContent = { text: content };
+            } else if (content.interactive) {
+                // Interactive message with buttons or list
+                messageContent = content;
+            } else {
+                // Fallback to text
+                messageContent = { text: JSON.stringify(content) };
             }
+            
+            await sock.sendMessage(from, messageContent, { quoted: m });
+        } catch (error) {
+            console.error('❌ Error sending message:', error.message);
+            // Fallback to simple text if interactive fails
+            if (content.interactive) {
+                await sock.sendMessage(from, { text: content.interactive.text || 'Error displaying interactive message' }, { quoted: m });
+            }
+        }
+    };
+};
+
+// NEW: Handle interactive button responses
+async function handleInteractiveResponse(m, sock, config) {
+    const senderId = m.key.participant || m.key.remoteJid;
+    const from = m.key.remoteJid;
+    const reply = createReplyFunction(sock, from, m);
+    
+    let buttonId = null;
+    let selectedId = null;
+    
+    // Extract button ID from different message types
+    if (m.message?.buttonsResponseMessage) {
+        buttonId = m.message.buttonsResponseMessage.selectedButtonId;
+    } else if (m.message?.listResponseMessage) {
+        selectedId = m.message.listResponseMessage.singleSelectReply.selectedRowId;
+        buttonId = selectedId;
+    }
+    
+    if (!buttonId) return false;
+    
+    const context = { m, sock, config, senderId, from, reply };
+    
+    // Parse button ID format: ACTION_PARAM1_PARAM2
+    const parts = buttonId.split('_');
+    const action = parts[0];
+    
+    switch (action) {
+        case 'FIXTURES':
+            if (parts[1] === 'LEAGUE') {
+                await handleFixtures(context, [parts[2]]);
+            } else {
+                await handleFixtures(context, []);
+            }
+            break;
+            
+        case 'BET':
+            if (parts[1] === 'ADD') {
+                // Format: BET_ADD_MATCHID_BETTYPE
+                const matchId = parts[2];
+                const betType = parts[3];
+                await handleAddToBetSlip(context, [matchId, betType]);
+            }
+            break;
+            
+        case 'SLIP':
+            switch (parts[1]) {
+                case 'VIEW': await handleBetSlip(context, []); break;
+                case 'PLACE': await handlePlaceBet(context); break;
+                case 'CLEAR': await handleClearBetSlip(context); break;
+                case 'SHARE': await handleShareBetSlip(context); break;
+                case 'REMOVE': await handleRemoveFromBetSlip(context, [parts[2]]); break;
+                case 'STAKE': await showStakeSelector(context); break;
+            }
+            break;
+            
+        case 'STAKE':
+            // Format: STAKE_AMOUNT
+            if (parts[1]) {
+                await handleSetStake(context, [parts[1]]);
+            }
+            break;
+            
+        case 'MENU':
+            switch (parts[1]) {
+                case 'FIXTURES': await handleFixtures(context, []); break;
+                case 'LEAGUES': await handleLeagues(context); break;
+                case 'MYBETS': await handleMyBets(context); break;
+                case 'HISTORY': await handleBetHistory(context); break;
+                case 'RESULTS': await handleResults(context); break;
+                case 'BETSLIP': await handleBetSlip(context, []); break;
+            }
+            break;
+            
+        default:
+            return false; // Not handled
+    }
+    
+    return true; // Handled
+}
+
+// Keep all the existing functions (generateOdds, generateMatches, etc.) - they remain the same
+function generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm) {
+  const effectiveHomeStrength = (homeStrength * 0.8) + (homeForm * 0.2);
+  const effectiveAwayStrength = (awayStrength * 0.8) + (awayForm * 0.2);
+  const strengthDiff = effectiveHomeStrength - effectiveAwayStrength;
+  const homeAdvantage = 5;
+  const adjustedHomeStrength = effectiveHomeStrength + homeAdvantage;
+  const totalStrength = adjustedHomeStrength + effectiveAwayStrength;
+  const homeWinProb = (adjustedHomeStrength / totalStrength) * 0.6 + 0.2;
+  const awayWinProb = (effectiveAwayStrength / totalStrength) * 0.6 + 0.2;
+  const drawProb = 1 - homeWinProb - awayWinProb + 0.15;
+  const total = homeWinProb + drawProb + awayWinProb;
+  const normHome = homeWinProb / total;
+  const normDraw = drawProb / total;
+  const normAway = awayWinProb / total;
+  const margin = 0.1;
+  const odds = {
+    HOME_WIN: Math.max(1.1, (1 / normHome) * (1 - margin)),
+    DRAW: Math.max(2.5, (1 / normDraw) * (1 - margin)),
+    AWAY_WIN: Math.max(1.1, (1 / normAway) * (1 - margin)),
+    OVER15: Math.random() * 1.0 + 1.2,
+    UNDER15: Math.random() * 1.5 + 2.0,
+    OVER25: Math.random() * 1.5 + 1.4,
+    UNDER25: Math.random() * 1.2 + 1.8,
+    BTTS_YES: Math.random() * 1.0 + 1.6,
+    BTTS_NO: Math.random() * 1.0 + 1.4
+  };
+  Object.keys(odds).forEach(key => {
+    odds[key] = parseFloat(odds[key].toFixed(2));
+  });
+  return odds;
+}
+
+// Generate Match Function (same as before)
+async function generateMatches(db) {
+    const matches = [];
+    const leagues = Object.keys(TEAMS);
+    let matchId = 1;
+
+    const upcomingFixtures = await db.collection(BET_COLLECTIONS.MATCHES).find(
+        { status: 'upcoming' },
+        { projection: { homeTeam: 1, awayTeam: 1, _id: 0 } }
+    ).toArray();
+
+    const busyTeams = new Set();
+    upcomingFixtures.forEach(fixture => {
+        busyTeams.add(fixture.homeTeam);
+        busyTeams.add(fixture.awayTeam);
+    });
+
+    leagues.forEach(league => {
+        let availableTeams = Object.keys(TEAMS[league].teams).filter(team => !busyTeams.has(team));
+
+        for (let i = availableTeams.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [availableTeams[i], availableTeams[j]] = [availableTeams[j], availableTeams[i]];
+        }
+
+        const numMatches = league === 'EPL' ? 6 : 4;
+
+        for (let i = 0; i < numMatches * 2; i += 2) {
+            if (!availableTeams[i] || !availableTeams[i + 1]) break;
+
+            const homeTeam = availableTeams[i];
+            const awayTeam = availableTeams[i + 1];
+            const homeStrength = TEAMS[league].teams[homeTeam].strength;
+            const awayStrength = TEAMS[league].teams[awayTeam].strength;
+            const homeForm = TEAMS[league].teams[homeTeam].form;
+            const awayForm = TEAMS[league].teams[awayTeam].form;
+
+            const odds = generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm);
+            const matchTime = moment().add(Math.floor(Math.random() * 72) + 1, 'hours');
+
+            matches.push({
+                matchId: matchId++,
+                league: TEAMS[league].name,
+                leagueCode: league,
+                homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm,
+                odds, matchTime: matchTime.toDate(), status: 'upcoming', result: null
+            });
+        }
+    });
+    return matches;
+}
+
+// Keep existing initialization and utility functions...
+async function initializeMatches() {
+  try {
+    const existingMatches = await db.collection(BET_COLLECTIONS.MATCHES).countDocuments({ status: 'upcoming' });
+    if (existingMatches < 15) {
+      const newMatches = await generateMatches(db);
+
+      if (newMatches.length > 0) {
+        const lastMatch = await db.collection(BET_COLLECTIONS.MATCHES).findOne({}, { sort: { matchId: -1 } });
+        let nextMatchId = lastMatch ? lastMatch.matchId + 1 : 1;
+        newMatches.forEach(match => {
+          match.matchId = nextMatchId++;
+        });
+        await db.collection(BET_COLLECTIONS.MATCHES).insertMany(newMatches);
+        console.log(`✅ Generated ${newMatches.length} new matches`);
+      }
+    }
+  } catch (error) {
+    console.error('Error initializing matches:', error);
+  }
+}
+
+function updateTeamForms(match) {
+    try {
+        if (!match || !match.leagueCode || !match.homeTeam || !match.awayTeam) return;
+        const homeTeam = TEAMS[match.leagueCode].teams[match.homeTeam];
+        const awayTeam = TEAMS[match.leagueCode].teams[match.awayTeam];
+
+        if (match.result.result === 'HOME_WIN') {
+            homeTeam.form = Math.min(100, homeTeam.form + 5);
+            awayTeam.form = Math.max(0, awayTeam.form - 5);
+        } else if (match.result.result === 'AWAY_WIN') {
+            homeTeam.form = Math.max(0, homeTeam.form - 5);
+            awayTeam.form = Math.min(100, awayTeam.form + 5);
+        } else {
+            homeTeam.form = Math.max(0, homeTeam.form - 2);
+            awayTeam.form = Math.min(100, awayTeam.form + 2);
+        }
+    } catch (error) {
+        console.error(`Error updating form for match ${match.matchId}:`, error);
+    }
+}
+
+function simulateMatchResult(homeStrength, awayStrength, odds) {
+  const rand = Math.random();
+  const homeWinProb = 1 / odds.HOME_WIN;
+  const drawProb = 1 / odds.DRAW;
+  let result;
+  if (rand < homeWinProb) {
+    result = 'HOME_WIN';
+  } else if (rand < homeWinProb + drawProb) {
+    result = 'DRAW';
+  } else {
+    result = 'AWAY_WIN';
+  }
+  let homeGoals, awayGoals;
+  switch (result) {
+    case 'HOME_WIN': homeGoals = Math.floor(Math.random() * 3) + 1; awayGoals = Math.floor(Math.random() * homeGoals); break;
+    case 'AWAY_WIN': awayGoals = Math.floor(Math.random() * 3) + 1; homeGoals = Math.floor(Math.random() * awayGoals); break;
+    case 'DRAW': const drawScore = Math.floor(Math.random() * 4); homeGoals = awayGoals = drawScore; break;
+  }
+  const totalGoals = homeGoals + awayGoals;
+  return { result, homeGoals, awayGoals, totalGoals, over15: totalGoals > 1.5, over25: totalGoals > 2.5, btts: homeGoals > 0 && awayGoals > 0 };
+}
+
+function isAdmin(userId) {
+  const adminNumbers = process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : [];
+  return adminNumbers.includes(userId.split('@')[0]);
+}
+
+function isOwner(userId) {
+  const ownerNumber = process.env.OWNER_NUMBER || '';
+  return userId.split('@')[0] === ownerNumber;
+}
+
+// UPDATED: Main plugin handler with interactive support
+export default async function bettingHandler(m, sock, config) {
+  try {
+    if (!db) {
+      await initBettingDatabase();
+      await initializeMatches();
+    }
+
+    // Handle interactive button responses first
+    if (m.message?.buttonsResponseMessage || m.message?.listResponseMessage) {
+      const handled = await handleInteractiveResponse(m, sock, config);
+      if (handled) return; // Exit if interactive message was handled
+    }
+
+    // Handle traditional text commands
+    if (!m || !m.body || !m.body.startsWith(config.PREFIX)) return;
+    const messageBody = m.body.slice(config.PREFIX.length).trim();
+    if (!messageBody) return;
+    const args = messageBody.split(' ').filter(arg => arg.length > 0);
+    const command = args[0].toLowerCase();
+    
+    const commandInfo = info.commands.find(c => c.name === command || c.aliases.includes(command));
+    if (!commandInfo) return;
+
+    const senderId = m.key.participant || m.key.remoteJid;
+    const from = m.key.remoteJid;
+    if (!senderId || !from) return;
+
+    await unifiedUserManager.initUser(senderId);
+
+    const reply = createReplyFunction(sock, from, m);
+    const context = { m, sock, config, senderId, from, reply };
+
+    switch (command) {
+        case 'bet': case 'sportbet': case 'sportybet':
+            if (args.length === 1) { await showBettingMenuWithButtons(context); } 
+            else { await handleBetCommand(context, args.slice(1)); }
+            break;
+        case 'fixtures': case 'matches': case 'games': await handleFixtures(context, args.slice(1)); break;
+        case 'betslip': case 'slip': await handleBetSlip(context, args.slice(1)); break;
+        case 'mybets': case 'bets': await handleMyBets(context); break;
+        case 'bethistory': case 'betlog': await handleBetHistory(context); break;
+        case 'leagues': case 'competitions': await handleLeagues(context); break;
+        case 'results': case 'recent': case 'scores': await handleResults(context); break;
+    }
+  } catch (error) {
+    console.error('❌ Betting plugin error:', error.message);
+  }
+}
+
+// UPDATED: Show betting menu with interactive buttons
+async function showBettingMenuWithButtons(context) {
+    const { reply } = context;
+    
+    const menuText = `⚽ *SPORTY BET* ⚽\n\n🏆 *Leagues Available:*\n• 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League\n• 🇪🇸 La Liga\n• 🇩🇪 Bundesliga\n• 🇮🇹 Serie A\n\n💡 Choose an option below to get started!`;
+    
+    const buttons = [
+        createButton('MENU_FIXTURES', '⚽ View Fixtures'),
+        createButton('MENU_BETSLIP', '📋 My Bet Slip'),
+        createButton('MENU_MYBETS', '🎫 My Bets')
+    ];
+    
+    const message = createInteractiveMessage(
+        menuText,
+        buttons,
+        'SPORTY BET MENU',
+        'Choose an option to continue'
+    );
+    
+    await reply(message);
+}
+
+// UPDATED: Enhanced fixtures display with betting buttons
+async function handleFixtures(context, args) {
+    const { reply } = context;
+    try {
+        let league = null;
+        if (args.length > 0) {
+            const leagueInput = args[0].toLowerCase();
+            const leagueMap = {
+                'epl': 'EPL', 'premier': 'EPL', 'laliga': 'LALIGA', 'liga': 'LALIGA',
+                'bundesliga': 'BUNDESLIGA', 'german': 'BUNDESLIGA', 'seriea': 'SERIEA',
+                'serie': 'SERIEA', 'italian': 'SERIEA'
+            };
+            league = leagueMap[leagueInput];
+        }
+
+        // If no specific league, show league selector first
+        if (!league) {
+            const sections = [{
+                title: "Available Leagues",
+                rows: [
+                    { id: "FIXTURES_LEAGUE_EPL", title: "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League", description: "English Premier League fixtures" },
+                    { id: "FIXTURES_LEAGUE_LALIGA", title: "🇪🇸 La Liga", description: "Spanish La Liga fixtures" },
+                    { id: "FIXTURES_LEAGUE_BUNDESLIGA", title: "🇩🇪 Bundesliga", description: "German Bundesliga fixtures" },
+                    { id: "FIXTURES_LEAGUE_SERIEA", title: "🇮🇹 Serie A", description: "Italian Serie A fixtures" }
+                ]
+            }];
+
+            const message = createListMessage(
+                "⚽ *UPCOMING FIXTURES* ⚽\n\nSelect a league to view fixtures:",
+                "Select League",
+                sections,
+                "FIXTURE SELECTION"
+            );
+
+            await reply(message);
             return;
         }
 
+        const query = { leagueCode: league, status: 'upcoming' };
+        const matches = await db.collection(BET_COLLECTIONS.MATCHES).find(query).sort({ matchTime: 1 }).limit(5).toArray();
 
-        // --- TEXT COMMAND ROUTER ---
-        switch (command) {
-            case 'bet':
-                // The main '.bet' command now shows an interactive menu
-                return sendMainMenu(message);
-            case 'fixtures':
-                return handleShowFixtures(message, db);
-            case 'slip':
-                return handleShowSlip(message, db, economy);
-
-                // --- ADMIN COMMANDS ---
-            case 'addmatch':
-                if (!isOwner(userId)) return message.reply("🔒 This is an owner-only command.");
-                return handleAddMatch(message, db, subArgs);
-            case 'settlematch':
-                if (!isOwner(userId)) return message.reply("🔒 This is an owner-only command.");
-                return handleSimulateAndSettleMatch(message, db, subArgs[0]);
-            case 'cancelmatch':
-                if (!isOwner(userId)) return message.reply("🔒 This is an owner-only command.");
-                return handleCancelMatch(message, db, subArgs[0]);
-            case 'addteam':
-                if (!isOwner(userId)) return message.reply("🔒 This is an owner-only command.");
-                return handleAddTeam(message, db, subArgs);
-        }
-    }
-};
-
-// --- Use `export default` for ES Modules ---
-export default plugin;
-
-
-// --- UI & INTERACTIVE HANDLERS ---
-
-/**
- * Sends the main betting menu with interactive buttons.
- */
-async function sendMainMenu(message) {
-    const buttons = [{
-        buttonId: 'show_fixtures',
-        buttonText: {
-            displayText: '⚽ View Fixtures'
-        },
-        type: 1
-    }, {
-        buttonId: 'show_slip',
-        buttonText: {
-            displayText: '🧾 View Bet Slip'
-        },
-        type: 1
-    }, ];
-
-    const buttonMessage = {
-        text: "Welcome to the Football Betting Arena! 🏟️\n\nWhat would you like to do?",
-        footer: 'Select an option below',
-        buttons: buttons,
-        headerType: 1
-    };
-    await message.client.sendMessage(message.chat, buttonMessage);
-}
-
-
-/**
- * Fetches leagues and displays them in an interactive list.
- * Uses cache to improve performance.
- */
-async function handleShowFixtures(message, db) {
-    // Check cache first
-    if (Date.now() - fixtureCache.timestamp < CACHE_TTL && fixtureCache.leagues) {
-        return sendLeagueList(message, fixtureCache.leagues);
-    }
-
-    try {
-        const leagues = await db.collection(COLLECTIONS.MATCHES).distinct('league', {
-            status: 'upcoming'
-        });
-        if (!leagues || leagues.length === 0) {
-            return message.reply("There are no upcoming matches available to bet on right now.");
+        if (matches.length === 0) {
+            await reply('⚽ *No upcoming matches found for this league.*');
+            return;
         }
 
-        // Update cache
-        fixtureCache.leagues = leagues;
-        fixtureCache.timestamp = Date.now();
+        // Show first match with betting options
+        const match = matches[0];
+        const matchTime = moment(match.matchTime).tz('Africa/Lagos').format('DD/MM HH:mm');
+        
+        let fixturesText = `⚽ *${match.homeTeam} vs ${match.awayTeam}*\n\n`;
+        fixturesText += `🏆 ${match.league}\n`;
+        fixturesText += `📅 ${matchTime} WAT\n\n`;
+        fixturesText += `💰 *Odds:*\n`;
+        fixturesText += `Home: ${match.odds.HOME_WIN} | Draw: ${match.odds.DRAW} | Away: ${match.odds.AWAY_WIN}\n`;
+        fixturesText += `Over 2.5: ${match.odds.OVER25} | Under 2.5: ${match.odds.UNDER25}\n`;
+        fixturesText += `GG: ${match.odds.BTTS_YES} | NG: ${match.odds.BTTS_NO}\n\n`;
+        fixturesText += `🆔 Match ID: ${match.matchId}`;
 
-        return sendLeagueList(message, leagues);
+        // Create betting buttons for this match
+        const sections = [{
+            title: "Match Winner",
+            rows: [
+                { id: `BET_ADD_${match.matchId}_HOME_WIN`, title: `Home Win (${match.odds.HOME_WIN})`, description: `${match.homeTeam} to win` },
+                { id: `BET_ADD_${match.matchId}_DRAW`, title: `Draw (${match.odds.DRAW})`, description: `Match ends in a draw` },
+                { id: `BET_ADD_${match.matchId}_AWAY_WIN`, title: `Away Win (${match.odds.AWAY_WIN})`, description: `${match.awayTeam} to win` }
+            ]
+        }, {
+            title: "Goals & BTTS",
+            rows: [
+                { id: `BET_ADD_${match.matchId}_OVER25`, title: `Over 2.5 (${match.odds.OVER25})`, description: "3 or more goals" },
+                { id: `BET_ADD_${match.matchId}_UNDER25`, title: `Under 2.5 (${match.odds.UNDER25})`, description: "2 or fewer goals" },
+                { id: `BET_ADD_${match.matchId}_BTTS_YES`, title: `GG (${match.odds.BTTS_YES})`, description: "Both teams to score" },
+                { id: `BET_ADD_${match.matchId}_BTTS_NO`, title: `NG (${match.odds.BTTS_NO})`, description: "Not both teams to score" }
+            ]
+        }];
+
+        const message = createListMessage(
+            fixturesText,
+            "Place Bet",
+            sections,
+            "BETTING OPTIONS"
+        );
+
+        await reply(message);
     } catch (error) {
-        console.error("Error fetching leagues:", error);
-        return message.reply("An error occurred while fetching the match fixtures.");
+        await reply('❌ *Error loading fixtures. Please try again.*');
+        console.error('Fixtures error:', error);
     }
 }
 
-/**
- * Sends a WhatsApp list message with available leagues.
- */
-async function sendLeagueList(message, leagues) {
-    const sections = [{
-        title: "Available Leagues",
-        rows: leagues.map(league => ({
-            title: league,
-            rowId: `show_league:${league.replace(/ /g, '_')}`, // Use a unique ID for the selection
-            description: "View matches for this league"
-        }))
-    }];
-
-    const listMessage = {
-        text: "Please select a league to view fixtures.",
-        footer: "Powered by Groq Betting",
-        title: "🏆 Football Leagues",
-        buttonText: "View Leagues",
-        sections
-    };
-
-    await message.client.sendMessage(message.chat, listMessage);
-}
-
-/**
- * Displays matches for a selected league, each with betting buttons.
- */
-async function handleShowMatchesForLeague(message, db, league) {
-    const formattedLeague = league.replace(/_/g, ' ');
-    const matches = await db.collection(COLLECTIONS.MATCHES).find({
-        league: formattedLeague,
-        status: 'upcoming'
-    }).toArray();
-
-    if (matches.length === 0) {
-        return message.reply(`No upcoming matches found for ${formattedLeague}.`);
-    }
-
-    await message.reply(`*Upcoming Matches for ${formattedLeague}*`);
-
-    for (const match of matches) {
-        const odds = match.odds;
-        const matchText = `*${match.homeTeam} vs ${match.awayTeam}*\n` +
-            `🗓️ Date: ${new Date(match.date).toLocaleString('en-GB', { timeZone: 'Africa/Lagos' })}\n` +
-            `🆔 Match ID: ${match.matchId}`;
-
-        const buttons = [{
-            buttonId: `add_bet:${match.matchId}:1`,
-            buttonText: {
-                displayText: `1 (${odds['1']})`
-            },
-            type: 1
-        }, {
-            buttonId: `add_bet:${match.matchId}:X`,
-            buttonText: {
-                displayText: `X (${odds['X']})`
-            },
-            type: 1
-        }, {
-            buttonId: `add_bet:${match.matchId}:2`,
-            buttonText: {
-                displayText: `2 (${odds['2']})`
-            },
-            type: 1
-        }, ];
-
-        const buttonMessage = {
-            text: matchText,
-            footer: 'Select Home(1), Draw(X), or Away(2)',
-            buttons: buttons,
-            headerType: 1
-        };
-        await message.client.sendMessage(message.chat, buttonMessage);
-    }
-}
-
-/**
- * Shows the user's current bet slip with options to place or clear the bet.
- */
-async function handleShowSlip(message, db, economy) {
-    const userId = message.sender;
-    const user = await db.collection(COLLECTIONS.USERS).findOne({
-        id: userId
-    });
-    const betSlip = user?.betSlip || {
-        selections: []
-    };
-
-    if (betSlip.selections.length === 0) {
-        return message.reply("Your bet slip is empty. Click 'View Fixtures' to add selections.");
-    }
-
-    let slipText = "*--- Your Bet Slip ---*\n\n";
-    let totalOdds = 1;
-
-    for (const selection of betSlip.selections) {
-        slipText += `*${selection.homeTeam} vs ${selection.awayTeam}*\n` +
-            `  - Bet: ${selection.betType} @ ${selection.odds}\n\n`;
-        totalOdds *= selection.odds;
-    }
-
-    slipText += `*Total Selections:* ${betSlip.selections.length}\n`;
-    slipText += `*Total Odds:* ${totalOdds.toFixed(2)}\n\n`;
-    slipText += `Reply with the amount you want to stake (e.g., .bet 500) or use the buttons below.`;
-
-
-    const buttons = [{
-            buttonId: `place_bet:500`, // Example stake
-            buttonText: {
-                displayText: `Bet ${economy.currency}500`
-            },
-            type: 1
-        },
-        {
-            buttonId: `place_bet:1000`, // Example stake
-            buttonText: {
-                displayText: `Bet ${economy.currency}1000`
-            },
-            type: 1
-        }, {
-            buttonId: 'clear_slip',
-            buttonText: {
-                displayText: '🗑️ Clear Slip'
-            },
-            type: 1
-        },
-    ];
-
-    const buttonMessage = {
-        text: slipText,
-        footer: 'Minimum bet: 100, Maximum: 10000',
-        buttons: buttons,
-        headerType: 1
-    };
-
-    await message.client.sendMessage(message.chat, buttonMessage);
-}
-
-
-// --- CORE BETTING LOGIC ---
-
-/**
- * Adds a user's selection to their bet slip in the database.
- */
-async function handleAddSelectionToSlip(message, db, matchId, betType) {
-    const userId = message.sender;
-    const match = await db.collection(COLLECTIONS.MATCHES).findOne({
-        matchId,
-        status: 'upcoming'
-    });
-
-    if (!match) {
-        return message.reply("This match is no longer available for betting.");
-    }
-
-    const user = await db.collection(COLLECTIONS.USERS).findOne({
-        id: userId
-    });
-    const betSlip = user?.betSlip || {
-        selections: []
-    };
-
-    if (betSlip.selections.length >= MAX_SELECTIONS) {
-        return message.reply(`You cannot have more than ${MAX_SELECTIONS} selections in your slip.`);
-    }
-    if (betSlip.selections.some(s => s.matchId === matchId)) {
-        return message.reply("You have already made a selection for this match.");
-    }
-
-    const selection = {
-        matchId: match.matchId,
-        homeTeam: match.homeTeam,
-        awayTeam: match.awayTeam,
-        betType: betType,
-        odds: match.odds[betType],
-        status: 'pending'
-    };
-
-    await db.collection(COLLECTIONS.USERS).updateOne({
-        id: userId
-    }, {
-        $push: {
-            'betSlip.selections': selection
-        }
-    }, {
-        upsert: true
-    });
-
-    await message.reply(`✅ Added *${betType}* for *${match.homeTeam} vs ${match.awayTeam}* to your slip!`);
-    // Optionally, show the updated slip right away
-    const economy = getEconomy(userId);
-    return handleShowSlip(message, db, economy);
-}
-
-
-/**
- * Places a bet using the user's current bet slip.
- * Uses batch DB operations for efficiency.
- */
-async function handlePlaceBet(message, db, economy, stakeStr) {
-    const userId = message.sender;
-    const stake = parseInt(stakeStr, 10);
-
-    if (isNaN(stake) || stake < MIN_BET || stake > MAX_BET) {
-        return message.reply(`Invalid stake amount. Please enter a value between ${MIN_BET} and ${MAX_BET}.`);
-    }
-
-    const user = await db.collection(COLLECTIONS.USERS).findOne({
-        id: userId
-    });
-    const betSlip = user?.betSlip;
-
-    if (!betSlip || betSlip.selections.length === 0) {
-        return message.reply("Your bet slip is empty.");
-    }
-    if (!(await economy.has(stake))) {
-        return message.reply(`You do not have enough money. You need ${economy.currency}${stake}.`);
-    }
-
-    // --- Efficiently validate all matches at once ---
-    const matchIds = betSlip.selections.map(s => s.matchId);
-    const availableMatchesCount = await db.collection(COLLECTIONS.MATCHES).countDocuments({
-        matchId: {
-            $in: matchIds
-        },
-        status: 'upcoming'
-    });
-
-    if (availableMatchesCount !== matchIds.length) {
-        await handleClearSlip(message, db); // Clear the invalid slip
-        return message.reply("One or more matches in your slip have started or been cancelled. Your slip has been cleared.");
-    }
-
-    await economy.deduct(stake);
-
-    const totalOdds = betSlip.selections.reduce((acc, s) => acc * s.odds, 1);
-    const potentialWinnings = stake * totalOdds;
-
-    const finalBet = {
-        _id: new ObjectId(),
-        ...betSlip,
-        userId,
-        stake,
-        totalOdds: totalOdds.toFixed(2),
-        potentialWinnings: potentialWinnings.toFixed(2),
-        status: 'active',
-        placedAt: new Date()
-    };
-
-    await db.collection(COLLECTIONS.BETS).insertOne(finalBet);
-    await db.collection(COLLECTIONS.USERS).updateOne({
-        id: userId
-    }, {
-        $set: {
-            betSlip: {
-                selections: []
+// UPDATED: Enhanced bet slip with interactive buttons
+async function handleBetSlip(context, args) {
+    const { reply, senderId } = context;
+    try {
+        if (!args || args.length === 0) {
+            const betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
+            if (!betSlip || betSlip.selections.length === 0) {
+                const buttons = [
+                    createButton('MENU_FIXTURES', '⚽ View Fixtures'),
+                    createButton('MENU_LEAGUES', '🏆 Leagues'),
+                    createButton('SLIP_SHARE', '🎟️ Load Slip')
+                ];
+                
+                const message = createInteractiveMessage(
+                    '📋 *Your bet slip is empty*\n\n💡 Start by viewing fixtures to add selections!',
+                    buttons,
+                    'EMPTY BET SLIP'
+                );
+                
+                await reply(message);
+                return;
             }
-        }
-    });
 
-    return message.reply(
-        `✅ Bet Placed Successfully!\n\n` +
-        `*Stake:* ${economy.currency}${stake}\n` +
-        `*Total Odds:* ${totalOdds.toFixed(2)}\n` +
-        `*Potential Winnings:* ${economy.currency}${potentialWinnings.toFixed(2)}`
-    );
-}
-
-
-/**
- * Clears all selections from the user's bet slip.
- */
-async function handleClearSlip(message, db) {
-    const userId = message.sender;
-    await db.collection(COLLECTIONS.USERS).updateOne({
-        id: userId
-    }, {
-        $set: {
-            betSlip: {
-                selections: []
-            }
-        }
-    });
-    return message.reply("Your bet slip has been cleared.");
-}
-
-// --- SIMULATION & SETTLEMENT ---
-
-/**
- * Simulates a match and settles all bets related to it.
- */
-async function handleSimulateAndSettleMatch(message, db, matchId) {
-    const match = await db.collection(COLLECTIONS.MATCHES).findOne({
-        matchId
-    });
-    if (!match) return message.reply("Match not found.");
-    if (match.status !== 'upcoming') return message.reply("This match is not available for settlement.");
-
-    await message.reply(`*Simulating ${match.homeTeam} vs ${match.awayTeam}...* ⏳`);
-
-    const homeTeam = await db.collection(COLLECTIONS.TEAMS).findOne({
-        name: match.homeTeam
-    });
-    const awayTeam = await db.collection(COLLECTIONS.TEAMS).findOne({
-        name: match.awayTeam
-    });
-
-    if (!homeTeam || !awayTeam) {
-        return message.reply("One or both teams could not be found for simulation.");
-    }
-
-    // The new, more realistic simulation
-    const result = simulateMatchMinuteByMinute(homeTeam, awayTeam);
-
-    await db.collection(COLLECTIONS.MATCHES).updateOne({
-        matchId
-    }, {
-        $set: {
-            status: 'finished',
-            result
-        }
-    });
-
-    // Update team forms based on result
-    await updateTeamForms(db, homeTeam, awayTeam, result);
-
-    await message.reply(
-        `*Match Result:*\n` +
-        `${match.homeTeam} ${result.homeScore} - ${result.awayScore} ${match.awayTeam}`
-    );
-
-    await settleBetsForMatch(message, db, matchId, result);
-}
-
-
-/**
- * Minute-by-minute match simulation for more realistic outcomes.
- */
-function simulateMatchMinuteByMinute(homeTeam, awayTeam) {
-    let homeScore = 0;
-    let awayScore = 0;
-    const HOME_ADVANTAGE = 0.002; // Small constant advantage for the home team
-
-    // Base probability of a goal per minute, adjusted by team strength
-    const baseHomeGoalProb = (homeTeam.strength / 100) * 0.015;
-    const baseAwayGoalProb = (awayTeam.strength / 100) * 0.015;
-
-    for (let minute = 1; minute <= 90; minute++) {
-        // Adjust probability with form (form is a value e.g., -5 to +5)
-        const homeProb = baseHomeGoalProb + (homeTeam.form / 1000) + HOME_ADVANTAGE;
-        const awayProb = baseAwayGoalProb + (awayTeam.form / 1000);
-
-        if (Math.random() < homeProb) {
-            homeScore++;
-        }
-        if (Math.random() < awayProb) {
-            awayScore++;
-        }
-    }
-
-    return {
-        homeScore,
-        awayScore
-    };
-}
-
-/**
- * Updates team form based on the last match result.
- * Form is a rolling average of the last 5 results (Win=3, Draw=1, Loss=0).
- */
-async function updateTeamForms(db, homeTeam, awayTeam, result) {
-    let homeResultPoints = result.homeScore > result.awayScore ? 3 : result.homeScore === result.awayScore ? 1 : 0;
-    let awayResultPoints = result.awayScore > result.homeScore ? 3 : result.awayScore === result.homeScore ? 1 : 0;
-
-    // Ensure formHistory is an array
-    const homeFormHistory = homeTeam.formHistory || [];
-    const awayFormHistory = awayTeam.formHistory || [];
-
-
-    // Add new result and keep only the last 5
-    homeFormHistory.push(homeResultPoints);
-    if (homeFormHistory.length > 5) homeFormHistory.shift();
-
-    awayFormHistory.push(awayResultPoints);
-    if (awayFormHistory.length > 5) awayFormHistory.shift();
-
-    // The new form is the sum of the history
-    const newHomeForm = homeFormHistory.reduce((a, b) => a + b, 0);
-    const newAwayForm = awayFormHistory.reduce((a, b) => a + b, 0);
-
-    await db.collection(COLLECTIONS.TEAMS).updateOne({
-        _id: homeTeam._id
-    }, {
-        $set: {
-            form: newHomeForm,
-            formHistory: homeFormHistory
-        }
-    });
-    await db.collection(COLLECTIONS.TEAMS).updateOne({
-        _id: awayTeam._id
-    }, {
-        $set: {
-            form: newAwayForm,
-            formHistory: awayFormHistory
-        }
-    });
-}
-
-
-/**
- * Settles all active bets containing the finished match.
- */
-async function settleBetsForMatch(message, db, matchId, result) {
-    const betsToUpdate = await db.collection(COLLECTIONS.BETS).find({
-        status: 'active',
-        'selections.matchId': matchId
-    }).toArray();
-
-    let settledCount = 0;
-
-    for (const bet of betsToUpdate) {
-        let allSelectionsFinished = true;
-        let betLost = false;
-
-        for (const selection of bet.selections) {
-            if (selection.matchId === matchId) {
-                const outcome = getOutcome(result);
-                selection.status = (selection.betType === outcome) ? 'won' : 'lost';
-                if (selection.status === 'lost') {
-                    betLost = true;
+            let slipText = `📋 *YOUR BET SLIP* 📋\n\n`;
+            let totalOdds = 1;
+            
+            for (let i = 0; i < betSlip.selections.length; i++) {
+                const selection = betSlip.selections[i];
+                const match = await db.collection(BET_COLLECTIONS.MATCHES).findOne({ matchId: selection.matchId });
+                if (match) {
+                    slipText += `*${i + 1}.* ${match.homeTeam} vs ${match.awayTeam}\n`;
+                    slipText += `🎯 ${formatBetType(selection.betType)} @ ${selection.odds}\n\n`;
+                    totalOdds *= selection.odds;
                 }
             }
+            
+            slipText += `💰 *Total Odds:* ${totalOdds.toFixed(2)}\n`;
+            slipText += `💵 *Stake:* ${CURRENCY_SYMBOL}${betSlip.stake || 0}\n`;
+            slipText += `🏆 *Potential Win:* ${CURRENCY_SYMBOL}${((betSlip.stake || 0) * totalOdds).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
-            if (selection.status === 'pending') {
-                allSelectionsFinished = false;
+            const buttons = [];
+            
+            if (!betSlip.stake || betSlip.stake === 0) {
+                buttons.push(createButton('SLIP_STAKE', '💰 Set Stake'));
+            } else {
+                buttons.push(createButton('SLIP_PLACE', '✅ Place Bet'));
+            }
+            
+            buttons.push(createButton('SLIP_CLEAR', '🗑️ Clear All'));
+            buttons.push(createButton('SLIP_SHARE', '🎟️ Share'));
+
+            const message = createInteractiveMessage(slipText, buttons, 'YOUR BET SLIP');
+            await reply(message);
+            return;
+        }
+
+        const action = args[0].toLowerCase();
+        switch (action) {
+            case 'add': await handleAddToBetSlip(context, args.slice(1)); break;
+            case 'remove': await handleRemoveFromBetSlip(context, args.slice(1)); break;
+            case 'stake': await handleSetStake(context, args.slice(1)); break;
+            case 'place': await handlePlaceBet(context); break;
+            case 'clear': await handleClearBetSlip(context); break;
+            case 'share': await handleShareBetSlip(context); break;
+            case 'load': await handleLoadBetSlip(context, args.slice(1)); break;
+            default: await reply(`❓ *Unknown bet slip command*\n\n📋 *Available:* add, remove, stake, place, clear, share, load`);
+        }
+    } catch (error) {
+        await reply('❌ *Error managing bet slip. Please try again.*');
+        console.error('Bet slip error:', error);
+    }
+}
+
+// NEW: Interactive stake selector
+async function showStakeSelector(context) {
+    const { reply } = context;
+    
+    const stakeText = `💰 *SET YOUR STAKE*\n\nChoose a stake amount for your bet:`;
+    
+    const sections = [{
+        title: "Quick Stakes",
+        rows: [
+            { id: "STAKE_100", title: "₦100", description: "Minimum bet" },
+            { id: "STAKE_500", title: "₦500", description: "Popular choice" },
+            { id: "STAKE_1000", title: "₦1,000", description: "Standard bet" },
+            { id: "STAKE_2000", title: "₦2,000", description: "Higher stake" },
+            { id: "STAKE_5000", title: "₦5,000", description: "Premium bet" }
+        ]
+    }];
+
+    const message = createListMessage(
+        stakeText,
+        "Select Stake",
+        sections,
+        "STAKE SELECTION"
+    );
+
+    await reply(message);
+}
+
+// UPDATED: Add to bet slip with success buttons
+async function handleAddToBetSlip(context, args) {
+    const { reply, senderId } = context;
+    try {
+        if (args.length < 2) {
+            await reply(`⚠️ *Invalid bet selection. Please try again.*`);
+            return;
+        }
+        
+        const matchId = parseInt(args[0]);
+        const userInputBetType = args[1].toLowerCase();
+        const betType = betTypeAliases[userInputBetType] || userInputBetType.toUpperCase();
+
+        if (isNaN(matchId)) {
+            await reply('⚠️ *Please provide a valid match ID*');
+            return;
+        }
+        
+        const validBetTypes = Object.values(betTypeAliases);
+        if (!validBetTypes.includes(betType)) {
+            await reply(`⚠️ *Invalid bet type*`);
+            return;
+        }
+        
+        const match = await db.collection(BET_COLLECTIONS.MATCHES).findOne({ matchId, status: 'upcoming' });
+        if (!match) {
+            await reply('❌ *Match not found or has already started*');
+            return;
+        }
+        
+        const odds = match.odds[betType];
+        if (!odds) {
+            await reply('❌ *Odds not available for this bet type*');
+            return;
+        }
+        
+        let betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
+        if (!betSlip) {
+            betSlip = { userId: senderId, selections: [], stake: 0, createdAt: new Date() };
+        }
+        
+        const existingIndex = betSlip.selections.findIndex(s => s.matchId === matchId);
+        const newSelection = { matchId, betType, odds, homeTeam: match.homeTeam, awayTeam: match.awayTeam, addedAt: new Date() };
+        
+        if (existingIndex !== -1) {
+            betSlip.selections[existingIndex] = newSelection;
+        } else {
+            betSlip.selections.push(newSelection);
+        }
+        
+        if (betSlip.selections.length > 10) {
+            await reply('⚠️ *Maximum 10 selections allowed in a bet slip*');
+            return;
+        }
+        
+        await db.collection(BET_COLLECTIONS.BETSLIPS).replaceOne({ userId: senderId }, betSlip, { upsert: true });
+        
+        const successText = `✅ *Added to bet slip*\n\n⚽ ${match.homeTeam} vs ${match.awayTeam}\n🎯 ${formatBetType(betType)} @ ${odds}\n\n📋 *Selections:* ${betSlip.selections.length}/10`;
+        
+        const buttons = [
+            createButton('SLIP_VIEW', '📋 View Slip'),
+            createButton('MENU_FIXTURES', '⚽ More Bets'),
+            createButton('SLIP_STAKE', '💰 Set Stake')
+        ];
+        
+        const message = createInteractiveMessage(successText, buttons);
+        await reply(message);
+    } catch (error) {
+        await reply('❌ *Error adding to bet slip. Please try again.*');
+        console.error('Add to bet slip error:', error);
+    }
+}
+
+// Keep the existing remove, stake, place bet functions but add button responses where appropriate
+async function handleRemoveFromBetSlip(context, args) {
+    const { reply, senderId } = context;
+    try {
+        if (args.length === 0) {
+            await reply(`⚠️ *Please specify selection number to remove*`);
+            return;
+        }
+        const selectionNumber = parseInt(args[0]);
+        if (isNaN(selectionNumber)) {
+            await reply('⚠️ *Please provide a valid selection number*');
+            return;
+        }
+        const betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
+        if (!betSlip || betSlip.selections.length === 0) {
+            await reply('📋 *Your bet slip is empty*');
+            return;
+        }
+        if (selectionNumber < 1 || selectionNumber > betSlip.selections.length) {
+            await reply(`⚠️ *Invalid selection number. Choose between 1 and ${betSlip.selections.length}*`);
+            return;
+        }
+        const removedSelection = betSlip.selections.splice(selectionNumber - 1, 1)[0];
+        if (betSlip.selections.length === 0) {
+            await db.collection(BET_COLLECTIONS.BETSLIPS).deleteOne({ userId: senderId });
+            await reply('🗑️ *Last selection removed. Bet slip is now empty.*');
+        } else {
+            await db.collection(BET_COLLECTIONS.BETSLIPS).updateOne({ userId: senderId }, { $set: { selections: betSlip.selections, updatedAt: new Date() } });
+            const buttons = [
+                createButton('SLIP_VIEW', '📋 View Slip'),
+                createButton('MENU_FIXTURES', '⚽ Add More')
+            ];
+            const message = createInteractiveMessage(
+                `✅ *Removed selection*\n\n❌ ${removedSelection.homeTeam} vs ${removedSelection.awayTeam}`,
+                buttons
+            );
+            await reply(message);
+        }
+    } catch (error) {
+        await reply('❌ *Error removing selection. Please try again.*');
+        console.error('Remove selection error:', error);
+    }
+}
+
+async function handleSetStake(context, args) {
+  const { reply, senderId } = context;
+  try {
+    if (args.length === 0) {
+      await showStakeSelector(context);
+      return;
+    }
+    const stakeAmount = parseInt(args[0]);
+    if (isNaN(stakeAmount) || stakeAmount <= 0) {
+      await reply('⚠️ *Please provide a valid stake amount*');
+      return;
+    }
+    const userData = await unifiedUserManager.getUserData(senderId);
+    if (userData.balance < stakeAmount) {
+      await reply(`🚫 *Insufficient balance*\n\n💵 *Your Balance:* ${CURRENCY_SYMBOL}${userData.balance.toLocaleString()}\n💸 *Required:* ${CURRENCY_SYMBOL}${stakeAmount.toLocaleString()}`);
+      return;
+    }
+    const betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
+    if (!betSlip || betSlip.selections.length === 0) {
+      await reply('📋 *Your bet slip is empty. Add selections first!*');
+      return;
+    }
+    await db.collection(BET_COLLECTIONS.BETSLIPS).updateOne({ userId: senderId }, { $set: { stake: stakeAmount, updatedAt: new Date() } });
+    let totalOdds = 1;
+    betSlip.selections.forEach(selection => { totalOdds *= selection.odds; });
+    const potentialWin = stakeAmount * totalOdds;
+
+    const successText = `💰 *Stake Set Successfully*\n\n💵 *Stake:* ${CURRENCY_SYMBOL}${stakeAmount.toLocaleString()}\n📊 *Total Odds:* ${totalOdds.toFixed(2)}\n🏆 *Potential Win:* ${CURRENCY_SYMBOL}${potentialWin.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+    
+    const buttons = [
+        createButton('SLIP_PLACE', '✅ Place Bet'),
+        createButton('SLIP_VIEW', '📋 View Slip'),
+        createButton('SLIP_STAKE', '💰 Change Stake')
+    ];
+    
+    const message = createInteractiveMessage(successText, buttons);
+    await reply(message);
+  } catch (error) {
+    await reply('❌ *Error setting stake. Please try again.*');
+    console.error('Set stake error:', error);
+  }
+}
+
+async function handlePlaceBet(context) {
+  const { reply, senderId, sock, from } = context;
+  try {
+    const betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
+    if (!betSlip || betSlip.selections.length === 0) {
+      await reply('📋 *Your bet slip is empty*');
+      return;
+    }
+    if (!betSlip.stake || betSlip.stake <= 0) {
+      const buttons = [createButton('SLIP_STAKE', '💰 Set Stake')];
+      const message = createInteractiveMessage('💰 *Please set a stake first*', buttons);
+      await reply(message);
+      return;
+    }
+    const userData = await unifiedUserManager.getUserData(senderId);
+    if (userData.balance < betSlip.stake) {
+      await reply(`🚫 *Insufficient balance*\n\n💵 *Your Balance:* ${CURRENCY_SYMBOL}${userData.balance.toLocaleString()}\n💸 *Required:* ${CURRENCY_SYMBOL}${betSlip.stake.toLocaleString()}`);
+      return;
+    }
+    for (const selection of betSlip.selections) {
+      const match = await db.collection(BET_COLLECTIONS.MATCHES).findOne({ matchId: selection.matchId, status: 'upcoming' });
+      if (!match) {
+        await reply(`❌ *Match ${selection.homeTeam} vs ${selection.awayTeam} is no longer available*. Please remove it.`);
+        return;
+      }
+    }
+    let totalOdds = 1;
+    betSlip.selections.forEach(selection => { totalOdds *= selection.odds; });
+    const potentialWin = betSlip.stake * totalOdds;
+    const success = await unifiedUserManager.removeMoney(senderId, betSlip.stake, 'Sports bet stake');
+    if (!success) {
+      await reply('❌ Transaction failed. Please try again.');
+      return;
+    }
+    const betRecord = {
+      userId: senderId, betType: 'accumulator', selections: betSlip.selections,
+      stake: betSlip.stake, totalOdds: totalOdds, potentialWin: potentialWin,
+      status: 'pending', placedAt: new Date(), settledAt: null, result: null, payout: 0
+    };
+    const betResult = await db.collection(BET_COLLECTIONS.BETS).insertOne(betRecord);
+    await db.collection(BET_COLLECTIONS.BETSLIPS).deleteOne({ userId: senderId });
+    const updatedBalance = await unifiedUserManager.getUserData(senderId);
+    let confirmText = `✅ *BET PLACED SUCCESSFULLY* ✅\n\n`;
+    const betId = betResult.insertedId.toString().slice(-6).toUpperCase();
+    confirmText += `🎫 *Bet ID:* ${betId}\n`;
+    confirmText += `💰 *Stake:* ${CURRENCY_SYMBOL}${betSlip.stake.toLocaleString()}\n`;
+    confirmText += `📊 *Total Odds:* ${totalOdds.toFixed(2)}\n`;
+    confirmText += `🏆 *Potential Win:* ${CURRENCY_SYMBOL}${potentialWin.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n\n`;
+    confirmText += `📋 *Selections:*\n`;
+    betSlip.selections.forEach((selection, index) => {
+      confirmText += `${index + 1}. ${selection.homeTeam} vs ${selection.awayTeam}\n`;
+      confirmText += `   🎯 ${formatBetType(selection.betType)} @ ${selection.odds}\n`;
+    });
+    confirmText += `\n💵 *New Balance:* ${CURRENCY_SYMBOL}${updatedBalance.balance.toLocaleString()}\n\n`;
+    confirmText += `🍀 *Good luck!*`;
+
+    const buttons = [
+        createButton('MENU_MYBETS', '🎫 My Bets'),
+        createButton('MENU_FIXTURES', '⚽ More Bets'),
+        createButton('MENU_BETSLIP', '📋 New Slip')
+    ];
+    
+    const message = createInteractiveMessage(confirmText, buttons);
+    await reply(message);
+  } catch (error) {
+    await reply('❌ *Error placing bet. Please try again.*');
+    console.error('Place bet error:', error);
+  }
+}
+
+async function handleClearBetSlip(context) {
+    const { reply, senderId } = context;
+    try {
+        await db.collection(BET_COLLECTIONS.BETSLIPS).deleteOne({ userId: senderId });
+        
+        const buttons = [
+            createButton('MENU_FIXTURES', '⚽ View Fixtures'),
+            createButton('MENU_LEAGUES', '🏆 Leagues')
+        ];
+        
+        const message = createInteractiveMessage('🗑️ *Bet slip cleared*', buttons);
+        await reply(message);
+    } catch (error) {
+        await reply('❌ *Error clearing bet slip. Please try again.*');
+        console.error('Clear bet slip error:', error);
+    }
+}
+
+async function handleShareBetSlip(context) {
+    const { reply, senderId, config } = context;
+    const betSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ userId: senderId });
+
+    if (!betSlip || betSlip.selections.length === 0) {
+        return reply('📋 *Your bet slip is empty. Add some selections before sharing.*');
+    }
+
+    let shareCode = betSlip.shareCode;
+    if (!shareCode) {
+        shareCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+        await db.collection(BET_COLLECTIONS.BETSLIPS).updateOne(
+            { userId: senderId },
+            { $set: { shareCode: shareCode } }
+        );
+    }
+
+    const shareText = `🎟️ *Your Bet Slip Code:* \n\n*${shareCode}*\n\n📲 Share this code with a friend! They can use \`${config.PREFIX}betslip load ${shareCode}\` to load your selections.`;
+    
+    const buttons = [
+        createButton('SLIP_VIEW', '📋 Back to Slip'),
+        createButton('MENU_FIXTURES', '⚽ More Bets')
+    ];
+    
+    const message = createInteractiveMessage(shareText, buttons);
+    await reply(message);
+}
+
+async function handleLoadBetSlip(context, args) {
+    const { reply, senderId, config } = context;
+    if (args.length === 0) {
+        return reply(`⚠️ Please provide a bet slip code.\nUsage: \`${config.PREFIX}betslip load [code]\``);
+    }
+    const shareCode = args[0].toUpperCase();
+
+    let originalSelections = null;
+    let foundSource = null;
+
+    const placedBet = await db.collection(BET_COLLECTIONS.BETS).findOne({ _id: { $regex: `${shareCode}// plugins/Football_betting.js - ENHANCED VERSION with WhatsApp Interactive Buttons
+
+import { MongoClient, ObjectId } from 'mongodb';
+import moment from 'moment-timezone';
+
+// Use the central manager to interact with user data
+import { unifiedUserManager } from '../lib/pluginIntegration.js';
+
+// Plugin information export
+export const info = {
+  name: 'Sports Betting System',
+  version: '3.0.0', // Updated version with Button UI
+  author: 'Alex Macksyn',
+  description: 'Complete sports betting simulation with interactive buttons for EPL, La Liga, Bundesliga, Serie A teams',
+  commands: [
+    { name: 'bet', aliases: ['sportbet', 'sportybet'], description: 'Access sports betting system with interactive buttons' },
+    { name: 'fixtures', aliases: ['matches', 'games'], description: 'View upcoming matches with betting buttons' },
+    { name: 'betslip', aliases: ['slip'], description: 'Manage your bet slip with interactive options' },
+    { name: 'mybets', aliases: ['bets'], description: 'View your active bets' },
+    { name: 'bethistory', aliases: ['betlog'], description: 'View betting history' },
+    { name: 'leagues', aliases: ['competitions'], description: 'View available leagues' },
+    { name: 'results', aliases: ['recent', 'scores'], description: 'View recent match results' }
+  ],
+  // New: Indicate this plugin supports interactive messages
+  supportsInteractive: true
+};
+
+// MongoDB Configuration
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+const DATABASE_NAME = 'whatsapp_bot';
+const BET_COLLECTIONS = {
+  MATCHES: 'betting_matches',
+  BETS: 'betting_bets',
+  BETSLIPS: 'betting_betslips',
+};
+
+// Local constant for currency display
+const CURRENCY_SYMBOL = '₦';
+
+// Database connection
+let db = null;
+let mongoClient = null;
+
+// Initialize betting database
+async function initBettingDatabase() {
+  if (db) return db;
+  
+  try {
+    mongoClient = new MongoClient(MONGODB_URI);
+    await mongoClient.connect();
+    db = mongoClient.db(DATABASE_NAME);
+    
+    await db.collection(BET_COLLECTIONS.MATCHES).createIndex({ matchId: 1 }, { unique: true });
+    await db.collection(BET_COLLECTIONS.BETS).createIndex({ userId: 1, timestamp: -1 });
+    await db.collection(BET_COLLECTIONS.BETSLIPS).createIndex({ userId: 1 });
+    await db.collection(BET_COLLECTIONS.BETSLIPS).createIndex({ shareCode: 1 });
+    
+    console.log('✅ Sports Betting MongoDB connected successfully');
+    
+    startAutoSimulation();
+    
+    return db;
+  } catch (error) {
+    console.error('❌ Sports Betting MongoDB connection failed:', error);
+    throw error;
+  }
+}
+
+// Team data for the 2025/2026 season (same as before)
+const TEAMS = {
+  EPL: {
+    name: 'English Premier League',
+    teams: { 'Arsenal': { strength: 92, form: 90 }, 'Aston Villa': { strength: 80, form: 78 }, 'Bournemouth': { strength: 68, form: 65 }, 'Brentford': { strength: 70, form: 72 }, 'Brighton': { strength: 75, form: 78 }, 'Chelsea': { strength: 84, form: 80 }, 'Crystal Palace': { strength: 72, form: 70 }, 'Everton': { strength: 69, form: 66 }, 'Fulham': { strength: 71, form: 73 }, 'Ipswich Town': { strength: 62, form: 60 }, 'Leicester City': { strength: 73, form: 75 }, 'Liverpool': { strength: 91, form: 88 }, 'Manchester City': { strength: 96, form: 95 }, 'Manchester United': { strength: 85, form: 82 }, 'Newcastle United': { strength: 82, form: 80 }, 'Nottingham Forest': { strength: 67, form: 68 }, 'Southampton': { strength: 64, form: 62 }, 'Tottenham': { strength: 83, form: 81 }, 'West Ham': { strength: 78, form: 75 }, 'Wolves': { strength: 74, form: 72 } }
+  },
+  LALIGA: {
+    name: 'Spanish La Liga',
+    teams: { 'Real Madrid': { strength: 97, form: 95 }, 'Barcelona': { strength: 90, form: 88 }, 'Girona': { strength: 80, form: 82 }, 'Atletico Madrid': { strength: 88, form: 85 }, 'Athletic Bilbao': { strength: 82, form: 80 }, 'Real Sociedad': { strength: 81, form: 83 }, 'Real Betis': { strength: 79, form: 77 }, 'Villarreal': { strength: 78, form: 76 }, 'Valencia': { strength: 77, form: 75 }, 'Sevilla': { strength: 80, form: 78 } }
+  },
+  BUNDESLIGA: {
+    name: 'German Bundesliga',
+    teams: { 'Bayern Munich': { strength: 94, form: 92 }, 'Bayer Leverkusen': { strength: 91, form: 93 }, 'Borussia Dortmund': { strength: 88, form: 86 }, 'RB Leipzig': { strength: 87, form: 88 }, 'VfB Stuttgart': { strength: 84, form: 85 } }
+  },
+  SERIEA: {
+    name: 'Italian Serie A',
+    teams: { 'Inter Milan': { strength: 92, form: 90 }, 'AC Milan': { strength: 87, form: 85 }, 'Juventus': { strength: 86, form: 84 }, 'Atalanta': { strength: 83, form: 81 }, 'Napoli': { strength: 84, form: 82 } }
+  }
+};
+
+// Maps user-friendly aliases to internal bet type keys
+const betTypeAliases = {
+    'over1.5': 'OVER15', 'o1.5': 'OVER15', 'over15': 'OVER15',
+    'under1.5': 'UNDER15', 'u1.5': 'UNDER15', 'under15': 'UNDER15',
+    'over2.5': 'OVER25', 'o2.5': 'OVER25', 'over25': 'OVER25',
+    'under2.5': 'UNDER25', 'u2.5': 'UNDER25', 'under25': 'UNDER25',
+    'btts': 'BTTS_YES', 'gg': 'BTTS_YES', 'btts_yes': 'BTTS_YES',
+    'nobtts': 'BTTS_NO', 'ng': 'BTTS_NO', 'btts_no': 'BTTS_NO',
+    '1': 'HOME_WIN', 'hw': 'HOME_WIN', 'home': 'HOME_WIN', 'homewin': 'HOME_WIN',
+    'x': 'DRAW', 'd': 'DRAW',
+    '2': 'AWAY_WIN', 'aw': 'AWAY_WIN', 'away': 'AWAY_WIN', 'awaywin': 'AWAY_WIN'
+};
+
+// Helper function to display user-friendly bet type names
+function formatBetType(betTypeKey) {
+    switch (betTypeKey) {
+        case 'HOME_WIN': return 'Home Win (1)';
+        case 'AWAY_WIN': return 'Away Win (2)';
+        case 'DRAW': return 'Draw (X)';
+        case 'OVER15': return 'Over 1.5 Goals';
+        case 'UNDER15': return 'Under 1.5 Goals';
+        case 'OVER25': return 'Over 2.5 Goals';
+        case 'UNDER25': return 'Under 2.5 Goals';
+        case 'BTTS_YES': return 'GG (Both Teams To Score)';
+        case 'BTTS_NO': return 'NG (No Goal)';
+        default: return betTypeKey.replace('_', ' ');
+    }
+}
+
+// NEW: Interactive button helper functions
+function createButton(id, title, description = null) {
+    const button = { id, title };
+    if (description) button.description = description;
+    return button;
+}
+
+function createInteractiveMessage(text, buttons, header = null, footer = null) {
+    const message = {
+        text,
+        buttons: buttons.map((btn, index) => ({
+            type: "reply",
+            reply: {
+                id: btn.id,
+                title: btn.title.substring(0, 20) // WhatsApp button title limit
+            }
+        }))
+    };
+    
+    // Add header and footer if provided
+    if (header) message.header = { type: "text", text: header };
+    if (footer) message.footer = { text: footer };
+    
+    return { interactive: { type: "button", ...message } };
+}
+
+function createListMessage(text, buttonText, sections, header = null, footer = null) {
+    const message = {
+        text,
+        button: buttonText,
+        sections
+    };
+    
+    if (header) message.header = { type: "text", text: header };
+    if (footer) message.footer = { text: footer };
+    
+    return { interactive: { type: "list", ...message } };
+}
+
+// NEW: Enhanced reply function that supports both buttons and text
+const createReplyFunction = (sock, from, m) => {
+    return async (content, options = {}) => {
+        try {
+            let messageContent;
+            
+            if (typeof content === 'string') {
+                // Simple text message
+                messageContent = { text: content };
+            } else if (content.interactive) {
+                // Interactive message with buttons or list
+                messageContent = content;
+            } else {
+                // Fallback to text
+                messageContent = { text: JSON.stringify(content) };
+            }
+            
+            await sock.sendMessage(from, messageContent, { quoted: m });
+        } catch (error) {
+            console.error('❌ Error sending message:', error.message);
+            // Fallback to simple text if interactive fails
+            if (content.interactive) {
+                await sock.sendMessage(from, { text: content.interactive.text || 'Error displaying interactive message' }, { quoted: m });
             }
         }
+    };
+};
 
-        let newBetStatus = bet.status;
-        if (betLost) {
-            newBetStatus = 'lost';
-        } else if (allSelectionsFinished) {
-            newBetStatus = 'won';
+// NEW: Handle interactive button responses
+async function handleInteractiveResponse(m, sock, config) {
+    const senderId = m.key.participant || m.key.remoteJid;
+    const from = m.key.remoteJid;
+    const reply = createReplyFunction(sock, from, m);
+    
+    let buttonId = null;
+    let selectedId = null;
+    
+    // Extract button ID from different message types
+    if (m.message?.buttonsResponseMessage) {
+        buttonId = m.message.buttonsResponseMessage.selectedButtonId;
+    } else if (m.message?.listResponseMessage) {
+        selectedId = m.message.listResponseMessage.singleSelectReply.selectedRowId;
+        buttonId = selectedId;
+    }
+    
+    if (!buttonId) return false;
+    
+    const context = { m, sock, config, senderId, from, reply };
+    
+    // Parse button ID format: ACTION_PARAM1_PARAM2
+    const parts = buttonId.split('_');
+    const action = parts[0];
+    
+    switch (action) {
+        case 'FIXTURES':
+            if (parts[1] === 'LEAGUE') {
+                await handleFixtures(context, [parts[2]]);
+            } else {
+                await handleFixtures(context, []);
+            }
+            break;
+            
+        case 'BET':
+            if (parts[1] === 'ADD') {
+                // Format: BET_ADD_MATCHID_BETTYPE
+                const matchId = parts[2];
+                const betType = parts[3];
+                await handleAddToBetSlip(context, [matchId, betType]);
+            }
+            break;
+            
+        case 'SLIP':
+            switch (parts[1]) {
+                case 'VIEW': await handleBetSlip(context, []); break;
+                case 'PLACE': await handlePlaceBet(context); break;
+                case 'CLEAR': await handleClearBetSlip(context); break;
+                case 'SHARE': await handleShareBetSlip(context); break;
+                case 'REMOVE': await handleRemoveFromBetSlip(context, [parts[2]]); break;
+                case 'STAKE': await showStakeSelector(context); break;
+            }
+            break;
+            
+        case 'STAKE':
+            // Format: STAKE_AMOUNT
+            if (parts[1]) {
+                await handleSetStake(context, [parts[1]]);
+            }
+            break;
+            
+        case 'MENU':
+            switch (parts[1]) {
+                case 'FIXTURES': await handleFixtures(context, []); break;
+                case 'LEAGUES': await handleLeagues(context); break;
+                case 'MYBETS': await handleMyBets(context); break;
+                case 'HISTORY': await handleBetHistory(context); break;
+                case 'RESULTS': await handleResults(context); break;
+                case 'BETSLIP': await handleBetSlip(context, []); break;
+            }
+            break;
+            
+        default:
+            return false; // Not handled
+    }
+    
+    return true; // Handled
+}
+
+// Keep all the existing functions (generateOdds, generateMatches, etc.) - they remain the same
+function generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm) {
+  const effectiveHomeStrength = (homeStrength * 0.8) + (homeForm * 0.2);
+  const effectiveAwayStrength = (awayStrength * 0.8) + (awayForm * 0.2);
+  const strengthDiff = effectiveHomeStrength - effectiveAwayStrength;
+  const homeAdvantage = 5;
+  const adjustedHomeStrength = effectiveHomeStrength + homeAdvantage;
+  const totalStrength = adjustedHomeStrength + effectiveAwayStrength;
+  const homeWinProb = (adjustedHomeStrength / totalStrength) * 0.6 + 0.2;
+  const awayWinProb = (effectiveAwayStrength / totalStrength) * 0.6 + 0.2;
+  const drawProb = 1 - homeWinProb - awayWinProb + 0.15;
+  const total = homeWinProb + drawProb + awayWinProb;
+  const normHome = homeWinProb / total;
+  const normDraw = drawProb / total;
+  const normAway = awayWinProb / total;
+  const margin = 0.1;
+  const odds = {
+    HOME_WIN: Math.max(1.1, (1 / normHome) * (1 - margin)),
+    DRAW: Math.max(2.5, (1 / normDraw) * (1 - margin)),
+    AWAY_WIN: Math.max(1.1, (1 / normAway) * (1 - margin)),
+    OVER15: Math.random() * 1.0 + 1.2,
+    UNDER15: Math.random() * 1.5 + 2.0,
+    OVER25: Math.random() * 1.5 + 1.4,
+    UNDER25: Math.random() * 1.2 + 1.8,
+    BTTS_YES: Math.random() * 1.0 + 1.6,
+    BTTS_NO: Math.random() * 1.0 + 1.4
+  };
+  Object.keys(odds).forEach(key => {
+    odds[key] = parseFloat(odds[key].toFixed(2));
+  });
+  return odds;
+}
+
+// Generate Match Function (same as before)
+async function generateMatches(db) {
+    const matches = [];
+    const leagues = Object.keys(TEAMS);
+    let matchId = 1;
+
+    const upcomingFixtures = await db.collection(BET_COLLECTIONS.MATCHES).find(
+        { status: 'upcoming' },
+        { projection: { homeTeam: 1, awayTeam: 1, _id: 0 } }
+    ).toArray();
+
+    const busyTeams = new Set();
+    upcomingFixtures.forEach(fixture => {
+        busyTeams.add(fixture.homeTeam);
+        busyTeams.add(fixture.awayTeam);
+    });
+
+    leagues.forEach(league => {
+        let availableTeams = Object.keys(TEAMS[league].teams).filter(team => !busyTeams.has(team));
+
+        for (let i = availableTeams.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [availableTeams[i], availableTeams[j]] = [availableTeams[j], availableTeams[i]];
         }
 
-        await db.collection(COLLECTIONS.BETS).updateOne({
-            _id: bet._id
+        const numMatches = league === 'EPL' ? 6 : 4;
+
+        for (let i = 0; i < numMatches * 2; i += 2) {
+            if (!availableTeams[i] || !availableTeams[i + 1]) break;
+
+            const homeTeam = availableTeams[i];
+            const awayTeam = availableTeams[i + 1];
+            const homeStrength = TEAMS[league].teams[homeTeam].strength;
+            const awayStrength = TEAMS[league].teams[awayTeam].strength;
+            const homeForm = TEAMS[league].teams[homeTeam].form;
+            const awayForm = TEAMS[league].teams[awayTeam].form;
+
+            const odds = generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm);
+            const matchTime = moment().add(Math.floor(Math.random() * 72) + 1, 'hours');
+
+            matches.push({
+                matchId: matchId++,
+                league: TEAMS[league].name,
+                leagueCode: league,
+                homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm,
+                odds, matchTime: matchTime.toDate(), status: 'upcoming', result: null
+            });
+        }
+    });
+    return matches;
+}
+
+// Keep existing initialization and utility functions...
+async function initializeMatches() {
+  try {
+    const existingMatches = await db.collection(BET_COLLECTIONS.MATCHES).countDocuments({ status: 'upcoming' });
+    if (existingMatches < 15) {
+      const newMatches = await generateMatches(db);
+
+      if (newMatches.length > 0) {
+        const lastMatch = await db.collection(BET_COLLECTIONS.MATCHES).findOne({}, { sort: { matchId: -1 } });
+        let nextMatchId = lastMatch ? lastMatch.matchId + 1 : 1;
+        newMatches.forEach(match => {
+          match.matchId = nextMatchId++;
+        });
+        await db.collection(BET_COLLECTIONS.MATCHES).insertMany(newMatches);
+        console.log(`✅ Generated ${newMatches.length} new matches`);
+      }
+    }
+  } catch (error) {
+    console.error('Error initializing matches:', error);
+  }
+}
+
+function updateTeamForms(match) {
+    try {
+        if (!match || !match.leagueCode || !match.homeTeam || !match.awayTeam) return;
+        const homeTeam = TEAMS[match.leagueCode].teams[match.homeTeam];
+        const awayTeam = TEAMS[match.leagueCode].teams[match.awayTeam];
+
+        if (match.result.result === 'HOME_WIN') {
+            homeTeam.form = Math.min(100, homeTeam.form + 5);
+            awayTeam.form = Math.max(0, awayTeam.form - 5);
+        } else if (match.result.result === 'AWAY_WIN') {
+            homeTeam.form = Math.max(0, homeTeam.form - 5);
+            awayTeam.form = Math.min(100, awayTeam.form + 5);
+        } else {
+            homeTeam.form = Math.max(0, homeTeam.form - 2);
+            awayTeam.form = Math.min(100, awayTeam.form + 2);
+        }
+    } catch (error) {
+        console.error(`Error updating form for match ${match.matchId}:`, error);
+    }
+}
+
+function simulateMatchResult(homeStrength, awayStrength, odds) {
+  const rand = Math.random();
+  const homeWinProb = 1 / odds.HOME_WIN;
+  const drawProb = 1 / odds.DRAW;
+  let result;
+  if (rand < homeWinProb) {
+    result = 'HOME_WIN';
+  } else if (rand < homeWinProb + drawProb) {
+    result = 'DRAW';
+  } else {
+    result = 'AWAY_WIN';
+  }
+  let homeGoals, awayGoals;
+  switch (result) {
+    case 'HOME_WIN': homeGoals = Math.floor(Math.random() * 3) + 1; awayGoals = Math.floor(Math.random() * homeGoals); break;
+    case 'AWAY_WIN': awayGoals = Math.floor(Math.random() * 3) + 1; homeGoals = Math.floor(Math.random() * awayGoals); break;
+    case 'DRAW': const drawScore = Math.floor(Math.random() * 4); homeGoals = awayGoals = drawScore; break;
+  }
+  const totalGoals = homeGoals + awayGoals;
+  return { result, homeGoals, awayGoals, totalGoals, over15: totalGoals > 1.5, over25: totalGoals > 2.5, btts: homeGoals > 0 && awayGoals > 0 };
+}
+
+function isAdmin(userId) {
+  const adminNumbers = process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : [];
+  return adminNumbers.includes(userId.split('@')[0]);
+}
+
+function isOwner(userId) {
+  const ownerNumber = process.env.OWNER_NUMBER || '';
+  return userId.split('@')[0] === ownerNumber;
+}
+
+// UPDATED: Main plugin handler with interactive support
+export default async function bettingHandler(m, sock, config) {
+  try {
+    if (!db) {
+      await initBettingDatabase();
+      await initializeMatches();
+    }
+
+    // Handle interactive button responses first
+    if (m.message?.buttonsResponseMessage || m.message?.listResponseMessage) {
+      const handled = await handleInteractiveResponse(m, sock, config);
+      if (handled) return; // Exit if interactive message was handled
+    }
+
+    // Handle traditional text commands
+    if (!m || !m.body || !m.body.startsWith(config.PREFIX)) return;
+    const messageBody = m.body.slice(config.PREFIX.length).trim();
+    if (!messageBody) return;
+    const args = messageBody.split(' ').filter(arg => arg.length > 0);
+    const command = args[0].toLowerCase();
+    
+    const commandInfo = info.commands.find(c => c.name === command || c.aliases.includes(command));
+    if (!commandInfo) return;
+
+    const senderId = m.key.participant || m.key.remoteJid;
+    const from = m.key.remoteJid;
+    if (!senderId || !from) return;
+
+    await unifiedUserManager.initUser(senderId);
+
+    const reply = createReplyFunction(sock, from, m);
+    const context = { m, sock, config, senderId, from, reply };
+
+    switch (command) {
+        case 'bet': case 'sportbet': case 'sportybet':
+            if (args.length === 1) { await showBettingMenuWithButtons(context); } 
+            else { await handleBetCommand(context, args.slice(1)); }
+            break;
+        case 'fixtures': case 'matches': case 'games': await handleFixtures(context, args.slice(1)); break;
+        case 'betslip': case 'slip': await handleBetSlip(context, args.slice(1)); break;
+        case 'mybets': case 'bets': await handleMyBets(context); break;
+        case 'bethistory': case 'betlog': await handleBetHistory(context); break;
+        case 'leagues': case 'competitions': await handleLeagues(context); break;
+        case 'results': case 'recent': case 'scores': await handleResults(context); break;
+    }
+  } catch (error) {
+    console.error('❌ Betting plugin error:', error.message);
+  }
+}
+
+// UPDATED: Show betting menu with interactive buttons
+async function showBettingMenuWithButtons(context) {
+    const { reply } = context;
+    
+    const menuText = `⚽ *SPORTY BET* ⚽\n\n🏆 *Leagues Available:*\n• 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League\n• 🇪🇸 La Liga\n• 🇩🇪 Bundesliga\n• 🇮🇹 Serie A\n\n💡 Choose an option below to get started!`;
+    
+    const buttons = [
+        createButton('MENU_FIXTURES', '⚽ View Fixtures'),
+        createButton('MENU_BETSLIP', '📋 My Bet Slip'),
+        createButton('MENU_MYBETS', '🎫 My Bets')
+    ];
+    
+    const message = createInteractiveMessage(
+        menuText,
+        buttons,
+        'SPORTY BET MENU',
+        'Choose an option to continue'
+    );
+    
+    await reply(message);
+}
+
+// UPDATED: Enhanced fixtures display with betting buttons
+async function handleFixtures(context, args) {
+    const { reply } = context;
+    try {
+        let league = null;
+        if (args.length > 0) {
+            const leagueInput = args[0].toLowerCase();
+            const leagueMap = {
+                'epl': 'EPL', 'premier': 'EPL', 'laliga': 'LALIGA', 'liga': 'LALIGA',
+                'bundesliga': 'BUNDESLIGA', 'german': 'BUNDESLIGA', 'seriea': 'SERIEA',
+                'serie': 'SERIEA', 'italian': 'SERIEA'
+            };
+            league = leagueMap[leagueInput];
+        }
+
+        // If no specific league, show league selector first
+        if (!league) {
+            const sections = [{
+                title: "Available Leagues",
+                rows: [
+                    { id: "FIXTURES_LEAGUE_EPL", title: "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League", description: "English Premier League fixtures" },
+                    { id: "FIXTURES_LEAGUE_LALIGA", title: "🇪🇸 La Liga", description: "Spanish La Liga fixtures" },
+                    { id: "FIXTURES_LEAGUE_BUNDESLIGA", title: "🇩🇪 Bundesliga", description: "German Bundesliga fixtures" },
+                    { id: "FIXTURES_LEAGUE_SERIEA", title: "🇮🇹 Serie A", description: "Italian Serie A fixtures" }
+                ]
+            }];
+
+            const message = createListMessage(
+                "⚽ *UPCOMING FIXTURES* ⚽\n\nSelect a league to view fixtures:",
+                "Select League",
+                sections,
+                "FIXTURE SELECTION"
+            );
+
+            await reply(message);
+            return;
+        }
+
+        const query = { leagueCode: league, status: 'upcoming' };
+        const matches = await db.collection(BET_COLLECTIONS.MATCHES).find(query).sort({ matchTime: 1 }).limit(5).toArray();
+
+        if (matches.length === 0) {
+            await reply('⚽ *No upcoming matches found for this league.*');
+            return;
+        }
+
+        // Show first match with betting options
+        const match = matches[0];
+        const matchTime = moment(match.matchTime).tz('Africa/Lagos').format('DD/MM HH:mm');
+        
+        let fixturesText = `⚽ *${match.homeTeam} vs ${match.awayTeam}*\n\n`;
+        fixturesText += `🏆 ${match.league}\n`;
+        fixturesText += `📅 ${matchTime} WAT\n\n`;
+        fixturesText += `💰 *Odds:*\n`;
+        fixturesText += `Home: ${match.odds.HOME_WIN} | Draw: ${match.odds.DRAW} | Away: ${match.odds.AWAY_WIN}\n`;
+        fixturesText += `Over 2.5: ${match.odds.OVER25} | Under 2.5: ${match.odds.UNDER25}\n`;
+        fixturesText += `GG: ${match.odds.BTTS_YES} | NG: ${match.odds.BTTS_NO}\n\n`;
+        fixturesText += `🆔 Match ID: ${match.matchId}`;
+
+        // Create betting buttons for this match
+        const sections = [{
+            title: "Match Winner",
+            rows: [
+                { id: `BET_ADD_${match.matchId}_HOME_WIN`, title: `Home Win (${match.odds.HOME_WIN})`, description: `${match.homeTeam} to win` },
+                { id: `BET_ADD_${match.matchId}_DRAW`, title: `Draw (${match.odds.DRAW})`, description: `Match ends in a draw` },
+                { id: `BET_ADD_${match.matchId}_AWAY_WIN`, title: `Away Win (${match.odds.AWAY_WIN})`, description: `${match.awayTeam} to win` }
+            ]
         }, {
-            $set: {
-                selections: bet.selections,
-                status: newBetStatus
+            title: "Goals & BTTS",
+            rows: [
+                { id: `BET_ADD_${match.matchId}_OVER25`, title: `Over 2.5 (${match.odds.OVER25})`, description: "3 or more goals" },
+, '$options' : 'i' } });
+
+    if (placedBet) {
+        originalSelections = placedBet.selections;
+        foundSource = 'a placed bet';
+    } else {
+        const pendingSlip = await db.collection(BET_COLLECTIONS.BETSLIPS).findOne({ shareCode });
+        if (pendingSlip) {
+            originalSelections = pendingSlip.selections;
+            foundSource = 'a pending slip';
+        }
+    }
+
+    if (!originalSelections) {
+        return reply(`❌ Code *${shareCode}* not found.`);
+    }
+
+    let newSelections = [];
+    let expiredCount = 0;
+
+    for (const selection of originalSelections) {
+        const match = await db.collection(BET_COLLECTIONS.MATCHES).findOne({ matchId: selection.matchId, status: 'upcoming' });
+        if (match) {
+            newSelections.push(selection);
+        } else {
+            expiredCount++;
+        }
+    }
+
+    if (newSelections.length === 0) {
+        return reply(`❌ All matches from code *${shareCode}* have already started. Cannot load any selections.`);
+    }
+
+    await db.collection(BET_COLLECTIONS.BETSLIPS).replaceOne(
+        { userId: senderId },
+        { 
+            userId: senderId, 
+            selections: newSelections, 
+            stake: 0, 
+            createdAt: new Date(),
+            loadedFrom: shareCode
+        },
+        { upsert: true }
+    );
+
+    let successMsg = `✅ *Bet Slip Loaded from ${foundSource} with code ${shareCode}!*\n\n*${newSelections.length} selection(s) were added to your slip.*`;
+    if (expiredCount > 0) {
+        successMsg += `\n\n⚠️ *${expiredCount} selection(s) were discarded because their matches have already started.*`;
+    }
+
+    const buttons = [
+        createButton('SLIP_VIEW', '📋 View Loaded Slip'),
+        createButton('SLIP_STAKE', '💰 Set Stake'),
+        createButton('MENU_FIXTURES', '⚽ Add More Bets')
+    ];
+    
+    const message = createInteractiveMessage(successMsg, buttons);
+    await reply(message);
+}
+
+async function handleBetCommand(context, args) {
+    const { reply, config, senderId } = context;
+    try {
+        if (args.length === 0) {
+            await showBettingMenuWithButtons(context);
+            return;
+        }
+        const subCommand = args[0].toLowerCase();
+        
+        switch(subCommand) {
+            case 'simulate':
+                const isAdminUser = isAdmin(senderId) || isOwner(senderId);
+                if (!isAdminUser) {
+                    return reply('🚫 *Only administrators can manually simulate matches*');
+                }
+                await handleSimulateBets(context);
+                break;
+            
+            case 'share':
+                await handleSharePlacedBet(context, args.slice(1));
+                break;
+            
+            default:
+                await reply(`❓ *Unknown bet command: ${subCommand}*\n\nUse *${config.PREFIX}bet* for help`);
+        }
+    } catch (error) {
+        await reply('❌ *Error processing bet command. Please try again.*');
+        console.error('Bet command error:', error);
+    }
+}
+
+async function handleSharePlacedBet(context, args) {
+    const { reply, senderId, config } = context;
+    if (args.length === 0) {
+        return reply(`⚠️ Please provide the ID of the bet you want to share.\nUsage: \`${config.PREFIX}bet share <bet_id>\``);
+    }
+    const betId = args[0].toUpperCase();
+
+    const placedBet = await db.collection(BET_COLLECTIONS.BETS).findOne({ 
+        userId: senderId, 
+        _id: { $regex: `${betId}// plugins/Football_betting.js - ENHANCED VERSION with WhatsApp Interactive Buttons
+
+import { MongoClient, ObjectId } from 'mongodb';
+import moment from 'moment-timezone';
+
+// Use the central manager to interact with user data
+import { unifiedUserManager } from '../lib/pluginIntegration.js';
+
+// Plugin information export
+export const info = {
+  name: 'Sports Betting System',
+  version: '3.0.0', // Updated version with Button UI
+  author: 'Alex Macksyn',
+  description: 'Complete sports betting simulation with interactive buttons for EPL, La Liga, Bundesliga, Serie A teams',
+  commands: [
+    { name: 'bet', aliases: ['sportbet', 'sportybet'], description: 'Access sports betting system with interactive buttons' },
+    { name: 'fixtures', aliases: ['matches', 'games'], description: 'View upcoming matches with betting buttons' },
+    { name: 'betslip', aliases: ['slip'], description: 'Manage your bet slip with interactive options' },
+    { name: 'mybets', aliases: ['bets'], description: 'View your active bets' },
+    { name: 'bethistory', aliases: ['betlog'], description: 'View betting history' },
+    { name: 'leagues', aliases: ['competitions'], description: 'View available leagues' },
+    { name: 'results', aliases: ['recent', 'scores'], description: 'View recent match results' }
+  ],
+  // New: Indicate this plugin supports interactive messages
+  supportsInteractive: true
+};
+
+// MongoDB Configuration
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+const DATABASE_NAME = 'whatsapp_bot';
+const BET_COLLECTIONS = {
+  MATCHES: 'betting_matches',
+  BETS: 'betting_bets',
+  BETSLIPS: 'betting_betslips',
+};
+
+// Local constant for currency display
+const CURRENCY_SYMBOL = '₦';
+
+// Database connection
+let db = null;
+let mongoClient = null;
+
+// Initialize betting database
+async function initBettingDatabase() {
+  if (db) return db;
+  
+  try {
+    mongoClient = new MongoClient(MONGODB_URI);
+    await mongoClient.connect();
+    db = mongoClient.db(DATABASE_NAME);
+    
+    await db.collection(BET_COLLECTIONS.MATCHES).createIndex({ matchId: 1 }, { unique: true });
+    await db.collection(BET_COLLECTIONS.BETS).createIndex({ userId: 1, timestamp: -1 });
+    await db.collection(BET_COLLECTIONS.BETSLIPS).createIndex({ userId: 1 });
+    await db.collection(BET_COLLECTIONS.BETSLIPS).createIndex({ shareCode: 1 });
+    
+    console.log('✅ Sports Betting MongoDB connected successfully');
+    
+    startAutoSimulation();
+    
+    return db;
+  } catch (error) {
+    console.error('❌ Sports Betting MongoDB connection failed:', error);
+    throw error;
+  }
+}
+
+// Team data for the 2025/2026 season (same as before)
+const TEAMS = {
+  EPL: {
+    name: 'English Premier League',
+    teams: { 'Arsenal': { strength: 92, form: 90 }, 'Aston Villa': { strength: 80, form: 78 }, 'Bournemouth': { strength: 68, form: 65 }, 'Brentford': { strength: 70, form: 72 }, 'Brighton': { strength: 75, form: 78 }, 'Chelsea': { strength: 84, form: 80 }, 'Crystal Palace': { strength: 72, form: 70 }, 'Everton': { strength: 69, form: 66 }, 'Fulham': { strength: 71, form: 73 }, 'Ipswich Town': { strength: 62, form: 60 }, 'Leicester City': { strength: 73, form: 75 }, 'Liverpool': { strength: 91, form: 88 }, 'Manchester City': { strength: 96, form: 95 }, 'Manchester United': { strength: 85, form: 82 }, 'Newcastle United': { strength: 82, form: 80 }, 'Nottingham Forest': { strength: 67, form: 68 }, 'Southampton': { strength: 64, form: 62 }, 'Tottenham': { strength: 83, form: 81 }, 'West Ham': { strength: 78, form: 75 }, 'Wolves': { strength: 74, form: 72 } }
+  },
+  LALIGA: {
+    name: 'Spanish La Liga',
+    teams: { 'Real Madrid': { strength: 97, form: 95 }, 'Barcelona': { strength: 90, form: 88 }, 'Girona': { strength: 80, form: 82 }, 'Atletico Madrid': { strength: 88, form: 85 }, 'Athletic Bilbao': { strength: 82, form: 80 }, 'Real Sociedad': { strength: 81, form: 83 }, 'Real Betis': { strength: 79, form: 77 }, 'Villarreal': { strength: 78, form: 76 }, 'Valencia': { strength: 77, form: 75 }, 'Sevilla': { strength: 80, form: 78 } }
+  },
+  BUNDESLIGA: {
+    name: 'German Bundesliga',
+    teams: { 'Bayern Munich': { strength: 94, form: 92 }, 'Bayer Leverkusen': { strength: 91, form: 93 }, 'Borussia Dortmund': { strength: 88, form: 86 }, 'RB Leipzig': { strength: 87, form: 88 }, 'VfB Stuttgart': { strength: 84, form: 85 } }
+  },
+  SERIEA: {
+    name: 'Italian Serie A',
+    teams: { 'Inter Milan': { strength: 92, form: 90 }, 'AC Milan': { strength: 87, form: 85 }, 'Juventus': { strength: 86, form: 84 }, 'Atalanta': { strength: 83, form: 81 }, 'Napoli': { strength: 84, form: 82 } }
+  }
+};
+
+// Maps user-friendly aliases to internal bet type keys
+const betTypeAliases = {
+    'over1.5': 'OVER15', 'o1.5': 'OVER15', 'over15': 'OVER15',
+    'under1.5': 'UNDER15', 'u1.5': 'UNDER15', 'under15': 'UNDER15',
+    'over2.5': 'OVER25', 'o2.5': 'OVER25', 'over25': 'OVER25',
+    'under2.5': 'UNDER25', 'u2.5': 'UNDER25', 'under25': 'UNDER25',
+    'btts': 'BTTS_YES', 'gg': 'BTTS_YES', 'btts_yes': 'BTTS_YES',
+    'nobtts': 'BTTS_NO', 'ng': 'BTTS_NO', 'btts_no': 'BTTS_NO',
+    '1': 'HOME_WIN', 'hw': 'HOME_WIN', 'home': 'HOME_WIN', 'homewin': 'HOME_WIN',
+    'x': 'DRAW', 'd': 'DRAW',
+    '2': 'AWAY_WIN', 'aw': 'AWAY_WIN', 'away': 'AWAY_WIN', 'awaywin': 'AWAY_WIN'
+};
+
+// Helper function to display user-friendly bet type names
+function formatBetType(betTypeKey) {
+    switch (betTypeKey) {
+        case 'HOME_WIN': return 'Home Win (1)';
+        case 'AWAY_WIN': return 'Away Win (2)';
+        case 'DRAW': return 'Draw (X)';
+        case 'OVER15': return 'Over 1.5 Goals';
+        case 'UNDER15': return 'Under 1.5 Goals';
+        case 'OVER25': return 'Over 2.5 Goals';
+        case 'UNDER25': return 'Under 2.5 Goals';
+        case 'BTTS_YES': return 'GG (Both Teams To Score)';
+        case 'BTTS_NO': return 'NG (No Goal)';
+        default: return betTypeKey.replace('_', ' ');
+    }
+}
+
+// NEW: Interactive button helper functions
+function createButton(id, title, description = null) {
+    const button = { id, title };
+    if (description) button.description = description;
+    return button;
+}
+
+function createInteractiveMessage(text, buttons, header = null, footer = null) {
+    const message = {
+        text,
+        buttons: buttons.map((btn, index) => ({
+            type: "reply",
+            reply: {
+                id: btn.id,
+                title: btn.title.substring(0, 20) // WhatsApp button title limit
             }
+        }))
+    };
+    
+    // Add header and footer if provided
+    if (header) message.header = { type: "text", text: header };
+    if (footer) message.footer = { text: footer };
+    
+    return { interactive: { type: "button", ...message } };
+}
+
+function createListMessage(text, buttonText, sections, header = null, footer = null) {
+    const message = {
+        text,
+        button: buttonText,
+        sections
+    };
+    
+    if (header) message.header = { type: "text", text: header };
+    if (footer) message.footer = { text: footer };
+    
+    return { interactive: { type: "list", ...message } };
+}
+
+// NEW: Enhanced reply function that supports both buttons and text
+const createReplyFunction = (sock, from, m) => {
+    return async (content, options = {}) => {
+        try {
+            let messageContent;
+            
+            if (typeof content === 'string') {
+                // Simple text message
+                messageContent = { text: content };
+            } else if (content.interactive) {
+                // Interactive message with buttons or list
+                messageContent = content;
+            } else {
+                // Fallback to text
+                messageContent = { text: JSON.stringify(content) };
+            }
+            
+            await sock.sendMessage(from, messageContent, { quoted: m });
+        } catch (error) {
+            console.error('❌ Error sending message:', error.message);
+            // Fallback to simple text if interactive fails
+            if (content.interactive) {
+                await sock.sendMessage(from, { text: content.interactive.text || 'Error displaying interactive message' }, { quoted: m });
+            }
+        }
+    };
+};
+
+// NEW: Handle interactive button responses
+async function handleInteractiveResponse(m, sock, config) {
+    const senderId = m.key.participant || m.key.remoteJid;
+    const from = m.key.remoteJid;
+    const reply = createReplyFunction(sock, from, m);
+    
+    let buttonId = null;
+    let selectedId = null;
+    
+    // Extract button ID from different message types
+    if (m.message?.buttonsResponseMessage) {
+        buttonId = m.message.buttonsResponseMessage.selectedButtonId;
+    } else if (m.message?.listResponseMessage) {
+        selectedId = m.message.listResponseMessage.singleSelectReply.selectedRowId;
+        buttonId = selectedId;
+    }
+    
+    if (!buttonId) return false;
+    
+    const context = { m, sock, config, senderId, from, reply };
+    
+    // Parse button ID format: ACTION_PARAM1_PARAM2
+    const parts = buttonId.split('_');
+    const action = parts[0];
+    
+    switch (action) {
+        case 'FIXTURES':
+            if (parts[1] === 'LEAGUE') {
+                await handleFixtures(context, [parts[2]]);
+            } else {
+                await handleFixtures(context, []);
+            }
+            break;
+            
+        case 'BET':
+            if (parts[1] === 'ADD') {
+                // Format: BET_ADD_MATCHID_BETTYPE
+                const matchId = parts[2];
+                const betType = parts[3];
+                await handleAddToBetSlip(context, [matchId, betType]);
+            }
+            break;
+            
+        case 'SLIP':
+            switch (parts[1]) {
+                case 'VIEW': await handleBetSlip(context, []); break;
+                case 'PLACE': await handlePlaceBet(context); break;
+                case 'CLEAR': await handleClearBetSlip(context); break;
+                case 'SHARE': await handleShareBetSlip(context); break;
+                case 'REMOVE': await handleRemoveFromBetSlip(context, [parts[2]]); break;
+                case 'STAKE': await showStakeSelector(context); break;
+            }
+            break;
+            
+        case 'STAKE':
+            // Format: STAKE_AMOUNT
+            if (parts[1]) {
+                await handleSetStake(context, [parts[1]]);
+            }
+            break;
+            
+        case 'MENU':
+            switch (parts[1]) {
+                case 'FIXTURES': await handleFixtures(context, []); break;
+                case 'LEAGUES': await handleLeagues(context); break;
+                case 'MYBETS': await handleMyBets(context); break;
+                case 'HISTORY': await handleBetHistory(context); break;
+                case 'RESULTS': await handleResults(context); break;
+                case 'BETSLIP': await handleBetSlip(context, []); break;
+            }
+            break;
+            
+        default:
+            return false; // Not handled
+    }
+    
+    return true; // Handled
+}
+
+// Keep all the existing functions (generateOdds, generateMatches, etc.) - they remain the same
+function generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm) {
+  const effectiveHomeStrength = (homeStrength * 0.8) + (homeForm * 0.2);
+  const effectiveAwayStrength = (awayStrength * 0.8) + (awayForm * 0.2);
+  const strengthDiff = effectiveHomeStrength - effectiveAwayStrength;
+  const homeAdvantage = 5;
+  const adjustedHomeStrength = effectiveHomeStrength + homeAdvantage;
+  const totalStrength = adjustedHomeStrength + effectiveAwayStrength;
+  const homeWinProb = (adjustedHomeStrength / totalStrength) * 0.6 + 0.2;
+  const awayWinProb = (effectiveAwayStrength / totalStrength) * 0.6 + 0.2;
+  const drawProb = 1 - homeWinProb - awayWinProb + 0.15;
+  const total = homeWinProb + drawProb + awayWinProb;
+  const normHome = homeWinProb / total;
+  const normDraw = drawProb / total;
+  const normAway = awayWinProb / total;
+  const margin = 0.1;
+  const odds = {
+    HOME_WIN: Math.max(1.1, (1 / normHome) * (1 - margin)),
+    DRAW: Math.max(2.5, (1 / normDraw) * (1 - margin)),
+    AWAY_WIN: Math.max(1.1, (1 / normAway) * (1 - margin)),
+    OVER15: Math.random() * 1.0 + 1.2,
+    UNDER15: Math.random() * 1.5 + 2.0,
+    OVER25: Math.random() * 1.5 + 1.4,
+    UNDER25: Math.random() * 1.2 + 1.8,
+    BTTS_YES: Math.random() * 1.0 + 1.6,
+    BTTS_NO: Math.random() * 1.0 + 1.4
+  };
+  Object.keys(odds).forEach(key => {
+    odds[key] = parseFloat(odds[key].toFixed(2));
+  });
+  return odds;
+}
+
+// Generate Match Function (same as before)
+async function generateMatches(db) {
+    const matches = [];
+    const leagues = Object.keys(TEAMS);
+    let matchId = 1;
+
+    const upcomingFixtures = await db.collection(BET_COLLECTIONS.MATCHES).find(
+        { status: 'upcoming' },
+        { projection: { homeTeam: 1, awayTeam: 1, _id: 0 } }
+    ).toArray();
+
+    const busyTeams = new Set();
+    upcomingFixtures.forEach(fixture => {
+        busyTeams.add(fixture.homeTeam);
+        busyTeams.add(fixture.awayTeam);
+    });
+
+    leagues.forEach(league => {
+        let availableTeams = Object.keys(TEAMS[league].teams).filter(team => !busyTeams.has(team));
+
+        for (let i = availableTeams.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [availableTeams[i], availableTeams[j]] = [availableTeams[j], availableTeams[i]];
+        }
+
+        const numMatches = league === 'EPL' ? 6 : 4;
+
+        for (let i = 0; i < numMatches * 2; i += 2) {
+            if (!availableTeams[i] || !availableTeams[i + 1]) break;
+
+            const homeTeam = availableTeams[i];
+            const awayTeam = availableTeams[i + 1];
+            const homeStrength = TEAMS[league].teams[homeTeam].strength;
+            const awayStrength = TEAMS[league].teams[awayTeam].strength;
+            const homeForm = TEAMS[league].teams[homeTeam].form;
+            const awayForm = TEAMS[league].teams[awayTeam].form;
+
+            const odds = generateOdds(homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm);
+            const matchTime = moment().add(Math.floor(Math.random() * 72) + 1, 'hours');
+
+            matches.push({
+                matchId: matchId++,
+                league: TEAMS[league].name,
+                leagueCode: league,
+                homeTeam, awayTeam, homeStrength, awayStrength, homeForm, awayForm,
+                odds, matchTime: matchTime.toDate(), status: 'upcoming', result: null
+            });
+        }
+    });
+    return matches;
+}
+
+// Keep existing initialization and utility functions...
+async function initializeMatches() {
+  try {
+    const existingMatches = await db.collection(BET_COLLECTIONS.MATCHES).countDocuments({ status: 'upcoming' });
+    if (existingMatches < 15) {
+      const newMatches = await generateMatches(db);
+
+      if (newMatches.length > 0) {
+        const lastMatch = await db.collection(BET_COLLECTIONS.MATCHES).findOne({}, { sort: { matchId: -1 } });
+        let nextMatchId = lastMatch ? lastMatch.matchId + 1 : 1;
+        newMatches.forEach(match => {
+          match.matchId = nextMatchId++;
+        });
+        await db.collection(BET_COLLECTIONS.MATCHES).insertMany(newMatches);
+        console.log(`✅ Generated ${newMatches.length} new matches`);
+      }
+    }
+  } catch (error) {
+    console.error('Error initializing matches:', error);
+  }
+}
+
+function updateTeamForms(match) {
+    try {
+        if (!match || !match.leagueCode || !match.homeTeam || !match.awayTeam) return;
+        const homeTeam = TEAMS[match.leagueCode].teams[match.homeTeam];
+        const awayTeam = TEAMS[match.leagueCode].teams[match.awayTeam];
+
+        if (match.result.result === 'HOME_WIN') {
+            homeTeam.form = Math.min(100, homeTeam.form + 5);
+            awayTeam.form = Math.max(0, awayTeam.form - 5);
+        } else if (match.result.result === 'AWAY_WIN') {
+            homeTeam.form = Math.max(0, homeTeam.form - 5);
+            awayTeam.form = Math.min(100, awayTeam.form + 5);
+        } else {
+            homeTeam.form = Math.max(0, homeTeam.form - 2);
+            awayTeam.form = Math.min(100, awayTeam.form + 2);
+        }
+    } catch (error) {
+        console.error(`Error updating form for match ${match.matchId}:`, error);
+    }
+}
+
+function simulateMatchResult(homeStrength, awayStrength, odds) {
+  const rand = Math.random();
+  const homeWinProb = 1 / odds.HOME_WIN;
+  const drawProb = 1 / odds.DRAW;
+  let result;
+  if (rand < homeWinProb) {
+    result = 'HOME_WIN';
+  } else if (rand < homeWinProb + drawProb) {
+    result = 'DRAW';
+  } else {
+    result = 'AWAY_WIN';
+  }
+  let homeGoals, awayGoals;
+  switch (result) {
+    case 'HOME_WIN': homeGoals = Math.floor(Math.random() * 3) + 1; awayGoals = Math.floor(Math.random() * homeGoals); break;
+    case 'AWAY_WIN': awayGoals = Math.floor(Math.random() * 3) + 1; homeGoals = Math.floor(Math.random() * awayGoals); break;
+    case 'DRAW': const drawScore = Math.floor(Math.random() * 4); homeGoals = awayGoals = drawScore; break;
+  }
+  const totalGoals = homeGoals + awayGoals;
+  return { result, homeGoals, awayGoals, totalGoals, over15: totalGoals > 1.5, over25: totalGoals > 2.5, btts: homeGoals > 0 && awayGoals > 0 };
+}
+
+function isAdmin(userId) {
+  const adminNumbers = process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : [];
+  return adminNumbers.includes(userId.split('@')[0]);
+}
+
+function isOwner(userId) {
+  const ownerNumber = process.env.OWNER_NUMBER || '';
+  return userId.split('@')[0] === ownerNumber;
+}
+
+// UPDATED: Main plugin handler with interactive support
+export default async function bettingHandler(m, sock, config) {
+  try {
+    if (!db) {
+      await initBettingDatabase();
+      await initializeMatches();
+    }
+
+    // Handle interactive button responses first
+    if (m.message?.buttonsResponseMessage || m.message?.listResponseMessage) {
+      const handled = await handleInteractiveResponse(m, sock, config);
+      if (handled) return; // Exit if interactive message was handled
+    }
+
+    // Handle traditional text commands
+    if (!m || !m.body || !m.body.startsWith(config.PREFIX)) return;
+    const messageBody = m.body.slice(config.PREFIX.length).trim();
+    if (!messageBody) return;
+    const args = messageBody.split(' ').filter(arg => arg.length > 0);
+    const command = args[0].toLowerCase();
+    
+    const commandInfo = info.commands.find(c => c.name === command || c.aliases.includes(command));
+    if (!commandInfo) return;
+
+    const senderId = m.key.participant || m.key.remoteJid;
+    const from = m.key.remoteJid;
+    if (!senderId || !from) return;
+
+    await unifiedUserManager.initUser(senderId);
+
+    const reply = createReplyFunction(sock, from, m);
+    const context = { m, sock, config, senderId, from, reply };
+
+    switch (command) {
+        case 'bet': case 'sportbet': case 'sportybet':
+            if (args.length === 1) { await showBettingMenuWithButtons(context); } 
+            else { await handleBetCommand(context, args.slice(1)); }
+            break;
+        case 'fixtures': case 'matches': case 'games': await handleFixtures(context, args.slice(1)); break;
+        case 'betslip': case 'slip': await handleBetSlip(context, args.slice(1)); break;
+        case 'mybets': case 'bets': await handleMyBets(context); break;
+        case 'bethistory': case 'betlog': await handleBetHistory(context); break;
+        case 'leagues': case 'competitions': await handleLeagues(context); break;
+        case 'results': case 'recent': case 'scores': await handleResults(context); break;
+    }
+  } catch (error) {
+    console.error('❌ Betting plugin error:', error.message);
+  }
+}
+
+// UPDATED: Show betting menu with interactive buttons
+async function showBettingMenuWithButtons(context) {
+    const { reply } = context;
+    
+    const menuText = `⚽ *SPORTY BET* ⚽\n\n🏆 *Leagues Available:*\n• 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League\n• 🇪🇸 La Liga\n• 🇩🇪 Bundesliga\n• 🇮🇹 Serie A\n\n💡 Choose an option below to get started!`;
+    
+    const buttons = [
+        createButton('MENU_FIXTURES', '⚽ View Fixtures'),
+        createButton('MENU_BETSLIP', '📋 My Bet Slip'),
+        createButton('MENU_MYBETS', '🎫 My Bets')
+    ];
+    
+    const message = createInteractiveMessage(
+        menuText,
+        buttons,
+        'SPORTY BET MENU',
+        'Choose an option to continue'
+    );
+    
+    await reply(message);
+}
+
+// UPDATED: Enhanced fixtures display with betting buttons
+async function handleFixtures(context, args) {
+    const { reply } = context;
+    try {
+        let league = null;
+        if (args.length > 0) {
+            const leagueInput = args[0].toLowerCase();
+            const leagueMap = {
+                'epl': 'EPL', 'premier': 'EPL', 'laliga': 'LALIGA', 'liga': 'LALIGA',
+                'bundesliga': 'BUNDESLIGA', 'german': 'BUNDESLIGA', 'seriea': 'SERIEA',
+                'serie': 'SERIEA', 'italian': 'SERIEA'
+            };
+            league = leagueMap[leagueInput];
+        }
+
+        // If no specific league, show league selector first
+        if (!league) {
+            const sections = [{
+                title: "Available Leagues",
+                rows: [
+                    { id: "FIXTURES_LEAGUE_EPL", title: "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League", description: "English Premier League fixtures" },
+                    { id: "FIXTURES_LEAGUE_LALIGA", title: "🇪🇸 La Liga", description: "Spanish La Liga fixtures" },
+                    { id: "FIXTURES_LEAGUE_BUNDESLIGA", title: "🇩🇪 Bundesliga", description: "German Bundesliga fixtures" },
+                    { id: "FIXTURES_LEAGUE_SERIEA", title: "🇮🇹 Serie A", description: "Italian Serie A fixtures" }
+                ]
+            }];
+
+            const message = createListMessage(
+                "⚽ *UPCOMING FIXTURES* ⚽\n\nSelect a league to view fixtures:",
+                "Select League",
+                sections,
+                "FIXTURE SELECTION"
+            );
+
+            await reply(message);
+            return;
+        }
+
+        const query = { leagueCode: league, status: 'upcoming' };
+        const matches = await db.collection(BET_COLLECTIONS.MATCHES).find(query).sort({ matchTime: 1 }).limit(5).toArray();
+
+        if (matches.length === 0) {
+            await reply('⚽ *No upcoming matches found for this league.*');
+            return;
+        }
+
+        // Show first match with betting options
+        const match = matches[0];
+        const matchTime = moment(match.matchTime).tz('Africa/Lagos').format('DD/MM HH:mm');
+        
+        let fixturesText = `⚽ *${match.homeTeam} vs ${match.awayTeam}*\n\n`;
+        fixturesText += `🏆 ${match.league}\n`;
+        fixturesText += `📅 ${matchTime} WAT\n\n`;
+        fixturesText += `💰 *Odds:*\n`;
+        fixturesText += `Home: ${match.odds.HOME_WIN} | Draw: ${match.odds.DRAW} | Away: ${match.odds.AWAY_WIN}\n`;
+        fixturesText += `Over 2.5: ${match.odds.OVER25} | Under 2.5: ${match.odds.UNDER25}\n`;
+        fixturesText += `GG: ${match.odds.BTTS_YES} | NG: ${match.odds.BTTS_NO}\n\n`;
+        fixturesText += `🆔 Match ID: ${match.matchId}`;
+
+        // Create betting buttons for this match
+        const sections = [{
+            title: "Match Winner",
+            rows: [
+                { id: `BET_ADD_${match.matchId}_HOME_WIN`, title: `Home Win (${match.odds.HOME_WIN})`, description: `${match.homeTeam} to win` },
+                { id: `BET_ADD_${match.matchId}_DRAW`, title: `Draw (${match.odds.DRAW})`, description: `Match ends in a draw` },
+                { id: `BET_ADD_${match.matchId}_AWAY_WIN`, title: `Away Win (${match.odds.AWAY_WIN})`, description: `${match.awayTeam} to win` }
+            ]
+        }, {
+            title: "Goals & BTTS",
+            rows: [
+                { id: `BET_ADD_${match.matchId}_OVER25`, title: `Over 2.5 (${match.odds.OVER25})`, description: "3 or more goals" },
+, '$options' : 'i' } 
+    });
+
+    if (!placedBet) {
+        return reply(`❌ Bet ID *${betId}* not found in your active bets. Check your \`.mybets\` list.`);
+    }
+
+    const shareCode = placedBet._id.toString().slice(-6).toUpperCase();
+
+    await reply(`🎟️ *Share Your Placed Bet!* \n\n*Code: ${shareCode}*\n\n📲 Your friends can now use \`.betslip load ${shareCode}\` to re-bet your exact selections.`);
+}
+
+// UPDATED: My bets with interactive options
+async function handleMyBets(context) {
+    const { reply, senderId } = context;
+    try {
+        const activeBets = await db.collection(BET_COLLECTIONS.BETS).find({ userId: senderId, status: 'pending' }).sort({ placedAt: -1 }).limit(10).toArray();
+        if (activeBets.length === 0) {
+            const buttons = [
+                createButton('MENU_FIXTURES', '⚽ View Fixtures'),
+                createButton('MENU_LEAGUES', '🏆 Browse Leagues')
+            ];
+            
+            const message = createInteractiveMessage(
+                '📋 *No active bets*\n\n💡 Start by viewing fixtures to place your first bet!',
+                buttons,
+                'NO ACTIVE BETS'
+            );
+            
+            await reply(message);
+            return;
+        }
+        let betsText = `📋 *YOUR ACTIVE BETS* 📋\n\n`;
+        activeBets.forEach((bet, index) => {
+            const betId = bet._id.toString().slice(-6).toUpperCase();
+            const placedTime = moment(bet.placedAt).tz('Africa/Lagos').format('DD/MM HH:mm');
+            betsText += `*${index + 1}.* 🎫 ID: *${betId}*\n`;
+            betsText += `💰 Stake: ${CURRENCY_SYMBOL}${bet.stake.toLocaleString()}\n`;
+            betsText += `📊 Odds: ${bet.totalOdds.toFixed(2)}\n`;
+            betsText += `🏆 Potential: ${CURRENCY_SYMBOL}${bet.potentialWin.toLocaleString('en-US', { maximumFractionDigits: 0 })}\n`;
+            betsText += `📅 Placed: ${placedTime}\n`;
+            betsText += `📋 Selections: ${bet.selections.length}\n\n`;
         });
 
-        if (newBetStatus === 'won') {
-            const economy = getEconomy(bet.userId);
-            await economy.add(parseFloat(bet.potentialWinnings));
-            // Notify user of winnings
-            await message.client.sendMessage(bet.userId, {
-                text: `🎉 Congratulations! Your bet slip won! You've been credited ${economy.currency}${bet.potentialWinnings}.`
-            });
-            settledCount++;
-        } else if (newBetStatus === 'lost') {
-            await message.client.sendMessage(bet.userId, {
-                text: `😔 Unlucky! Your bet slip lost.`
-            });
-            settledCount++;
+        const buttons = [
+            createButton('MENU_FIXTURES', '⚽ Place New Bet'),
+            createButton('MENU_HISTORY', '📊 Bet History'),
+            createButton('MENU_RESULTS', '🏆 Recent Results')
+        ];
+        
+        const message = createInteractiveMessage(betsText, buttons, 'YOUR ACTIVE BETS');
+        await reply(message);
+    } catch (error) {
+        await reply('❌ *Error loading your bets. Please try again.*');
+        console.error('My bets error:', error);
+    }
+}
+
+// Keep all remaining functions (handleBetHistory, handleLeagues, handleResults, simulation functions, etc.)
+// but add interactive buttons where appropriate...
+
+async function handleBetHistory(context) {
+    const { reply, senderId } = context;
+    try {
+        const betHistory = await db.collection(BET_COLLECTIONS.BETS).find({ userId: senderId }).sort({ placedAt: -1 }).limit(15).toArray();
+        if (betHistory.length === 0) {
+            const buttons = [
+                createButton('MENU_FIXTURES', '⚽ Place First Bet'),
+                createButton('MENU_LEAGUES', '🏆 Browse Leagues')
+            ];
+            
+            const message = createInteractiveMessage(
+                '📋 *No betting history*\n\n💡 Place your first bet to start building your history!',
+                buttons,
+                'NO BETTING HISTORY'
+            );
+            
+            await reply(message);
+            return;
         }
-    }
+        let historyText = `📊 *YOUR BETTING HISTORY* 📊\n\n`;
+        let totalStaked = 0;
+        let totalWon = 0;
+        let wins = 0;
+        let losses = 0;
+        betHistory.forEach((bet) => {
+            const betId = bet._id.toString().slice(-6).toUpperCase();
+            const placedTime = moment(bet.placedAt).tz('Africa/Lagos').format('DD/MM');
+            totalStaked += bet.stake;
+            let statusIcon = '⏳';
+            if (bet.status === 'won') {
+                statusIcon = '✅';
+                totalWon += bet.payout;
+                wins++;
+            } else if (bet.status === 'lost') {
+                statusIcon = '❌';
+                losses++;
+            }
+            historyText += `${statusIcon} ${betId} | ${CURRENCY_SYMBOL}${bet.stake.toLocaleString()} | ${bet.totalOdds.toFixed(2)} | ${placedTime}\n`;
+        });
+        const profit = totalWon - totalStaked;
+        const winRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : 0;
+        historyText += `\n📊 *STATISTICS*\n`;
+        historyText += `💰 Total Staked: ${CURRENCY_SYMBOL}${totalStaked.toLocaleString()}\n`;
+        historyText += `🏆 Total Won: ${CURRENCY_SYMBOL}${totalWon.toLocaleString()}\n`;
+        historyText += `💸 P/L: ${profit >= 0 ? '🟢' : '🔴'} ${CURRENCY_SYMBOL}${Math.abs(profit).toLocaleString()}\n`;
+        historyText += `📈 Win Rate: ${winRate}% (${wins}W/${losses}L)\n`;
 
-    await message.reply(`Settled ${settledCount} bet slips related to this match.`);
+        const buttons = [
+            createButton('MENU_MYBETS', '🎫 Active Bets'),
+            createButton('MENU_FIXTURES', '⚽ Place New Bet'),
+            createButton('MENU_RESULTS', '🏆 Recent Results')
+        ];
+        
+        const message = createInteractiveMessage(historyText, buttons, 'BETTING HISTORY');
+        await reply(message);
+    } catch (error) {
+        await reply('❌ *Error loading betting history. Please try again.*');
+        console.error('Bet history error:', error);
+    }
 }
 
+async function handleLeagues(context) {
+    const { reply } = context;
+    try {
+        let leaguesText = `🏆 *AVAILABLE LEAGUES* 🏆\n\n`;
+        Object.entries(TEAMS).forEach(([code, league]) => {
+            const teamCount = Object.keys(league.teams).length;
+            let flag = '';
+            switch (code) {
+                case 'EPL': flag = '🏴󠁧󠁢󠁥󠁮󠁧󠁿'; break;
+                case 'LALIGA': flag = '🇪🇸'; break;
+                case 'BUNDESLIGA': flag = '🇩🇪'; break;
+                case 'SERIEA': flag = '🇮🇹'; break;
+            }
+            leaguesText += `${flag} *${league.name}*\n`;
+            leaguesText += `👥 Teams: ${teamCount}\n\n`;
+        });
 
-/**
- * Determines the outcome of a match (1, X, 2).
- */
-function getOutcome(result) {
-    if (result.homeScore > result.awayScore) return '1';
-    if (result.homeScore < result.awayScore) return '2';
-    return 'X';
+        const sections = [{
+            title: "Select League to View Fixtures",
+            rows: [
+                { id: "FIXTURES_LEAGUE_EPL", title: "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League", description: "View EPL fixtures & odds" },
+                { id: "FIXTURES_LEAGUE_LALIGA", title: "🇪🇸 La Liga", description: "View La Liga fixtures & odds" },
+                { id: "FIXTURES_LEAGUE_BUNDESLIGA", title: "🇩🇪 Bundesliga", description: "View Bundesliga fixtures & odds" },
+                { id: "FIXTURES_LEAGUE_SERIEA", title: "🇮🇹 Serie A", description: "View Serie A fixtures & odds" }
+            ]
+        }];
+
+        const message = createListMessage(
+            leaguesText,
+            "View Fixtures",
+            sections,
+            "AVAILABLE LEAGUES"
+        );
+
+        await reply(message);
+    } catch (error) {
+        await reply('❌ *Error loading leagues. Please try again.*');
+        console.error('Leagues error:', error);
+    }
 }
 
-
-// --- ADMIN FUNCTIONS ---
-
-async function handleAddTeam(message, db, args) {
-    // .addteam <Team Name> <Strength (1-100)>
-    const name = args[0]?.replace(/_/g, " ");
-    const strength = parseInt(args[1], 10);
-
-    if (!name || isNaN(strength) || strength < 1 || strength > 100) {
-        return message.reply("Invalid format. Use: .addteam <Team_Name> <Strength (1-100)>");
-    }
-
-    const existingTeam = await db.collection(COLLECTIONS.TEAMS).findOne({
-        name
-    });
-    if (existingTeam) {
-        return message.reply(`Team "${name}" already exists.`);
-    }
-
-    await db.collection(COLLECTIONS.TEAMS).insertOne({
-        name,
-        strength,
-        form: 0, // Initial form
-        formHistory: [], // Stores last 5 match results (3 for W, 1 for D, 0 for L)
-    });
-
-    return message.reply(`Team "${name}" added with strength ${strength}.`);
-}
-
-async function handleAddMatch(message, db, args) {
-    // .addmatch <HomeTeam> <AwayTeam> <League> <YYYY-MM-DDTHH:MM> <Odds1> <OddsX> <Odds2>
-    const [homeTeam, awayTeam, league, dateStr, odds1, oddsX, odds2] = args;
-    if (args.length < 7) {
-        return message.reply("Invalid format. Use: .addmatch Home Away League YYYY-MM-DDTHH:MM Odds1 OddsX Odds2");
-    }
-
-    const matchId = `M${Date.now()}`;
-    const newMatch = {
-        matchId,
-        homeTeam: homeTeam.replace(/_/g, " "),
-        awayTeam: awayTeam.replace(/_/g, " "),
-        league: league.replace(/_/g, " "),
-        date: new Date(dateStr),
-        status: 'upcoming',
-        odds: {
-            '1': parseFloat(odds1),
-            'X': parseFloat(oddsX),
-            '2': parseFloat(odds2),
-        },
-        result: null
-    };
-
-    await db.collection(COLLECTIONS.MATCHES).insertOne(newMatch);
-    // Invalidate cache
-    fixtureCache.timestamp = 0;
-    return message.reply(`Match added with ID: ${matchId}`);
-}
-
-async function handleCancelMatch(message, db, matchId) {
-    const result = await db.collection(COLLECTIONS.MATCHES).updateOne({
-        matchId
-    }, {
-        $set: {
-            status: 'cancelled'
+async function handleResults(context) {
+    const { reply } = context;
+    try {
+        const recentResults = await getRecentResults(8);
+        if (recentResults.length === 0) {
+            const buttons = [
+                createButton('MENU_FIXTURES', '⚽ View Fixtures'),
+                createButton('MENU_LEAGUES', '🏆 Browse Leagues')
+            ];
+            
+            const message = createInteractiveMessage(
+                '📊 *No recent results available*\n\nCheck back later for match results!',
+                buttons,
+                'NO RECENT RESULTS'
+            );
+            
+            await reply(message);
+            return;
         }
-    });
-    if (result.modifiedCount === 0) return message.reply("Match not found or already cancelled.");
+        let resultsText = `📊 *RECENT RESULTS* 📊\n\n`;
+        recentResults.forEach((match, index) => {
+            const completedTime = moment(match.completedAt).tz('Africa/Lagos').format('DD/MM HH:mm');
+            resultsText += `*${index + 1}.* ${match.homeTeam} ${match.result.homeGoals} - ${match.result.awayGoals} ${match.awayTeam}\n`;
+            resultsText += `🏆 ${match.league}\n`;
+            resultsText += `📅 ${completedTime} WAT\n\n`;
+        });
 
-    // TODO: Refund bets on this match
-    // This requires finding all slips with this match, refunding the stake, and marking them as void.
-
-    // Invalidate cache
-    fixtureCache.timestamp = 0;
-    return message.reply(`Match ${matchId} has been cancelled. Bets should be refunded.`);
+        const buttons = [
+            createButton('MENU_FIXTURES', '⚽ View Fixtures'),
+            createButton('MENU_MYBETS', '🎫 My Bets'),
+            createButton('MENU_HISTORY', '📊 Bet History')
+        ];
+        
+        const message = createInteractiveMessage(resultsText, buttons, 'RECENT RESULTS');
+        await reply(message);
+    } catch (error) {
+        await reply('❌ *Error loading results. Please try again.*');
+        console.error('Results error:', error);
+    }
 }
+
+// Keep all simulation and utility functions unchanged
+let simulationInterval = null;
+
+function startAutoSimulation() {
+  if (simulationInterval) clearInterval(simulationInterval);
+  simulationInterval = setInterval(autoSimulateMatches, 5 * 60 * 1000);
+  console.log('✅ Auto match simulation started (checks every 5 minutes)');
+}
+
+function stopAutoSimulation() {
+  if (simulationInterval) {
+    clearInterval(simulationInterval);
+    simulationInterval = null;
+    console.log('⏹️ Auto match simulation stopped');
+  }
+}
+
+async function autoSimulateMatches() {
+  try {
+    if (!db) return;
+    const now = new Date();
+    const matchesToSimulate = await db.collection(BET_COLLECTIONS.MATCHES).find({ status: 'upcoming', matchTime: { $lte: now } }).toArray();
+    if (matchesToSimulate.length === 0) return;
+    
+    console.log(`⚽ Auto-simulating ${matchesToSimulate.length} matches...`);
+    
+    for (const match of matchesToSimulate) {
+      const result = simulateMatchResult(match.homeStrength, match.awayStrength, match.odds);
+      
+      const updatedMatchResult = await db.collection(BET_COLLECTIONS.MATCHES).findOneAndUpdate(
+          { matchId: match.matchId }, 
+          { $set: { status: 'completed', result: result, completedAt: new Date() } },
+          { returnDocument: 'after' }
+      );
+      
+      console.log(`✅ ${match.homeTeam} ${result.homeGoals}-${result.awayGoals} ${match.awayTeam}`);
+      
+      await settleBetsForMatch(match.matchId, result);
+      
+      if(updatedMatchResult.value) {
+          updateTeamForms(updatedMatchResult.value);
+      }
+    }
+    
+    await initializeMatches();
+    console.log(`✅ Auto-simulation complete. Settled bets for ${matchesToSimulate.length} matches`);
+  } catch (error) {
+    console.error('❌ Auto simulation error:', error);
+  }
+}
+
+async function getRecentResults(limit = 8) {
+  try {
+    return await db.collection(BET_COLLECTIONS.MATCHES).find({ status: 'completed' }).sort({ completedAt: -1 }).limit(limit).toArray();
+  } catch (error) {
+    console.error('Error getting recent results:', error);
+    return [];
+  }
+}
+
+async function handleSimulateBets(context) {
+    const { reply, senderId } = context;
+    try {
+        const isAdminUser = isAdmin(senderId) || isOwner(senderId);
+        if (!isAdminUser) {
+            await reply('🚫 *Only administrators can manually simulate matches*');
+            return;
+        }
+        const upcomingMatches = await db.collection(BET_COLLECTIONS.MATCHES).find({ status: 'upcoming' }).limit(3).toArray();
+        if (upcomingMatches.length === 0) {
+            await reply('⚽ *No matches to simulate*');
+            return;
+        }
+        let simulationText = `⚽ *MANUAL SIMULATION RESULTS* ⚽\n\n`;
+        for (const match of upcomingMatches) {
+            const result = simulateMatchResult(match.homeStrength, match.awayStrength, match.odds);
+            const updatedMatchResult = await db.collection(BET_COLLECTIONS.MATCHES).findOneAndUpdate(
+                { matchId: match.matchId }, 
+                { $set: { status: 'completed', result: result, completedAt: new Date() } },
+                { returnDocument: 'after' }
+            );
+            simulationText += `${match.homeTeam} ${result.homeGoals} - ${result.awayGoals} ${match.awayTeam}\n`;
+            simulationText += `🏆 Result: ${result.result.replace('_', ' ')}\n`;
+            simulationText += `⚽ Goals: ${result.totalGoals} | BTTS: ${result.btts ? 'Yes' : 'No'}\n\n`;
+            await settleBetsForMatch(match.matchId, result);
+
+            if(updatedMatchResult.value) {
+                updateTeamForms(updatedMatchResult.value);
+            }
+        }
+        simulationText += `✅ *All bets settled*\n🔄 *Generating new matches...*`;
+
+        const buttons = [
+            createButton('MENU_RESULTS', '🏆 View Results'),
+            createButton('MENU_FIXTURES', '⚽ New Fixtures'),
+            createButton('MENU_MYBETS', '🎫 Check Bets')
+        ];
+        
+        const message = createInteractiveMessage(simulationText, buttons, 'SIMULATION COMPLETE');
+        await reply(message);
+        await initializeMatches();
+    } catch (error) {
+        await reply('❌ *Error simulating matches. Please try again.*');
+        console.error('Simulate bets error:', error);
+    }
+}
+
+async function settleBetsForMatch(matchId, matchResult) {
+  try {
+    const pendingBets = await db.collection(BET_COLLECTIONS.BETS).find({ "selections.matchId": matchId, status: 'pending' }).toArray();
+    for (const bet of pendingBets) {
+      let allMatchesCompleted = true;
+      let betWon = true;
+
+      for (const selection of bet.selections) {
+        const match = await db.collection(BET_COLLECTIONS.MATCHES).findOne({ matchId: selection.matchId });
+        if (!match || match.status !== 'completed') {
+          allMatchesCompleted = false;
+          break;
+        }
+        
+        let selectionWon = false;
+        const currentMatchResult = match.result;
+
+        switch (selection.betType) {
+            case 'HOME_WIN': selectionWon = currentMatchResult.result === 'HOME_WIN'; break;
+            case 'AWAY_WIN': selectionWon = currentMatchResult.result === 'AWAY_WIN'; break;
+            case 'DRAW': selectionWon = currentMatchResult.result === 'DRAW'; break;
+            case 'OVER15': selectionWon = currentMatchResult.over15; break;
+            case 'UNDER15': selectionWon = !currentMatchResult.over15; break;
+            case 'OVER25': selectionWon = currentMatchResult.over25; break;
+            case 'UNDER25': selectionWon = !currentMatchResult.over25; break;
+            case 'BTTS_YES': selectionWon = currentMatchResult.btts; break;
+            case 'BTTS_NO': selectionWon = !currentMatchResult.btts; break;
+        }
+        if (!selectionWon) {
+          betWon = false;
+          break;
+        }
+      }
+      
+      if (allMatchesCompleted) {
+        if (betWon) {
+          await unifiedUserManager.addMoney(bet.userId, bet.potentialWin, 'Sports bet win');
+          await db.collection(BET_COLLECTIONS.BETS).updateOne({ _id: bet._id }, { $set: { status: 'won', payout: bet.potentialWin, settledAt: new Date() } });
+        } else {
+          await db.collection(BET_COLLECTIONS.BETS).updateOne({ _id: bet._id }, { $set: { status: 'lost', payout: 0, settledAt: new Date() } });
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error settling bets:', error);
+  }
+}
+
+// Graceful shutdown
+function gracefulShutdown() {
+    console.log('🛑 Shutting down sports betting plugin...');
+    stopAutoSimulation();
+    if (mongoClient) {
+        mongoClient.close();
+    }
+    process.exit(0);
+}
+
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
