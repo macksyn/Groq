@@ -119,35 +119,48 @@ async function calculateTenantBillingPeriod(tenant, groupId, settings) {
   const baseDate = group.createdAt ? moment(group.createdAt) : anchorDate;
 
   if (settings.paymentFrequency === 'monthly') {
-    // Find the current month's due date
+    // Set due date to the configured day of the current month
     const dueDay = Math.min(settings.monthlyDueDay, now.daysInMonth());
     dueDate = now.clone().startOf('month').date(dueDay).startOf('day');
+    periodStart = now.clone().startOf('month').startOf('day');
+    periodEnd = dueDate.clone().endOf('day');
 
-    // If due date is in the future or today, use it; otherwise, use next month
-    if (now.isSameOrAfter(dueDate, 'day')) {
+    // Check if the current period is paid
+    const hasPaid = await db.collection(COLLECTIONS.BILLING_CYCLES).findOne({
+      tenantId: tenant.tenantId,
+      groupId,
+      periodStart: periodStart.toDate(),
+      paid: true
+    });
+
+    // If current period is paid and today is on/after due date, advance to next period
+    if (hasPaid && now.isSameOrAfter(dueDate, 'day')) {
       dueDate = now.clone().add(1, 'month').startOf('month').date(dueDay).startOf('day');
       periodStart = now.clone().startOf('month').add(1, 'month').startOf('day');
       periodEnd = dueDate.clone().endOf('day');
-    } else {
-      periodStart = now.clone().startOf('month').startOf('day');
-      periodEnd = dueDate.clone().endOf('day');
     }
   } else {
-    // Weekly billing
+    // Weekly billing (unchanged for brevity)
     const weekStart = now.clone().startOf('isoWeek');
     dueDate = weekStart.clone().isoWeekday(settings.weeklyDueDay).startOf('day');
+    periodStart = weekStart.clone().startOf('day');
+    periodEnd = dueDate.clone().endOf('day');
 
-    if (now.isSameOrAfter(dueDate, 'day')) {
+    const hasPaid = await db.collection(COLLECTIONS.BILLING_CYCLES).findOne({
+      tenantId: tenant.tenantId,
+      groupId,
+      periodStart: periodStart.toDate(),
+      paid: true
+    });
+
+    if (hasPaid && now.isSameOrAfter(dueDate, 'day')) {
       dueDate = weekStart.clone().add(1, 'week').isoWeekday(settings.weeklyDueDay).startOf('day');
       periodStart = weekStart.clone().add(1, 'week').startOf('day');
-      periodEnd = dueDate.clone().endOf('day');
-    } else {
-      periodStart = weekStart.clone().startOf('day');
       periodEnd = dueDate.clone().endOf('day');
     }
   }
 
-  // Check if current period is tracked in billing_cycles
+  // Check if the period exists in billing_cycles, create if not
   const cycle = await db.collection(COLLECTIONS.BILLING_CYCLES).findOne({
     tenantId: tenant.tenantId,
     groupId,
@@ -179,15 +192,14 @@ async function calculateTenantBillingPeriod(tenant, groupId, settings) {
 
 // Check if tenant has paid for current or any overdue period
 async function hasPaidCurrentPeriod(tenantId, groupId, billingInfo) {
-  const now = moment();
   const payment = await db.collection(COLLECTIONS.PAYMENT_HISTORY).findOne({
     tenantId,
     groupId,
-    date: { $gte: billingInfo.periodStart.toDate(), $lte: now.toDate() }
+    periodStart: billingInfo.periodStart.toDate()
   });
 
   if (payment) {
-    // Mark billing cycle as paid
+    // Mark billing cycle as paid (if not already)
     await db.collection(COLLECTIONS.BILLING_CYCLES).updateOne(
       { tenantId, groupId, periodStart: billingInfo.periodStart.toDate() },
       { $set: { paid: true, paidDate: payment.date } }
@@ -675,10 +687,16 @@ async function handleStatus(context) {
     return reply('❌ You are not registered as a tenant in this group.');
   }
   
-  const billingInfo = await calculateTenantBillingPeriod(tenant, from, settings);
-  const hasPaid = await hasPaidCurrentPeriod(senderId, from, billingInfo);
+  // Get the earliest unpaid period, or current period if none unpaid
   const unpaidPeriods = await getUnpaidPeriods(senderId, from, settings);
+  let billingInfo;
+  if (unpaidPeriods.length > 0) {
+    billingInfo = unpaidPeriods[0]; // Use earliest unpaid period
+  } else {
+    billingInfo = await calculateTenantBillingPeriod(tenant, from, settings);
+  }
   
+  const hasPaid = await hasPaidCurrentPeriod(senderId, from, billingInfo);
   await initEconomyUser(senderId);
   const economyData = await getUserEconomyData(senderId);
   
@@ -695,7 +713,7 @@ async function handleStatus(context) {
   } else {
     statusEmoji = '🚨';
     statusText = `OVERDUE (${unpaidPeriods.length} period${unpaidPeriods.length > 1 ? 's' : ''})`;
-    actionText = `${unpaidPeriods[0].daysOverdue} day(s) late!`;
+    actionText = `${unpaidPeriods.length > 0 ? unpaidPeriods[0].daysOverdue : billingInfo.daysOverdue} day(s) late!`;
   }
   
   const statusMsg = `📊 *YOUR RENT STATUS* 📊\n\n` +
