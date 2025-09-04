@@ -1,13 +1,13 @@
 // plugins/Football_betting_interactive.js - REFACTORED INTERACTIVE UI VERSION
 
-import { MongoClient, ObjectId } from 'mongodb';
+import { MongoClient } from 'mongodb'; // ObjectId is not used, so it's removed for cleanliness
 import moment from 'moment-timezone';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
 // Plugin information export
 export const info = {
   name: 'Sports Betting System',
-  version: '3.0.0', // Interactive UI Version
+  version: '3.0.1', // Interactive UI Version
   author: 'Alex Macksyn & Gemini',
   description: 'Interactive sports betting simulation with an intelligent, button-driven UI.',
   commands: [
@@ -200,6 +200,25 @@ export default async function bettingHandler(m, sock, config) {
             await handleInteractiveReply(context, interactiveId);
             return;
         }
+        
+        // Check for state-based text input (e.g., waiting for a stake amount)
+        const currentState = userState[senderId];
+        if (currentState && m.body) {
+            const textInput = m.body.trim();
+            // Clear the user's state immediately after capturing the input
+            delete userState[senderId];
+
+            if (currentState.action === 'awaiting_stake' || currentState.action === 'awaiting_stake_before_place') {
+                // The user was prompted to enter a stake. Process it.
+                await handleSetStake(context, textInput);
+                
+                // If the original goal was to place the bet, re-trigger that action now that the stake is set.
+                if (currentState.action === 'awaiting_stake_before_place') {
+                    await handlePlaceBet(context);
+                }
+                return; // Stop further processing
+            }
+        }
 
         // Process text commands
         if (!m.body.startsWith(config.PREFIX)) return;
@@ -233,9 +252,10 @@ async function handleInteractiveReply(context, interactiveId) {
     const { senderId } = context;
     const [action, ...params] = interactiveId.split(':');
 
-    // Clear state after use
-    const state = userState[senderId];
-    delete userState[senderId];
+    // It's safer to not clear state here, but in the functions that use it.
+    // This prevents issues if a state is meant to persist across multiple steps.
+    // const state = userState[senderId];
+    // delete userState[senderId];
 
     switch (action) {
         case 'menu': await handleMenuSelection(context, params[0]); break;
@@ -252,15 +272,14 @@ async function handleInteractiveReply(context, interactiveId) {
 async function showBettingMenu(context) {
     const { sock, from } = context;
     const buttons = [
-        { buttonId: 'menu:fixtures', buttonText: { displayText: '⚽ View Fixtures' }, type: 1 },
-        { buttonId: 'menu:betslip', buttonText: { displayText: '📋 Manage Betslip' }, type: 1 },
-        { buttonId: 'menu:mybets', buttonText: { displayText: '🎫 My Active Bets' }, type: 1 },
+        { buttonId: 'menu:fixtures', buttonText: { displayText: '⚽ View Fixtures' } },
+        { buttonId: 'menu:betslip', buttonText: { displayText: '📋 Manage Betslip' } },
+        { buttonId: 'menu:mybets', buttonText: { displayText: '🎫 My Active Bets' } },
     ];
     const buttonMessage = {
         text: "⚽ *SPORTY BET* ⚽\n\nWelcome! What would you like to do?",
         footer: 'Select an option below',
         buttons: buttons,
-        headerType: 1
     };
     await sock.sendMessage(from, buttonMessage);
 }
@@ -300,18 +319,16 @@ async function handleFixtures(context, page) {
     const buttons = pageMatches.map(match => ({
         buttonId: `select_match:${match.matchId}`,
         buttonText: { displayText: `${match.homeTeam.slice(0, 10)} vs ${match.awayTeam.slice(0, 10)}` },
-        type: 1
     }));
 
     const navigationButtons = [];
-    if (page > 1) navigationButtons.push({ buttonId: `fixtures_page:${page - 1}`, buttonText: { displayText: '⬅️ Previous' }, type: 1 });
-    if (page < totalPages) navigationButtons.push({ buttonId: `fixtures_page:${page + 1}`, buttonText: { displayText: 'Next ➡️' }, type: 1 });
+    if (page > 1) navigationButtons.push({ buttonId: `fixtures_page:${page - 1}`, buttonText: { displayText: '⬅️ Previous' } });
+    if (page < totalPages) navigationButtons.push({ buttonId: `fixtures_page:${page + 1}`, buttonText: { displayText: 'Next ➡️' } });
 
     const message = {
         text: fixturesText,
         footer: 'Tap a match to see betting options',
         buttons: [...buttons, ...navigationButtons],
-        headerType: 1
     };
     await sock.sendMessage(from, message);
 }
@@ -382,6 +399,8 @@ async function handleBetSlip(context) {
             slipText += `*${index + 1}.* ${match.homeTeam} vs ${match.awayTeam}\n`;
             slipText += `   🎯 ${formatBetType(selection.betType)} @ ${selection.odds}\n`;
             totalOdds *= selection.odds;
+        } else {
+             slipText += `*${index + 1}.* (Match data not found)\n`;
         }
     }
     slipText += `\n💰 *Total Odds:* ${totalOdds.toFixed(2)}\n`;
@@ -389,17 +408,17 @@ async function handleBetSlip(context) {
     slipText += `🏆 *Potential Win:* ${CURRENCY_SYMBOL}${((betSlip.stake || 0) * totalOdds).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
     const buttons = [
-        { buttonId: 'betslip_action:place', buttonText: { displayText: '✅ Place Bet' }, type: 1 },
-        { buttonId: 'betslip_action:stake', buttonText: { displayText: '💵 Set Stake' }, type: 1 },
-        { buttonId: 'remove_selection_prompt', buttonText: { displayText: '❌ Remove Selection' }, type: 1 },
-        { buttonId: 'betslip_action:clear', buttonText: { displayText: '🗑️ Clear All' }, type: 1 },
+        { buttonId: 'betslip_action:place', buttonText: { displayText: '✅ Place Bet' } },
+        { buttonId: 'betslip_action:stake', buttonText: { displayText: '💵 Set Stake' } },
+        { buttonId: 'remove_selection_prompt', buttonText: { displayText: '❌ Remove Selection' } },
+        { buttonId: 'betslip_action:clear', buttonText: { displayText: '🗑️ Clear All' } },
     ];
     
-    await sock.sendMessage(from, { text: slipText, footer: "Choose an action", buttons, headerType: 1 });
+    await sock.sendMessage(from, { text: slipText, footer: "Choose an action", buttons });
 }
 
 async function handleBetSlipAction(context, action) {
-     const { reply, senderId, sock, from } = context;
+     const { senderId, sock, from } = context;
     switch (action) {
         case 'place': await handlePlaceBet(context); break;
         case 'stake':
@@ -444,10 +463,10 @@ async function handleAddToBetSlip(context, matchId, betType) {
 
         const confirmationText = `✅ *Added to bet slip*\n\n⚽ ${match.homeTeam} vs ${match.awayTeam}\n🎯 ${formatBetType(betType)} @ ${odds}\n\n📋 *Selections:* ${betSlip.selections.length}/10`;
         const buttons = [
-            { buttonId: 'menu:fixtures', buttonText: { displayText: '➕ Add More Bets' }, type: 1 },
-            { buttonId: 'menu:betslip', buttonText: { displayText: '📋 View Betslip' }, type: 1 },
+            { buttonId: 'menu:fixtures', buttonText: { displayText: '➕ Add More Bets' } },
+            { buttonId: 'menu:betslip', buttonText: { displayText: '📋 View Betslip' } },
         ];
-        await sock.sendMessage(from, { text: confirmationText, buttons, footer: "What's next?", headerType: 1 });
+        await sock.sendMessage(from, { text: confirmationText, buttons, footer: "What's next?" });
 
     } catch (error) {
         console.error('Add to bet slip error:', error);
@@ -759,3 +778,4 @@ async function settleBetsForMatch(settledMatchId) {
         console.error(`Error settling bets for match ${settledMatchId}:`, error);
     }
 }
+
