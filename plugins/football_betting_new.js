@@ -1,27 +1,29 @@
 /**
  * @name football-betting-interactive
- * @version 2.0.0
+ * @version 2.1.0
  * @description An interactive football betting simulation plugin for eWhatsapp-bot.
  * @author Macksyn
  *
+ * v2.1.0: Converted to ES Module syntax (import/export) to support "type": "module" in package.json.
  * This major rewrite introduces a fully interactive UI using WhatsApp buttons and lists,
  * a more realistic minute-by-minute match simulation engine, dynamic team form,
  * performance optimizations like fixture caching and batch DB operations, and new features.
  */
 
-const {
+// --- ES Module Imports ---
+import {
     getEconomy,
     getPlugin,
     isUser,
     isGroup,
     isOwner,
-} = require('../lib/pluginIntegration');
-const {
+} from '../lib/pluginIntegration.js'; // Note the '.js' extension is often needed in ESM
+import {
     MessageType
-} = require('@whiskeysockets/baileys');
-const {
+} from '@whiskeysockets/baileys';
+import {
     ObjectId
-} = require('mongodb');
+} from 'mongodb';
 
 // --- Constants ---
 const COLLECTIONS = {
@@ -42,7 +44,7 @@ const fixtureCache = {
 };
 
 // --- Main Plugin ---
-module.exports = {
+const plugin = {
     name: 'football_betting',
     description: 'An interactive football betting simulation game.',
     isOwner: false,
@@ -116,11 +118,15 @@ module.exports = {
                 if (!isOwner(userId)) return message.reply("🔒 This is an owner-only command.");
                 return handleCancelMatch(message, db, subArgs[0]);
             case 'addteam':
-                 if (!isOwner(userId)) return message.reply("🔒 This is an owner-only command.");
-                 return handleAddTeam(message, db, subArgs);
+                if (!isOwner(userId)) return message.reply("🔒 This is an owner-only command.");
+                return handleAddTeam(message, db, subArgs);
         }
     }
 };
+
+// --- Use `export default` for ES Modules ---
+export default plugin;
+
 
 // --- UI & INTERACTIVE HANDLERS ---
 
@@ -265,7 +271,7 @@ async function handleShowSlip(message, db, economy) {
     const user = await db.collection(COLLECTIONS.USERS).findOne({
         id: userId
     });
-    const betSlip = user.betSlip || {
+    const betSlip = user?.betSlip || {
         selections: []
     };
 
@@ -339,7 +345,7 @@ async function handleAddSelectionToSlip(message, db, matchId, betType) {
     const user = await db.collection(COLLECTIONS.USERS).findOne({
         id: userId
     });
-    const betSlip = user.betSlip || {
+    const betSlip = user?.betSlip || {
         selections: []
     };
 
@@ -391,7 +397,7 @@ async function handlePlaceBet(message, db, economy, stakeStr) {
     const user = await db.collection(COLLECTIONS.USERS).findOne({
         id: userId
     });
-    const betSlip = user.betSlip;
+    const betSlip = user?.betSlip;
 
     if (!betSlip || betSlip.selections.length === 0) {
         return message.reply("Your bet slip is empty.");
@@ -420,6 +426,7 @@ async function handlePlaceBet(message, db, economy, stakeStr) {
     const potentialWinnings = stake * totalOdds;
 
     const finalBet = {
+        _id: new ObjectId(),
         ...betSlip,
         userId,
         stake,
@@ -480,13 +487,17 @@ async function handleSimulateAndSettleMatch(message, db, matchId) {
 
     await message.reply(`*Simulating ${match.homeTeam} vs ${match.awayTeam}...* ⏳`);
 
-    const homeTeam = await db.collection(COLLECTIONS.TEAMS).findOne({ name: match.homeTeam });
-    const awayTeam = await db.collection(COLLECTIONS.TEAMS).findOne({ name: match.awayTeam });
+    const homeTeam = await db.collection(COLLECTIONS.TEAMS).findOne({
+        name: match.homeTeam
+    });
+    const awayTeam = await db.collection(COLLECTIONS.TEAMS).findOne({
+        name: match.awayTeam
+    });
 
     if (!homeTeam || !awayTeam) {
-         return message.reply("One or both teams could not be found for simulation.");
+        return message.reply("One or both teams could not be found for simulation.");
     }
-    
+
     // The new, more realistic simulation
     const result = simulateMatchMinuteByMinute(homeTeam, awayTeam);
 
@@ -498,7 +509,7 @@ async function handleSimulateAndSettleMatch(message, db, matchId) {
             result
         }
     });
-    
+
     // Update team forms based on result
     await updateTeamForms(db, homeTeam, awayTeam, result);
 
@@ -550,19 +561,38 @@ async function updateTeamForms(db, homeTeam, awayTeam, result) {
     let homeResultPoints = result.homeScore > result.awayScore ? 3 : result.homeScore === result.awayScore ? 1 : 0;
     let awayResultPoints = result.awayScore > result.homeScore ? 3 : result.awayScore === result.homeScore ? 1 : 0;
 
+    // Ensure formHistory is an array
+    const homeFormHistory = homeTeam.formHistory || [];
+    const awayFormHistory = awayTeam.formHistory || [];
+
+
     // Add new result and keep only the last 5
-    homeTeam.formHistory.push(homeResultPoints);
-    if (homeTeam.formHistory.length > 5) homeTeam.formHistory.shift();
-    
-    awayTeam.formHistory.push(awayResultPoints);
-    if (awayTeam.formHistory.length > 5) awayTeam.formHistory.shift();
+    homeFormHistory.push(homeResultPoints);
+    if (homeFormHistory.length > 5) homeFormHistory.shift();
+
+    awayFormHistory.push(awayResultPoints);
+    if (awayFormHistory.length > 5) awayFormHistory.shift();
 
     // The new form is the sum of the history
-    const newHomeForm = homeTeam.formHistory.reduce((a, b) => a + b, 0);
-    const newAwayForm = awayTeam.formHistory.reduce((a, b) => a + b, 0);
+    const newHomeForm = homeFormHistory.reduce((a, b) => a + b, 0);
+    const newAwayForm = awayFormHistory.reduce((a, b) => a + b, 0);
 
-    await db.collection(COLLECTIONS.TEAMS).updateOne({ _id: homeTeam._id }, { $set: { form: newHomeForm, formHistory: homeTeam.formHistory } });
-    await db.collection(COLLECTIONS.TEAMS).updateOne({ _id: awayTeam._id }, { $set: { form: newAwayForm, formHistory: awayTeam.formHistory } });
+    await db.collection(COLLECTIONS.TEAMS).updateOne({
+        _id: homeTeam._id
+    }, {
+        $set: {
+            form: newHomeForm,
+            formHistory: homeFormHistory
+        }
+    });
+    await db.collection(COLLECTIONS.TEAMS).updateOne({
+        _id: awayTeam._id
+    }, {
+        $set: {
+            form: newAwayForm,
+            formHistory: awayFormHistory
+        }
+    });
 }
 
 
@@ -615,10 +645,14 @@ async function settleBetsForMatch(message, db, matchId, result) {
             const economy = getEconomy(bet.userId);
             await economy.add(parseFloat(bet.potentialWinnings));
             // Notify user of winnings
-             await message.client.sendMessage(bet.userId, { text: `🎉 Congratulations! Your bet slip won! You've been credited ${economy.currency}${bet.potentialWinnings}.`});
+            await message.client.sendMessage(bet.userId, {
+                text: `🎉 Congratulations! Your bet slip won! You've been credited ${economy.currency}${bet.potentialWinnings}.`
+            });
             settledCount++;
         } else if (newBetStatus === 'lost') {
-             await message.client.sendMessage(bet.userId, { text: `😔 Unlucky! Your bet slip lost.`});
+            await message.client.sendMessage(bet.userId, {
+                text: `😔 Unlucky! Your bet slip lost.`
+            });
             settledCount++;
         }
     }
@@ -641,14 +675,16 @@ function getOutcome(result) {
 
 async function handleAddTeam(message, db, args) {
     // .addteam <Team Name> <Strength (1-100)>
-    const name = args[0].replace(/_/g, " ");
+    const name = args[0]?.replace(/_/g, " ");
     const strength = parseInt(args[1], 10);
 
     if (!name || isNaN(strength) || strength < 1 || strength > 100) {
         return message.reply("Invalid format. Use: .addteam <Team_Name> <Strength (1-100)>");
     }
 
-    const existingTeam = await db.collection(COLLECTIONS.TEAMS).findOne({ name });
+    const existingTeam = await db.collection(COLLECTIONS.TEAMS).findOne({
+        name
+    });
     if (existingTeam) {
         return message.reply(`Team "${name}" already exists.`);
     }
