@@ -11,11 +11,11 @@ import moment from 'moment-timezone';
 import { File } from 'megajs';
 import { fileURLToPath } from 'url';
 
-import { 
-  makeWASocket, 
-  useMultiFileAuthState, 
-  fetchLatestBaileysVersion, 
-  DisconnectReason 
+import {
+  makeWASocket,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  DisconnectReason
 } from '@whiskeysockets/baileys';
 
 // Import handlers
@@ -23,6 +23,10 @@ import MessageHandler from './handlers/messageHandler.js';
 import CallHandler from './handlers/callHandler.js';
 import GroupHandler from './handlers/groupHandler.js';
 import PluginManager from './lib/pluginManager.js';
+// --- MODIFICATION START ---
+// Import the new welcome/goodbye plugin handlers
+import welcomeGoodbyeCommandHandler, { groupParticipantsUpdateHandler as welcomeGoodbyeGroupHandler } from './plugins/welcome_goodbye.js';
+// --- MODIFICATION END ---
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -102,7 +106,7 @@ function simpleRateLimit(windowMs = 15 * 60 * 1000, maxRequests = 100) {
     const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
     const now = Date.now();
     const windowStart = now - windowMs;
-    
+
     // Clean old entries
     for (const [ip, requests] of rateLimitStore.entries()) {
       const filteredRequests = requests.filter(timestamp => timestamp > windowStart);
@@ -112,11 +116,11 @@ function simpleRateLimit(windowMs = 15 * 60 * 1000, maxRequests = 100) {
         rateLimitStore.set(ip, filteredRequests);
       }
     }
-    
+
     // Check current IP
     const clientRequests = rateLimitStore.get(clientIP) || [];
     const recentRequests = clientRequests.filter(timestamp => timestamp > windowStart);
-    
+
     if (recentRequests.length >= maxRequests) {
       return res.status(429).json({
         error: 'Too many requests',
@@ -124,11 +128,11 @@ function simpleRateLimit(windowMs = 15 * 60 * 1000, maxRequests = 100) {
         retryAfter: Math.ceil(windowMs / 1000)
       });
     }
-    
+
     // Add current request
     recentRequests.push(now);
     rateLimitStore.set(clientIP, recentRequests);
-    
+
     next();
   };
 }
@@ -139,7 +143,7 @@ function addSecurityHeaders(req, res, next) {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Content-Security-Policy', 
+  res.setHeader('Content-Security-Policy',
     "default-src 'self'; " +
     "style-src 'self' 'unsafe-inline'; " +
     "script-src 'self' 'unsafe-inline'; " +
@@ -158,11 +162,11 @@ setInterval(() => {
 async function initializePluginManager() {
   try {
     console.log(chalk.blue('🔌 Initializing PluginManager...'));
-    
+
     // Check if PluginManager exists and has required methods
     if (typeof PluginManager?.loadPlugins === 'function') {
       await PluginManager.loadPlugins();
-      
+
       // Show plugin health check on startup
       if (typeof PluginManager?.healthCheck === 'function') {
         const health = await PluginManager.healthCheck();
@@ -176,7 +180,7 @@ async function initializePluginManager() {
     } else {
       console.log(chalk.yellow('⚠️ PluginManager not available or missing methods'));
     }
-    
+
   } catch (error) {
     console.error(chalk.red('❌ Failed to initialize PluginManager:'), error.message);
   }
@@ -191,7 +195,7 @@ async function downloadSessionFromMega() {
 
   try {
     console.log(chalk.yellow('📥 Downloading session from Mega...'));
-    
+
     const fileData = config.SESSION_ID.split('~')[1];
     if (!fileData || !fileData.includes('#')) {
       throw new Error('Invalid SESSION_ID format. Expected: BotName~fileId#key');
@@ -199,7 +203,7 @@ async function downloadSessionFromMega() {
 
     const [fileId, key] = fileData.split('#');
     const file = File.fromURL(`https://mega.nz/file/${fileId}#${key}`);
-    
+
     // Download with timeout and retry
     const downloadPromise = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -218,10 +222,10 @@ async function downloadSessionFromMega() {
 
     const data = await downloadPromise;
     await fs.promises.writeFile(credsPath, data);
-    
+
     console.log(chalk.green('✅ Session downloaded successfully from Mega!'));
     return true;
-    
+
   } catch (error) {
     console.log(chalk.red('❌ Failed to download session from Mega:'), error.message);
     console.log(chalk.yellow('💡 Will proceed with QR code authentication...'));
@@ -238,10 +242,10 @@ async function updateBio(socket) {
   try {
     const time = moment().tz(config.TIMEZONE).format('HH:mm:ss');
     const bioText = `🤖 ${config.BOT_NAME} | Online at ${time}`;
-    
+
     await socket.updateProfileStatus(bioText);
     bioUpdateCount++;
-    
+
     console.log(chalk.cyan(`📝 Bio updated: ${bioText}`));
   } catch (error) {
     if (!error.message.includes('rate')) {
@@ -277,7 +281,7 @@ async function createWhatsAppSocket() {
   try {
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
     const { version } = await fetchLatestBaileysVersion();
-    
+
     console.log(chalk.blue(`📱 Using WhatsApp Web version: ${version.join('.')}`));
 
     const socket = makeWASocket({
@@ -290,7 +294,7 @@ async function createWhatsAppSocket() {
       syncFullHistory: false,
       generateHighQualityLinkPreview: false,
       getMessage: async () => null,
-      
+
       // Cloud-optimized connection settings
       connectTimeoutMs: CONNECTION_TIMEOUT,
       defaultQueryTimeoutMs: CONNECTION_TIMEOUT,
@@ -298,18 +302,18 @@ async function createWhatsAppSocket() {
       retryRequestDelayMs: 350,
       maxMsgRetryCount: 3,
       emitOwnEvents: true,
-      
+
       // Reduce resource usage
       shouldSyncHistoryMessage: () => false,
       shouldIgnoreJid: jid => jid === 'status@broadcast',
-      
+
       // Browser options
       mobile: false,
       fireInitQueries: true,
     });
 
     return { sock: socket, saveCreds };
-    
+
   } catch (error) {
     console.error(chalk.red('❌ Failed to create WhatsApp socket:'), error.message);
     throw error;
@@ -325,27 +329,27 @@ function setupConnectionHandler(socket, saveCreds) {
         console.log(chalk.blue('💡 QR codes expire in 60 seconds. Please scan quickly!'));
         botStatus = 'waiting_for_qr';
       }
-      
+
       if (connection === 'connecting') {
         console.log(chalk.yellow(`🔄 Connecting to WhatsApp... (Attempt ${connectionAttempts + 1}/${MAX_CONNECTION_ATTEMPTS})`));
         botStatus = 'connecting';
       }
-      
+
       if (connection === 'open') {
         console.log(chalk.green('✅ Successfully connected to WhatsApp!'));
         console.log(chalk.cyan(`📱 Connected as: ${socket.user?.name || 'Unknown'}`));
         console.log(chalk.cyan(`📞 Phone: ${socket.user?.id?.split(':')[0] || 'Unknown'}`));
-        
+
         botStatus = 'running';
-        
+
         // Reset connection attempts and update last successful connection
         connectionAttempts = 0;
         lastSuccessfulConnection = Date.now();
         isConnecting = false;
-        
+
         // Initialize plugins after successful connection
         await initializePluginManager();
-        
+
         // Send startup notification (only for new logins or owner)
         if (isNewLogin || config.OWNER_NUMBER) {
           try {
@@ -372,96 +376,96 @@ ${config.REJECT_CALL ? '✅' : '❌'} Call Rejection
             const targetJid = config.OWNER_NUMBER + '@s.whatsapp.net';
             await socket.sendMessage(targetJid, { text: startupMsg });
             console.log(chalk.green('📤 Startup notification sent to owner'));
-            
+
           } catch (error) {
             console.log(chalk.yellow('⚠️ Could not send startup notification:', error.message));
           }
         }
-        
+
         // Update bio
         setTimeout(() => updateBio(socket), 5000);
-        
+
         // Start bio update interval (reduced frequency for cloud)
         if (config.AUTO_BIO) {
           setInterval(() => updateBio(socket), 15 * 60 * 1000); // Every 15 minutes
         }
       }
-      
+
       if (connection === 'close') {
         isConnecting = false;
         botStatus = 'reconnecting';
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const reason = lastDisconnect?.error?.message || 'Unknown';
-        
+
         console.log(chalk.red(`❌ Connection closed`));
         console.log(chalk.yellow(`📝 Status Code: ${statusCode || 'undefined'}`));
         console.log(chalk.yellow(`📝 Reason: ${reason}`));
-        
+
         // Handle different disconnection scenarios
         let shouldReconnect = true;
         let cleanSessionFirst = false;
         let customDelay = null;
-        
+
         switch (statusCode) {
           case DisconnectReason.badSession:
             console.log(chalk.red('🚫 Bad session detected'));
             cleanSessionFirst = true;
             customDelay = 10000;
             break;
-            
+
           case DisconnectReason.connectionClosed:
             console.log(chalk.yellow('🔌 Connection closed by server'));
             customDelay = 8000;
             break;
-            
+
           case DisconnectReason.connectionLost:
             console.log(chalk.yellow('📡 Connection lost'));
             customDelay = 12000;
             break;
-            
+
           case DisconnectReason.connectionReplaced:
             console.log(chalk.red('🔄 Connection replaced - another instance detected'));
             customDelay = 30000;
             break;
-            
+
           case DisconnectReason.loggedOut:
             console.log(chalk.red('🚪 Logged out - session invalid'));
             cleanSessionFirst = true;
             customDelay = 15000;
             break;
-            
+
           case DisconnectReason.restartRequired:
             console.log(chalk.yellow('🔄 Restart required by server'));
             customDelay = 8000;
             break;
-            
+
           case DisconnectReason.timedOut:
             console.log(chalk.red('⏰ Connection timed out'));
             customDelay = 15000;
             break;
-            
+
           default:
             console.log(chalk.yellow('❓ Unknown disconnection reason'));
             break;
         }
-        
+
         // Check if we should attempt reconnection
         if (shouldReconnect && connectionAttempts < MAX_CONNECTION_ATTEMPTS) {
           connectionAttempts++;
-          
+
           // Clean session if required
           if (cleanSessionFirst) {
             cleanSession();
           }
-          
+
           // Calculate delay
           const delay = customDelay || getReconnectDelay();
           console.log(chalk.blue(`🔄 Reconnecting in ${delay/1000} seconds... (${connectionAttempts}/${MAX_CONNECTION_ATTEMPTS})`));
-          
+
           setTimeout(() => {
             startBot();
           }, delay);
-          
+
         } else if (connectionAttempts >= MAX_CONNECTION_ATTEMPTS) {
           console.log(chalk.red(`💀 Maximum reconnection attempts (${MAX_CONNECTION_ATTEMPTS}) reached`));
           console.log(chalk.blue('💡 Possible issues:'));
@@ -469,22 +473,22 @@ ${config.REJECT_CALL ? '✅' : '❌'} Call Rejection
           console.log(chalk.cyan('   • Network connectivity problems'));
           console.log(chalk.cyan('   • Invalid session data'));
           console.log(chalk.yellow('🔄 Cleaning session and restarting in 2 minutes...'));
-          
+
           cleanSession();
           botStatus = 'error';
-          
+
           setTimeout(() => {
             connectionAttempts = 0;
             startBot();
           }, 2 * 60 * 1000);
-          
+
         } else {
           console.log(chalk.red('🛑 Bot stopped - manual intervention required'));
           botStatus = 'error';
           // Don't exit process in cloud environment - keep server running
         }
       }
-      
+
     } catch (error) {
       console.error(chalk.red('❌ Connection handler error:'), error.message);
     }
@@ -492,7 +496,7 @@ ${config.REJECT_CALL ? '✅' : '❌'} Call Rejection
 
   // Save credentials when updated
   socket.ev.on('creds.update', saveCreds);
-  
+
   return socket;
 }
 
@@ -505,11 +509,18 @@ function setupEventHandlers(socket) {
       if (!messageUpdate || !messageUpdate.messages || !Array.isArray(messageUpdate.messages)) {
         return;
       }
-      
+
       for (const message of messageUpdate.messages) {
         if (!message || !message.message) {
           continue;
         }
+        
+        // --- MODIFICATION START ---
+        // Call the Welcome/Goodbye command handler for every message
+        if (typeof welcomeGoodbyeCommandHandler === 'function') {
+           await welcomeGoodbyeCommandHandler(message, socket, config);
+        }
+        // --- MODIFICATION END ---
         
         let messageText = '';
 
@@ -523,31 +534,28 @@ function setupEventHandlers(socket) {
           } else if (message.message.videoMessage?.caption) {
             messageText = message.message.videoMessage.caption;
           }
-          
-          // Safe text processing with null checks
-          // SAFE VERSION:
-if (messageText && typeof messageText === 'string' && messageText.length > 0) {
-  messageText = messageText.replace(/\s+/g, ' ').trim();
-} else {
-  messageText = ''; // Always string, never null
-}
 
-// Additional safety check
-if (typeof messageText !== 'string') {
-  messageText = '';
-}
-          
+          if (messageText && typeof messageText === 'string' && messageText.length > 0) {
+            messageText = messageText.replace(/\s+/g, ' ').trim();
+          } else {
+            messageText = '';
+          }
+
+          if (typeof messageText !== 'string') {
+            messageText = '';
+          }
+
         } catch (textError) {
           console.log(chalk.yellow('⚠️ Text extraction error:', textError.message));
           messageText = '';
           continue;
         }
       }
-      
+
       if (typeof MessageHandler === 'function') {
         await MessageHandler(messageUpdate, socket, logger, config);
       }
-      
+
     } catch (error) {
       console.error(chalk.red('❌ Message handler error:'), error.message);
       if (config.NODE_ENV === 'development') {
@@ -577,7 +585,20 @@ if (typeof messageText !== 'string') {
       console.error(chalk.red('❌ Group handler error:'), error.message);
     }
   });
-  
+
+  // --- MODIFICATION START ---
+  // Welcome & Goodbye handler for member join/leave events
+  socket.ev.on('group-participants.update', async (event) => {
+    try {
+      if (typeof welcomeGoodbyeGroupHandler === 'function') {
+        await welcomeGoodbyeGroupHandler(event, socket);
+      }
+    } catch (error) {
+      console.error(chalk.red('❌ Welcome/Goodbye handler error:'), error.message);
+    }
+  });
+  // --- MODIFICATION END ---
+
   // Connection health monitoring
   socket.ev.on('connection.update', ({ connection }) => {
     if (connection === 'open') {
@@ -639,7 +660,7 @@ async function startBot() {
     isConnecting = true;
     botStatus = 'connecting';
     console.log(chalk.magenta(`🚀 Starting ${config.BOT_NAME}...`));
-    
+
     // Check for local session or download from Mega
     if (!fs.existsSync(credsPath) && config.SESSION_ID) {
       const downloaded = await downloadSessionFromMega();
@@ -647,26 +668,26 @@ async function startBot() {
          console.log(chalk.yellow('📱 Proceeding with QR code authentication...'));
       }
     }
-    
+
     const { sock: socket, saveCreds } = await createWhatsAppSocket();
     sock = socket;
-    
+
     // Setup all event handlers
     setupConnectionHandler(socket, saveCreds);
     setupEventHandlers(socket);
-    
+
     // Set bot mode
     socket.public = config.MODE === 'public';
     console.log(chalk.green(`🎯 Bot mode: ${config.MODE.toUpperCase()}`));
-    
+
   } catch (error) {
     isConnecting = false;
     botStatus = 'error';
     console.error(chalk.red('❌ Bot startup error:'), error.message);
-    
+
     const delay = getReconnectDelay();
     console.log(chalk.yellow(`🔄 Retrying in ${delay/1000} seconds...`));
-    
+
     setTimeout(startBot, delay);
   }
 }
@@ -713,11 +734,11 @@ process.on('unhandledRejection', (reason, promise) => {
 // Graceful shutdown
 function gracefulShutdown(signal) {
   console.log(`\n${signal} received. Starting graceful shutdown...`);
-  
+
   if (server) {
     server.close(() => {
       console.log('HTTP server closed.');
-      
+
       if (sock) {
         try {
           sock.end();
@@ -726,10 +747,10 @@ function gracefulShutdown(signal) {
           console.error('Error closing WhatsApp connection:', error);
         }
       }
-      
+
       process.exit(0);
     });
-    
+
     // Force close after 10 seconds
     setTimeout(() => {
       console.log('Forcing shutdown...');
@@ -748,10 +769,10 @@ async function main() {
     console.log(chalk.cyan('🎬 Initializing Fresh WhatsApp Bot...'));
     console.log(chalk.blue(`📊 Environment: ${config.NODE_ENV}`));
     console.log(chalk.blue(`👑 Owner: ${config.OWNER_NUMBER}`));
-    
+
     // Express server routes
     const startTime = Date.now();
-    
+
     // Main status endpoint
     app.get('/', (req, res) => {
       try {
@@ -774,7 +795,7 @@ async function main() {
         res.status(500).json({ error: 'Internal server error' });
       }
     });
-    
+
     // CRITICAL FIX: Health check - ALWAYS returns 200 OK once server is ready
     app.get('/health', (req, res) => {
       try {
@@ -797,7 +818,7 @@ async function main() {
           },
           timestamp: new Date().toISOString()
         };
-        
+
         // ALWAYS return 200 - server is healthy if it can respond
         res.status(200).json(healthData);
       } catch (error) {
@@ -810,7 +831,7 @@ async function main() {
         });
       }
     });
-    
+
     // Readiness check - only ready when bot is connected
     app.get('/ready', (req, res) => {
       try {
@@ -818,18 +839,18 @@ async function main() {
         if (isReady) {
           res.status(200).json({ status: 'ready', connected: true, serverReady: true });
         } else {
-          res.status(503).json({ 
-            status: 'not ready', 
-            connected: false, 
+          res.status(503).json({
+            status: 'not ready',
+            connected: false,
             serverReady: serverReady,
-            botStatus: botStatus 
+            botStatus: botStatus
           });
         }
       } catch (error) {
         res.status(503).json({ status: 'error', error: error.message });
       }
     });
-    
+
     // Simple ping endpoint
     app.get('/ping', (req, res) => {
       res.status(200).json({
@@ -839,7 +860,7 @@ async function main() {
         serverReady: serverReady
       });
     });
-    
+
     // QR status
     app.get('/qr', (req, res) => {
       try {
@@ -852,7 +873,7 @@ async function main() {
         res.status(500).json({ error: 'Internal server error' });
       }
     });
-    
+
     // Plugin Management API Routes
     app.get('/plugins', async (req, res) => {
       try {
@@ -866,7 +887,7 @@ async function main() {
         res.status(500).json({ error: error.message });
       }
     });
-    
+
     app.get('/plugins/stats', async (req, res) => {
       try {
         const stats = getPluginStats();
@@ -875,7 +896,7 @@ async function main() {
         res.status(500).json({ error: error.message });
       }
     });
-    
+
     app.get('/plugins/health', async (req, res) => {
       try {
         if (typeof PluginManager?.healthCheck === 'function') {
@@ -888,7 +909,7 @@ async function main() {
         res.status(500).json({ error: error.message });
       }
     });
-    
+
     app.post('/plugins/:filename/enable', async (req, res) => {
       try {
         const { filename } = req.params;
@@ -902,7 +923,7 @@ async function main() {
         res.status(500).json({ error: error.message });
       }
     });
-    
+
     app.post('/plugins/:filename/disable', async (req, res) => {
       try {
         const { filename } = req.params;
@@ -916,7 +937,7 @@ async function main() {
         res.status(500).json({ error: error.message });
       }
     });
-    
+
     app.post('/plugins/:filename/reload', async (req, res) => {
       try {
         const { filename } = req.params;
@@ -930,7 +951,7 @@ async function main() {
         res.status(500).json({ error: error.message });
       }
     });
-    
+
     app.post('/plugins/reload-all', async (req, res) => {
       try {
         if (typeof PluginManager?.reloadAllPlugins === 'function') {
@@ -949,7 +970,7 @@ async function main() {
       try {
         const memUsage = process.memoryUsage();
         const pluginStats = getPluginStats();
-        
+
         res.json({
           botName: config.BOT_NAME,
           status: botStatus,
@@ -997,11 +1018,11 @@ async function main() {
       console.log(chalk.cyan(`🏓 Ping endpoint: http://localhost:${config.PORT}/ping`));
       console.log(chalk.cyan(`🔌 Plugin API: http://localhost:${config.PORT}/plugins`));
       console.log(chalk.cyan(`🌍 Web Interface: http://localhost:${config.PORT}/`));
-      
+
       // MARK SERVER AS READY IMMEDIATELY
       serverReady = true;
       console.log(chalk.green('✅ Server marked as ready for health checks'));
-      
+
       // DELAY bot startup to ensure server is fully ready
       setTimeout(() => {
         console.log(chalk.blue('🤖 Starting WhatsApp bot connection...'));
@@ -1024,7 +1045,7 @@ async function main() {
         // Send periodic keep-alive requests to self (prevents sleeping)
         setInterval(async () => {
           try {
-            await axios.get(`http://localhost:${config.PORT}/ping`, { 
+            await axios.get(`http://localhost:${config.PORT}/ping`, {
               timeout: 5000,
               headers: { 'User-Agent': 'KeepAlive-Bot' }
             });
@@ -1039,10 +1060,10 @@ async function main() {
     setInterval(() => {
       const memUsage = process.memoryUsage();
       const memUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
-      
+
       if (memUsedMB > 400) { // Alert if memory usage exceeds 400MB
         console.log(chalk.yellow(`⚠️ High memory usage: ${memUsedMB}MB`));
-        
+
         // Force garbage collection if available
         if (global.gc) {
           global.gc();
@@ -1056,11 +1077,11 @@ async function main() {
       setInterval(() => {
         const timeSinceLastConnection = Date.now() - lastSuccessfulConnection;
         const hoursOffline = timeSinceLastConnection / (1000 * 60 * 60);
-        
+
         if (hoursOffline > 2 && botStatus !== 'running' && !isConnecting) {
           console.log(chalk.yellow(`⚠️ Bot has been offline for ${Math.round(hoursOffline)} hours`));
           console.log(chalk.blue('🔄 Attempting to restart connection...'));
-          
+
           // Reset connection attempts and try to reconnect
           connectionAttempts = Math.floor(connectionAttempts / 2);
           startBot();
