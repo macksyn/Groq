@@ -796,8 +796,9 @@ Current question: ${activeSession.currentQuestion + 1} of ${interviewQuestions.g
 
       // Admin-only commands
       if (!isAdmin(userId, groupId, config)) {
-        if (['addquestion', 'removequestion', 'listquestions', 'interviewsettings', 
-             'interviewstats', 'approveuser', 'rejectuser', 'setmaingroup'].includes(command)) {
+        if (['activateinterviews', 'deactivateinterviews', 'interviewstatus', 'addquestion', 
+             'removequestion', 'listquestions', 'interviewsettings', 'interviewstats', 
+             'approveuser', 'rejectuser', 'setmaingroup'].includes(command)) {
           await sock.sendMessage(groupId, {
             text: `❌ This command is only available to admins! 👮‍♀️`
           }, { quoted: m });
