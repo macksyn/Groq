@@ -705,7 +705,7 @@ function updateInterviewStats(groupId, outcome, session) {
 function isAdmin(userId, groupId, config) {
   const settings = groupSettings.get(groupId);
   return config.OWNER_NUMBER === userId || 
-         (config.MODS && config.MODS.includes(userId)) || 
+         (config.ADMIN_NUMBERS && config.MODS.includes(userId)) || 
          (settings && settings.adminIds.includes(userId));
 }
 
