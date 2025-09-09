@@ -465,10 +465,6 @@ ${config.REJECT_CALL ? '✅' : '❌'} Call Rejection
           setTimeout(() => {
             startBot();
           }, delay);
-          
-setTimeout(() => {
-  startHealthMonitoring();
-}, 5000); // Start monitoring 5 seconds after bot starts
 
         } else if (connectionAttempts >= MAX_CONNECTION_ATTEMPTS) {
           console.log(chalk.red(`💀 Maximum reconnection attempts (${MAX_CONNECTION_ATTEMPTS}) reached`));
@@ -1370,4 +1366,5 @@ function startHealthMonitoring() {
   
   console.log(chalk.green('✅ Health monitoring systems started'));
 }
+
 
