@@ -1,18 +1,3 @@
-// =======================================================================
-// END MCM SESSION WITH TV SHOW FINALE EXPERIENCE
-// =======================================================================
-
-async function endMCMSession(sock, groupJid) {
-  try {
-    const session = await getCurrentSession(groupJid);
-    if (!session) return false;
-    
-    // STEP 1: Announce end of submissions and start of counting (TV show vibe)
-    const endAnnouncementMessage = 
-      `📺 *MCM LIVE - SUBMISSIONS CLOSED!* 📺\n\n` +
-      `⏰ *TIME'S UP!* The clock has struck 10:00 PM!\n\n` +
-      `📊 *We're now going LIVE to our counting studio...*\n` +
-      `🔢 *Our judges are tall// plugins/mcm.js - Man Crush Monday Plugin
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
