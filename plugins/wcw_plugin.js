@@ -1,4 +1,4 @@
-// plugins/wcw.js - Woman Crush Wednesday Plugin
+// plugins/wcw_plugin_enhanced.js - Enhanced Woman Crush Wednesday Plugin
 import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
 import cron from 'node-cron';
@@ -6,10 +6,10 @@ import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
 // Plugin information export
 export const info = {
-  name: 'Woman Crush Wednesday (WCW)',
-  version: '1.0.0',
+  name: 'Woman Crush Wednesday (WCW) - Enhanced',
+  version: '2.0.0',
   author: 'Bot Developer',
-  description: 'Weekly Woman Crush Wednesday contest where ladies post pictures and guys rate them from 1-10. Automatic scheduling with node-cron, winner declaration, and rewards system.',
+  description: 'Enhanced WCW with smart photo recognition and TV show experience. Only recognizes WCW/Rate captions and provides live glamour show atmosphere.',
   commands: [
     {
       name: 'wcw',
@@ -24,7 +24,7 @@ export const info = {
     {
       name: 'wcwtest',
       aliases: ['testwcw'],
-      description: 'Test WCW rating validation'
+      description: 'Test WCW caption and rating validation'
     }
   ]
 };
@@ -61,7 +61,12 @@ const defaultSettings = {
   tagAllMembers: true,
   maxPhotosPerUser: 1,
   validRatingRange: { min: 1, max: 10 },
-  allowSelfRating: false
+  allowSelfRating: false,
+  // New TV Show settings
+  countdownDelay: 60000, // 1 minute delay before results
+  resultDelay: 3000, // 3 seconds between result messages
+  requireCaptionKeywords: true, // Only accept photos with WCW/Rate keywords
+  captionKeywords: ['wcw', 'woman crush wednesday', 'rate me', 'rate', 'crush', 'wednesday', 'queen', 'beauty'] // Keywords to look for
 };
 
 let wcwSettings = { ...defaultSettings };
@@ -88,10 +93,10 @@ async function initDatabase() {
     await db.collection(COLLECTIONS.WCW_RATINGS).createIndex({ sessionId: 1, raterId: 1, participantId: 1 });
     await db.collection(COLLECTIONS.WCW_RECORDS).createIndex({ date: -1 });
     
-    console.log('✅ MongoDB connected successfully for WCW');
+    console.log('✅ MongoDB connected successfully for Enhanced WCW');
     return db;
   } catch (error) {
-    console.error('❌ MongoDB connection failed for WCW:', error);
+    console.error('❌ MongoDB connection failed for Enhanced WCW:', error);
     throw error;
   }
 }
@@ -133,6 +138,39 @@ function isWednesday() {
 
 function getCurrentTime() {
   return getNigeriaTime().format('HH:mm');
+}
+
+// =======================================================================
+// SMART PHOTO RECOGNITION SYSTEM
+// =======================================================================
+
+function hasValidWCWCaption(caption) {
+  if (!wcwSettings.requireCaptionKeywords) return true;
+  if (!caption || typeof caption !== 'string') return false;
+  
+  const lowerCaption = caption.toLowerCase();
+  
+  // Check if any of the required keywords are present
+  return wcwSettings.captionKeywords.some(keyword => 
+    lowerCaption.includes(keyword.toLowerCase())
+  );
+}
+
+function extractCaptionFromMessage(m) {
+  // Check various message types for caption
+  if (m.message.imageMessage?.caption) {
+    return m.message.imageMessage.caption;
+  }
+  
+  if (m.message.extendedTextMessage?.text) {
+    return m.message.extendedTextMessage.text;
+  }
+  
+  if (m.body) {
+    return m.body;
+  }
+  
+  return '';
 }
 
 async function getGroupMembers(sock, groupJid) {
@@ -188,12 +226,14 @@ async function createWCWSession(groupJid) {
       sessionId: sessionId,
       date: today,
       groupJid: groupJid,
-      status: 'active', // active, ended, cancelled
+      status: 'active', // active, ending, ended, cancelled
       startedAt: new Date(),
       endedAt: null,
       participants: [],
       totalRatings: 0,
       winnerDeclared: false,
+      countdownStarted: false,
+      resultsShown: false,
       createdAt: new Date()
     };
     
@@ -212,7 +252,7 @@ async function getCurrentSession(groupJid) {
     return await db.collection(COLLECTIONS.WCW_SESSIONS).findOne({
       date: today,
       groupJid: groupJid,
-      status: 'active'
+      status: { $in: ['active', 'ending'] }
     });
   } catch (error) {
     console.error('Error getting current session:', error);
@@ -221,36 +261,106 @@ async function getCurrentSession(groupJid) {
 }
 
 // =======================================================================
-// WCW ANNOUNCEMENTS AND REMINDERS
+// ENHANCED PHOTO SUBMISSION HANDLING
 // =======================================================================
 
-function formatReminderMessage(timeUntil) {
-  const messages = [
-    `💃 *WCW ALERT!* 💃\n\n✨ Get ready ladies! Woman Crush Wednesday is starting in ${timeUntil}! ✨\n\n📸 *Preparation Checklist:*\n• Pick your most stunning photo\n• Boost your confidence\n• Get ready to dazzle the guys\n\n💰 *Winner gets ₦${wcwSettings.winnerReward.toLocaleString()}!*\n⏰ *Starting at 8:00 PM sharp!*\n\n#WCW #GistHQ #WomanCrushWednesday`,
+async function handlePhotoSubmission(m, sock) {
+  try {
+    if (!isWednesday()) return false;
     
-    `⚡ *LADIES, IT'S ALMOST TIME!* ⚡\n\n🕰️ WCW starts in ${timeUntil}!\n\n🎬 *Tonight's Show:*\n📸 Ladies post their glamorous shots\n🌟 Guys rate from 1-10\n👑 Winner takes ₦${wcwSettings.winnerReward.toLocaleString()}\n\n💄 *Let the beauty contest begin soon!*\n#WCWCountdown`
-  ];
-  
-  return messages[Math.floor(Math.random() * messages.length)];
-}
-
-function formatWCWStartMessage() {
-  return `💃 *WOMAN CRUSH WEDNESDAY IS NOW LIVE!* 💃\n\n` +
-         `🔴 *LIVE NOW - LIVE NOW - LIVE NOW* 🔴\n\n` +
-         `👩‍💼 *LADIES:* Post your most stunning photo NOW!\n` +
-         `👨‍💼 *GENTLEMEN:* Rate the beautiful ladies from 1-10!\n\n` +
-         `⏰ *Competition ends at 10:00 PM*\n` +
-         `💰 *Winner takes home ₦${wcwSettings.winnerReward.toLocaleString()}*\n` +
-         `🎁 *Participation reward: ₦${wcwSettings.participationReward.toLocaleString()}*\n\n` +
-         `📋 *RULES:*\n` +
-         `• Ladies: 1 photo only (extras will be ignored)\n` +
-         `• Gentlemen: Rate 1-10 only (higher ratings invalid)\n` +
-         `• No self-rating allowed\n\n` +
-         `💡 *Rating Formats Accepted:*\n` +
-         `• Regular: "8", "10", "She's a 9"\n` +
-         `• Emoji: "8️⃣", "🔟", "Perfect 1️⃣0️⃣"\n\n` +
-         `💄 *Let the glamour begin!* 💄\n` +
-         `#WCWLive #WomanCrushWednesday`;
+    const currentTime = getCurrentTime();
+    const startTime = wcwSettings.startTime;
+    const endTime = wcwSettings.endTime;
+    
+    // Check if WCW is active
+    if (currentTime < startTime || currentTime >= endTime) return false;
+    
+    const senderId = m.key.participant || m.key.remoteJid;
+    const groupJid = m.key.remoteJid;
+    
+    if (!groupJid.endsWith('@g.us')) return false;
+    
+    // Check if message contains image
+    if (!m.message.imageMessage) return false;
+    
+    const session = await getCurrentSession(groupJid);
+    if (!session || session.status !== 'active') return false;
+    
+    // Extract caption from message
+    const caption = extractCaptionFromMessage(m);
+    
+    // Check if caption contains WCW-related keywords
+    if (!hasValidWCWCaption(caption)) {
+      console.log(`📸 Photo rejected - No WCW keywords in caption: "${caption}"`);
+      return false; // Silently ignore photos without WCW keywords
+    }
+    
+    // Check if user already submitted a photo
+    const existingParticipant = await db.collection(COLLECTIONS.WCW_PARTICIPANTS).findOne({
+      sessionId: session.sessionId,
+      userId: senderId
+    });
+    
+    if (existingParticipant) {
+      // React with ❌ for duplicate submission
+      await sock.sendMessage(groupJid, {
+        react: { text: '❌', key: m.key }
+      });
+      
+      await sock.sendMessage(groupJid, {
+        text: `🚫 @${senderId.split('@')[0]} - You already submitted your WCW photo! Only your first photo counts.`,
+        mentions: [senderId]
+      }, { quoted: m });
+      
+      return true;
+    }
+    
+    // Add participant with caption
+    const participantData = {
+      sessionId: session.sessionId,
+      userId: senderId,
+      userPhone: senderId.split('@')[0],
+      messageKey: m.key,
+      caption: caption,
+      photoSubmittedAt: new Date(),
+      ratings: [],
+      totalRating: 0,
+      averageRating: 0,
+      ratingCount: 0
+    };
+    
+    await db.collection(COLLECTIONS.WCW_PARTICIPANTS).insertOne(participantData);
+    
+    // Update session participants list
+    await db.collection(COLLECTIONS.WCW_SESSIONS).updateOne(
+      { sessionId: session.sessionId },
+      { $push: { participants: senderId } }
+    );
+    
+    // React with ✅ for successful submission
+    await sock.sendMessage(groupJid, {
+      react: { text: '✅', key: m.key }
+    });
+    
+    // Send confirmation message
+    await sock.sendMessage(groupJid, {
+      text: `💃 @${senderId.split('@')[0]} has entered the WCW glamour show! ✨\n\nGentlemen, rate this beautiful lady from 1-10! ⭐`,
+      mentions: [senderId]
+    }, { quoted: m });
+    
+    // Initialize user in economy system and give participation reward
+    await unifiedUserManager.initUser(senderId);
+    if (wcwSettings.enableParticipationReward) {
+      await unifiedUserManager.addMoney(senderId, wcwSettings.participationReward, 'WCW participation');
+    }
+    
+    console.log(`📸 WCW photo accepted by ${senderId.split('@')[0]} with caption: "${caption}"`);
+    return true;
+    
+  } catch (error) {
+    console.error('Error handling photo submission:', error);
+    return false;
+  }
 }
 
 // =======================================================================
@@ -292,264 +402,6 @@ function extractRating(text) {
   return null;
 }
 
-// =======================================================================
-// NODE-CRON SCHEDULING SYSTEM
-// =======================================================================
-
-async function setupWCWCronJobs(sock) {
-  try {
-    // Clear existing cron jobs
-    stopAllCronJobs();
-    
-    // Setup reminder cron jobs for each reminder time
-    wcwSettings.reminderTimes.forEach((reminderTime, index) => {
-      const [hours, minutes] = reminderTime.split(':');
-      
-      // Every Wednesday at the specified time
-      const cronPattern = `${minutes} ${hours} * * 3`; // 3 = Wednesday
-      
-      const cronJob = cron.schedule(cronPattern, async () => {
-        console.log(`⏰ WCW Reminder ${index + 1} triggered at ${reminderTime}`);
-        await sendWCWReminders(sock);
-      }, {
-        scheduled: false,
-        timezone: 'Africa/Lagos'
-      });
-      
-      cronJobs.reminders.push(cronJob);
-      cronJob.start();
-      
-      console.log(`✅ WCW Reminder ${index + 1} scheduled for Wednesdays at ${reminderTime}`);
-    });
-    
-    // Setup start session cron job
-    if (wcwSettings.autoStartEnabled) {
-      const [startHours, startMinutes] = wcwSettings.startTime.split(':');
-      const startCronPattern = `${startMinutes} ${startHours} * * 3`; // Every Wednesday
-      
-      cronJobs.startSession = cron.schedule(startCronPattern, async () => {
-        console.log(`🎬 WCW Auto-start triggered at ${wcwSettings.startTime}`);
-        
-        for (const groupJid of wcwSettings.groupJids) {
-          try {
-            const existingSession = await getCurrentSession(groupJid);
-            if (!existingSession) {
-              await startWCWSession(sock, groupJid);
-            }
-          } catch (error) {
-            console.error(`Error auto-starting WCW for ${groupJid}:`, error);
-          }
-        }
-      }, {
-        scheduled: false,
-        timezone: 'Africa/Lagos'
-      });
-      
-      cronJobs.startSession.start();
-      console.log(`✅ WCW Auto-start scheduled for Wednesdays at ${wcwSettings.startTime}`);
-    }
-    
-    // Setup end session cron job
-    const [endHours, endMinutes] = wcwSettings.endTime.split(':');
-    const endCronPattern = `${endMinutes} ${endHours} * * 3`; // Every Wednesday
-    
-    cronJobs.endSession = cron.schedule(endCronPattern, async () => {
-      console.log(`🏁 WCW Auto-end triggered at ${wcwSettings.endTime}`);
-      
-      for (const groupJid of wcwSettings.groupJids) {
-        try {
-          await endWCWSession(sock, groupJid);
-        } catch (error) {
-          console.error(`Error auto-ending WCW for ${groupJid}:`, error);
-        }
-      }
-    }, {
-      scheduled: false,
-      timezone: 'Africa/Lagos'
-    });
-    
-    cronJobs.endSession.start();
-    console.log(`✅ WCW Auto-end scheduled for Wednesdays at ${wcwSettings.endTime}`);
-    
-    console.log('🎯 All WCW cron jobs setup successfully');
-    
-  } catch (error) {
-    console.error('Error setting up WCW cron jobs:', error);
-  }
-}
-
-function stopAllCronJobs() {
-  // Stop reminder cron jobs
-  cronJobs.reminders.forEach(job => {
-    if (job) {
-      job.stop();
-      job.destroy();
-    }
-  });
-  cronJobs.reminders = [];
-  
-  // Stop start session cron job
-  if (cronJobs.startSession) {
-    cronJobs.startSession.stop();
-    cronJobs.startSession.destroy();
-    cronJobs.startSession = null;
-  }
-  
-  // Stop end session cron job
-  if (cronJobs.endSession) {
-    cronJobs.endSession.stop();
-    cronJobs.endSession.destroy();
-    cronJobs.endSession = null;
-  }
-  
-  console.log('🔄 All WCW cron jobs stopped');
-}
-
-async function sendWCWReminders(sock) {
-  try {
-    if (!isWednesday()) return;
-    
-    const startTime = moment.tz(`${getCurrentDate()} ${wcwSettings.startTime}`, 'DD-MM-YYYY HH:mm', 'Africa/Lagos');
-    const now = getNigeriaTime();
-    
-    // Only send reminder if WCW hasn't started yet
-    if (now.isSameOrAfter(startTime)) return;
-    
-    const timeUntil = moment.duration(startTime.diff(now)).humanize();
-    const reminderMessage = formatReminderMessage(timeUntil);
-    
-    for (const groupJid of wcwSettings.groupJids) {
-      try {
-        const members = await getGroupMembers(sock, groupJid);
-        const mentions = members.map(m => m.id);
-        
-        await sock.sendMessage(groupJid, {
-          text: reminderMessage,
-          mentions: mentions
-        });
-        
-        console.log(`✅ WCW reminder sent to ${groupJid}`);
-      } catch (error) {
-        console.error(`Error sending WCW reminder to ${groupJid}:`, error);
-      }
-    }
-  } catch (error) {
-    console.error('Error sending WCW reminders:', error);
-  }
-}
-
-async function startWCWSession(sock, groupJid) {
-  try {
-    const session = await createWCWSession(groupJid);
-    const startMessage = formatWCWStartMessage();
-    
-    const members = await getGroupMembers(sock, groupJid);
-    const mentions = members.map(m => m.id);
-    
-    await sock.sendMessage(groupJid, {
-      text: startMessage,
-      mentions: mentions
-    });
-    
-    console.log(`✅ WCW session started for ${groupJid}`);
-    return session;
-  } catch (error) {
-    console.error('Error starting WCW session:', error);
-    throw error;
-  }
-}
-
-// =======================================================================
-// PHOTO SUBMISSION HANDLING
-// =======================================================================
-
-async function handlePhotoSubmission(m, sock) {
-  try {
-    if (!isWednesday()) return false;
-    
-    const currentTime = getCurrentTime();
-    const startTime = wcwSettings.startTime;
-    const endTime = wcwSettings.endTime;
-    
-    // Check if WCW is active
-    if (currentTime < startTime || currentTime >= endTime) return false;
-    
-    const senderId = m.key.participant || m.key.remoteJid;
-    const groupJid = m.key.remoteJid;
-    
-    if (!groupJid.endsWith('@g.us')) return false;
-    
-    // Check if message contains image
-    if (!m.message.imageMessage) return false;
-    
-    const session = await getCurrentSession(groupJid);
-    if (!session) return false;
-    
-    // Check if user already submitted a photo
-    const existingParticipant = await db.collection(COLLECTIONS.WCW_PARTICIPANTS).findOne({
-      sessionId: session.sessionId,
-      userId: senderId
-    });
-    
-    if (existingParticipant) {
-      // React with ❌ for duplicate submission
-      await sock.sendMessage(groupJid, {
-        react: { text: '❌', key: m.key }
-      });
-      
-      await sock.sendMessage(groupJid, {
-        text: `🚫 @${senderId.split('@')[0]} - You already submitted your photo! Only your first photo counts for WCW.`,
-        mentions: [senderId]
-      }, { quoted: m });
-      
-      return true;
-    }
-    
-    // Add participant
-    const participantData = {
-      sessionId: session.sessionId,
-      userId: senderId,
-      userPhone: senderId.split('@')[0],
-      messageKey: m.key,
-      photoSubmittedAt: new Date(),
-      ratings: [],
-      totalRating: 0,
-      averageRating: 0,
-      ratingCount: 0
-    };
-    
-    await db.collection(COLLECTIONS.WCW_PARTICIPANTS).insertOne(participantData);
-    
-    // Update session participants list
-    await db.collection(COLLECTIONS.WCW_SESSIONS).updateOne(
-      { sessionId: session.sessionId },
-      { $push: { participants: senderId } }
-    );
-    
-    // React with ✅ for successful submission
-    await sock.sendMessage(groupJid, {
-      react: { text: '✅', key: m.key }
-    });
-    
-    // Initialize user in economy system and give participation reward
-    await unifiedUserManager.initUser(senderId);
-    if (wcwSettings.enableParticipationReward) {
-      await unifiedUserManager.addMoney(senderId, wcwSettings.participationReward, 'WCW participation');
-    }
-    
-    console.log(`📸 WCW photo submitted by ${senderId.split('@')[0]}`);
-    return true;
-    
-  } catch (error) {
-    console.error('Error handling photo submission:', error);
-    return false;
-  }
-}
-
-// =======================================================================
-// RATING SUBMISSION HANDLING
-// =======================================================================
-
 async function handleRatingSubmission(m, sock) {
   try {
     if (!isWednesday()) return false;
@@ -576,7 +428,7 @@ async function handleRatingSubmission(m, sock) {
     if (!participantId || !quotedKey) return false;
     
     const session = await getCurrentSession(groupJid);
-    if (!session) return false;
+    if (!session || session.status !== 'active') return false;
     
     // Check if quoted message is from a WCW participant
     const participant = await db.collection(COLLECTIONS.WCW_PARTICIPANTS).findOne({
@@ -686,47 +538,94 @@ async function updateParticipantRatings(sessionId, participantId) {
 }
 
 // =======================================================================
-// END WCW SESSION AND DECLARE WINNER
+// TV SHOW EXPERIENCE - ENHANCED END SEQUENCE
 // =======================================================================
 
-async function endWCWSession(sock, groupJid) {
+async function startEndSequence(sock, groupJid) {
   try {
     const session = await getCurrentSession(groupJid);
-    if (!session) return false;
+    if (!session || session.countdownStarted) return false;
     
+    // Mark countdown as started
+    await db.collection(COLLECTIONS.WCW_SESSIONS).updateOne(
+      { sessionId: session.sessionId },
+      {
+        $set: {
+          status: 'ending',
+          countdownStarted: true
+        }
+      }
+    );
+    
+    // Send initial ending announcement
+    const endMessage = `🚨 *WCW GLAMOUR SHOW TIME IS UP!* 🚨\n\n` +
+                      `📺 *LIVE TV ANNOUNCEMENT* 📺\n\n` +
+                      `💃 The beauty contest has officially ended!\n` +
+                      `📊 Our panel of judges is counting all the ratings...\n` +
+                      `⏰ Results will be revealed in 1 minute!\n\n` +
+                      `✨ Stay tuned for the glamorous results! ✨\n` +
+                      `#WCWResults #GlamourShow`;
+    
+    await sock.sendMessage(groupJid, {
+      text: endMessage
+    });
+    
+    // Wait for countdown delay (1 minute)
+    setTimeout(async () => {
+      await showLiveResults(sock, groupJid, session.sessionId);
+    }, wcwSettings.countdownDelay);
+    
+    return true;
+    
+  } catch (error) {
+    console.error('Error starting end sequence:', error);
+    return false;
+  }
+}
+
+async function showLiveResults(sock, groupJid, sessionId) {
+  try {
     // Get all participants with their ratings
     const participants = await db.collection(COLLECTIONS.WCW_PARTICIPANTS).find({
-      sessionId: session.sessionId
+      sessionId: sessionId
     }).sort({ averageRating: -1, totalRating: -1 }).toArray();
     
     if (participants.length === 0) {
       await sock.sendMessage(groupJid, {
-        text: `💃 *WCW SESSION ENDED* 💃\n\n❌ No participants today!\n\nBetter luck next Wednesday! 💪`
+        text: `💃 *WCW FINAL RESULTS* 💃\n\n❌ No contestants participated today!\n\nBetter luck next Wednesday! 💪\n\n#WCWResults`
       });
       
-      // Mark session as ended
-      await db.collection(COLLECTIONS.WCW_SESSIONS).updateOne(
-        { sessionId: session.sessionId },
-        {
-          $set: {
-            status: 'ended',
-            endedAt: new Date(),
-            winnerDeclared: true
-          }
-        }
-      );
-      
-      return true;
+      await markSessionEnded(sessionId, null);
+      return;
     }
     
-    // Determine winner (highest average rating, then highest total rating)
-    const winner = participants[0];
-    const hasValidRatings = winner.ratingCount > 0;
+    // Send "Counting Complete" message
+    const countingMessage = `⚡ *VOTES COUNTED!* ⚡\n\n` +
+                           `📊 All ratings have been tallied!\n` +
+                           `🎯 Total contestants: ${participants.length}\n` +
+                           `⭐ Total votes received: ${participants.reduce((sum, p) => sum + p.ratingCount, 0)}\n\n` +
+                           `🥁 *Drumroll for our beautiful contestants...* 🥁`;
     
-    // Build results message
-    let resultsMessage = `👑 *WCW RESULTS - ${getCurrentDate()}* 👑\n\n`;
-    resultsMessage += `💃 *Tonight's Glamour Show Has Ended!* 💃\n\n`;
-    resultsMessage += `📊 *FINAL STANDINGS:*\n\n`;
+    await sock.sendMessage(groupJid, {
+      text: countingMessage
+    });
+    
+    // Wait before showing results
+    setTimeout(async () => {
+      await showDetailedResults(sock, groupJid, participants, sessionId);
+    }, wcwSettings.resultDelay);
+    
+  } catch (error) {
+    console.error('Error showing live results:', error);
+  }
+}
+
+async function showDetailedResults(sock, groupJid, participants, sessionId) {
+  try {
+    // Build detailed results message
+    let resultsMessage = `👑 *WCW FINAL STANDINGS - ${getCurrentDate()}* 👑\n\n`;
+    resultsMessage += `💃 *LIVE GLAMOUR SHOW RESULTS* 💃\n\n`;
+    resultsMessage += `📊 *OFFICIAL BEAUTY RANKINGS:*\n\n`;
     
     // List all participants with their ratings
     participants.forEach((participant, index) => {
@@ -734,27 +633,12 @@ async function endWCWSession(sock, groupJid) {
       const emoji = position === 1 ? '👑' : position === 2 ? '🥈' : position === 3 ? '🥉' : '🏅';
       const avgRating = participant.averageRating > 0 ? participant.averageRating.toFixed(1) : '0.0';
       
-      resultsMessage += `${emoji} ${position}. @${participant.userPhone}\n`;
-      resultsMessage += `   ⭐ Average: ${avgRating}/10 (${participant.ratingCount} ratings)\n`;
-      resultsMessage += `   📊 Total Points: ${participant.totalRating}\n\n`;
+      resultsMessage += `${emoji} *${position}. @${participant.userPhone}*\n`;
+      resultsMessage += `   ⭐ Average: ${avgRating}/10\n`;
+      resultsMessage += `   📊 Total Points: ${participant.totalRating}\n`;
+      resultsMessage += `   👥 Votes: ${participant.ratingCount}\n\n`;
     });
     
-    if (hasValidRatings) {
-      resultsMessage += `🎉 *WINNER: @${winner.userPhone}* 🎉\n`;
-      resultsMessage += `💰 *Prize: ₦${wcwSettings.winnerReward.toLocaleString()}* 💰\n\n`;
-      
-      // Award winner prize
-      await unifiedUserManager.initUser(winner.userId);
-      await unifiedUserManager.addMoney(winner.userId, wcwSettings.winnerReward, 'WCW Winner');
-    } else {
-      resultsMessage += `🤷‍♀️ *No ratings received - No winner declared*\n\n`;
-    }
-    
-    resultsMessage += `📅 *Next WCW: Wednesday 8:00 PM*\n`;
-    resultsMessage += `💄 *Thank you all for participating!*\n\n`;
-    resultsMessage += `#WCWResults #WomanCrushWednesday #GistHQ`;
-    
-    // Get mentions for all participants
     const mentions = participants.map(p => p.userId);
     
     await sock.sendMessage(groupJid, {
@@ -762,44 +646,346 @@ async function endWCWSession(sock, groupJid) {
       mentions: mentions
     });
     
-    // Save to records
+    // Wait before queen announcement
+    setTimeout(async () => {
+      await announceQueen(sock, groupJid, participants, sessionId);
+    }, wcwSettings.resultDelay * 2); // Longer delay for suspense
+    
+  } catch (error) {
+    console.error('Error showing detailed results:', error);
+  }
+}
+
+async function announceQueen(sock, groupJid, participants, sessionId) {
+  try {
+    const winner = participants[0];
+    const hasValidRatings = winner && winner.ratingCount > 0;
+    
+    if (!hasValidRatings) {
+      const noWinnerMessage = `🤷‍♀️ *NO QUEEN CROWNED TODAY* 🤷‍♀️\n\n` +
+                             `❌ Unfortunately, no ratings were received today!\n` +
+                             `📅 Better participation expected next Wednesday!\n\n` +
+                             `💄 Keep shining, beautiful ladies! 💄\n` +
+                             `#WCWNoQueen`;
+      
+      await sock.sendMessage(groupJid, {
+        text: noWinnerMessage
+      });
+      
+      await markSessionEnded(sessionId, null);
+      return;
+    }
+    
+    // Epic queen announcement
+    const queenMessage = `🎉👑 *WCW QUEEN ANNOUNCEMENT* 👑🎉\n\n` +
+                        `✨ *CONGRATULATIONS!* ✨\n\n` +
+                        `👑 *OUR REIGNING QUEEN IS: @${winner.userPhone}* 👑\n\n` +
+                        `⭐ Final Score: ${winner.averageRating.toFixed(1)}/10\n` +
+                        `📊 Total Points: ${winner.totalRating}\n` +
+                        `👥 Total Votes: ${winner.ratingCount}\n\n` +
+                        `💰 *PRIZE WON: ₦${wcwSettings.winnerReward.toLocaleString()}* 💰\n\n` +
+                        `💃 Absolutely stunning performance! 💃\n` +
+                        `#WCWQueen #BeautyQueen`;
+    
+    await sock.sendMessage(groupJid, {
+      text: queenMessage,
+      mentions: [winner.userId]
+    });
+    
+    // Wait then show queen's photo with special message
+    setTimeout(async () => {
+      await showQueenPhoto(sock, groupJid, winner);
+    }, wcwSettings.resultDelay);
+    
+    // Award winner prize
+    await unifiedUserManager.initUser(winner.userId);
+    await unifiedUserManager.addMoney(winner.userId, wcwSettings.winnerReward, 'WCW Queen');
+    
+    // Save to records and mark session ended
+    await saveSessionRecord(sessionId, participants, winner);
+    await markSessionEnded(sessionId, winner);
+    
+  } catch (error) {
+    console.error('Error announcing queen:', error);
+  }
+}
+
+async function showQueenPhoto(sock, groupJid, winner) {
+  try {
+    const queenPhotoMessage = `📸 *BEHOLD OUR QUEEN'S WINNING PHOTO* 📸\n\n` +
+                             `👑 @${winner.userPhone} - WCW Beauty Queen! 👑\n\n` +
+                             `🎯 This is the stunning photo that won ₦${wcwSettings.winnerReward.toLocaleString()}!\n` +
+                             `⭐ Rated ${winner.averageRating.toFixed(1)}/10 by our gentlemen!\n\n` +
+                             `📅 *Next WCW: Wednesday 8:00 PM*\n` +
+                             `💄 *Thank you all for the glamorous show!* 💄\n\n` +
+                             `#WCWQueen #WinningPhoto #BeautyQueen`;
+    
+    // Try to resend the winner's photo
+    if (winner.messageKey) {
+      try {
+        await sock.sendMessage(groupJid, {
+          text: queenPhotoMessage,
+          mentions: [winner.userId]
+        });
+      } catch (error) {
+        console.error('Could not resend queen photo:', error);
+      }
+    }
+    
+  } catch (error) {
+    console.error('Error showing queen photo:', error);
+  }
+}
+
+async function saveSessionRecord(sessionId, participants, winner) {
+  try {
     const recordData = {
       date: getCurrentDate(),
-      groupJid: groupJid,
-      sessionId: session.sessionId,
+      sessionId: sessionId,
       totalParticipants: participants.length,
-      winner: hasValidRatings ? {
+      winner: winner ? {
         userId: winner.userId,
         userPhone: winner.userPhone,
         averageRating: winner.averageRating,
         totalRating: winner.totalRating,
         ratingCount: winner.ratingCount,
-        prizeAwarded: wcwSettings.winnerReward
+        prizeAwarded: wcwSettings.winnerReward,
+        caption: winner.caption || ''
       } : null,
       participants: participants,
       createdAt: new Date()
     };
     
     await db.collection(COLLECTIONS.WCW_RECORDS).insertOne(recordData);
-    
-    // Mark session as ended
+    console.log('✅ WCW session record saved');
+  } catch (error) {
+    console.error('Error saving session record:', error);
+  }
+}
+
+async function markSessionEnded(sessionId, winner) {
+  try {
     await db.collection(COLLECTIONS.WCW_SESSIONS).updateOne(
-      { sessionId: session.sessionId },
+      { sessionId: sessionId },
       {
         $set: {
           status: 'ended',
           endedAt: new Date(),
-          winnerDeclared: true
+          winnerDeclared: true,
+          resultsShown: true
         }
       }
     );
+    console.log('✅ WCW session marked as ended');
+  } catch (error) {
+    console.error('Error marking session as ended:', error);
+  }
+}
+
+// =======================================================================
+// ENHANCED CRON SCHEDULING SYSTEM
+// =======================================================================
+
+async function setupWCWCronJobs(sock) {
+  try {
+    // Clear existing cron jobs
+    stopAllCronJobs();
     
-    console.log(`✅ WCW session ended and winner declared for ${groupJid}`);
-    return true;
+    // Setup reminder cron jobs for each reminder time
+    wcwSettings.reminderTimes.forEach((reminderTime, index) => {
+      const [hours, minutes] = reminderTime.split(':');
+      
+      // Every Wednesday at the specified time
+      const cronPattern = `${minutes} ${hours} * * 3`; // 3 = Wednesday
+      
+      const cronJob = cron.schedule(cronPattern, async () => {
+        console.log(`⏰ WCW Reminder ${index + 1} triggered at ${reminderTime}`);
+        await sendWCWReminders(sock);
+      }, {
+        scheduled: false,
+        timezone: 'Africa/Lagos'
+      });
+      
+      cronJobs.reminders.push(cronJob);
+      cronJob.start();
+      
+      console.log(`✅ WCW Reminder ${index + 1} scheduled for Wednesdays at ${reminderTime}`);
+    });
+    
+    // Setup start session cron job
+    if (wcwSettings.autoStartEnabled) {
+      const [startHours, startMinutes] = wcwSettings.startTime.split(':');
+      const startCronPattern = `${startMinutes} ${startHours} * * 3`; // Every Wednesday
+      
+      cronJobs.startSession = cron.schedule(startCronPattern, async () => {
+        console.log(`💃 WCW Auto-start triggered at ${wcwSettings.startTime}`);
+        
+        for (const groupJid of wcwSettings.groupJids) {
+          try {
+            const existingSession = await getCurrentSession(groupJid);
+            if (!existingSession) {
+              await startWCWSession(sock, groupJid);
+            }
+          } catch (error) {
+            console.error(`Error auto-starting WCW for ${groupJid}:`, error);
+          }
+        }
+      }, {
+        scheduled: false,
+        timezone: 'Africa/Lagos'
+      });
+      
+      cronJobs.startSession.start();
+      console.log(`✅ WCW Auto-start scheduled for Wednesdays at ${wcwSettings.startTime}`);
+    }
+    
+    // Setup end session cron job with TV show experience
+    const [endHours, endMinutes] = wcwSettings.endTime.split(':');
+    const endCronPattern = `${endMinutes} ${endHours} * * 3`; // Every Wednesday
+    
+    cronJobs.endSession = cron.schedule(endCronPattern, async () => {
+      console.log(`🏁 WCW Auto-end triggered at ${wcwSettings.endTime}`);
+      
+      for (const groupJid of wcwSettings.groupJids) {
+        try {
+          const session = await getCurrentSession(groupJid);
+          if (session && session.status === 'active' && !session.countdownStarted) {
+            await startEndSequence(sock, groupJid);
+          }
+        } catch (error) {
+          console.error(`Error auto-ending WCW for ${groupJid}:`, error);
+        }
+      }
+    }, {
+      scheduled: false,
+      timezone: 'Africa/Lagos'
+    });
+    
+    cronJobs.endSession.start();
+    console.log(`✅ WCW Auto-end with TV show experience scheduled for Wednesdays at ${wcwSettings.endTime}`);
+    
+    console.log('🎯 All enhanced WCW cron jobs setup successfully');
     
   } catch (error) {
-    console.error('Error ending WCW session:', error);
-    return false;
+    console.error('Error setting up WCW cron jobs:', error);
+  }
+}
+
+function stopAllCronJobs() {
+  // Stop reminder cron jobs
+  cronJobs.reminders.forEach(job => {
+    if (job) {
+      job.stop();
+      job.destroy();
+    }
+  });
+  cronJobs.reminders = [];
+  
+  // Stop start session cron job
+  if (cronJobs.startSession) {
+    cronJobs.startSession.stop();
+    cronJobs.startSession.destroy();
+    cronJobs.startSession = null;
+  }
+  
+  // Stop end session cron job
+  if (cronJobs.endSession) {
+    cronJobs.endSession.stop();
+    cronJobs.endSession.destroy();
+    cronJobs.endSession = null;
+  }
+  
+  console.log('🔄 All WCW cron jobs stopped');
+}
+
+// =======================================================================
+// ENHANCED ANNOUNCEMENTS AND REMINDERS
+// =======================================================================
+
+function formatReminderMessage(timeUntil) {
+  const messages = [
+    `💃 *WCW ALERT!* 💃\n\n✨ Get ready ladies! Woman Crush Wednesday starts in ${timeUntil}! ✨\n\n📸 *How to Participate:*\n• Post your stunning photo with "WCW" or "Rate Me" caption\n• Gentlemen will rate you from 1-10\n• Queen gets ₦${wcwSettings.winnerReward.toLocaleString()}!\n\n⏰ *Starting at 8:00 PM sharp!*\n💡 *Remember: Caption must include WCW/Rate keywords!*\n\n#WCW #GistHQ #WomanCrushWednesday`,
+    
+    `⚡ *LADIES, IT'S ALMOST TIME!* ⚡\n\n🕰️ WCW glamour show starts in ${timeUntil}!\n\n🎬 *Tonight's Beauty Contest:*\n📸 Post photos with "WCW" caption\n🌟 Guys rate from 1-10\n👑 Queen takes ₦${wcwSettings.winnerReward.toLocaleString()}\n📺 Live results at 10 PM!\n\n🔑 *Caption Keywords Required:* WCW, Rate Me, Queen, Beauty\n#WCWCountdown`
+  ];
+  
+  return messages[Math.floor(Math.random() * messages.length)];
+}
+
+function formatWCWStartMessage() {
+  return `💃 *WOMAN CRUSH WEDNESDAY IS NOW LIVE!* 💃\n\n` +
+         `🔴 *LIVE NOW - LIVE NOW - LIVE NOW* 🔴\n\n` +
+         `👩‍💼 *LADIES:* Post your most stunning photo with WCW caption NOW!\n` +
+         `👨‍💼 *GENTLEMEN:* Rate the beautiful ladies from 1-10!\n\n` +
+         `📋 *IMPORTANT RULES:*\n` +
+         `• Ladies: Photo must have "WCW", "Rate Me", or similar caption\n` +
+         `• Gentlemen: Rate 1-10 only (quote the photo to rate)\n` +
+         `• No self-rating allowed\n` +
+         `• Only 1 photo per contestant\n\n` +
+         `⏰ *Competition ends at 10:00 PM*\n` +
+         `💰 *Queen takes home ₦${wcwSettings.winnerReward.toLocaleString()}*\n` +
+         `🎁 *Participation reward: ₦${wcwSettings.participationReward.toLocaleString()}*\n\n` +
+         `🔑 *Valid Caption Examples:*\n` +
+         `• "Rate me for WCW! ✨"\n` +
+         `• "Woman Crush Wednesday vibes 💃"\n` +
+         `• "WCW queen contestant here!"\n` +
+         `• "Beauty contest ready! 👑"\n\n` +
+         `📺 *Live glamour show results at 10:00 PM!* 📺\n` +
+         `💄 *Let the beauty contest begin!* 💄\n\n` +
+         `#WCWLive #WomanCrushWednesday #GlamourShow`;
+}
+
+async function sendWCWReminders(sock) {
+  try {
+    if (!isWednesday()) return;
+    
+    const startTime = moment.tz(`${getCurrentDate()} ${wcwSettings.startTime}`, 'DD-MM-YYYY HH:mm', 'Africa/Lagos');
+    const now = getNigeriaTime();
+    
+    // Only send reminder if WCW hasn't started yet
+    if (now.isSameOrAfter(startTime)) return;
+    
+    const timeUntil = moment.duration(startTime.diff(now)).humanize();
+    const reminderMessage = formatReminderMessage(timeUntil);
+    
+    for (const groupJid of wcwSettings.groupJids) {
+      try {
+        const members = await getGroupMembers(sock, groupJid);
+        const mentions = members.map(m => m.id);
+        
+        await sock.sendMessage(groupJid, {
+          text: reminderMessage,
+          mentions: mentions
+        });
+        
+        console.log(`✅ WCW reminder sent to ${groupJid}`);
+      } catch (error) {
+        console.error(`Error sending WCW reminder to ${groupJid}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Error sending WCW reminders:', error);
+  }
+}
+
+async function startWCWSession(sock, groupJid) {
+  try {
+    const session = await createWCWSession(groupJid);
+    const startMessage = formatWCWStartMessage();
+    
+    const members = await getGroupMembers(sock, groupJid);
+    const mentions = members.map(m => m.id);
+    
+    await sock.sendMessage(groupJid, {
+      text: startMessage,
+      mentions: mentions
+    });
+    
+    console.log(`✅ WCW session started for ${groupJid}`);
+    return session;
+  } catch (error) {
+    console.error('Error starting WCW session:', error);
+    throw error;
   }
 }
 
@@ -807,34 +993,41 @@ async function setGroupJid(groupJid) {
   if (!wcwSettings.groupJids.includes(groupJid)) {
     wcwSettings.groupJids.push(groupJid);
     await saveSettings();
-    console.log(`📝 Group JID added for WCW: ${groupJid}`);
+    console.log(`📝 Group JID added for Enhanced WCW: ${groupJid}`);
   }
 }
 
 // =======================================================================
-// COMMAND HANDLERS
+// ENHANCED COMMAND HANDLERS
 // =======================================================================
 
 async function showWCWMenu(reply, prefix) {
-  const nextWCW = moment.tz('Africa/Lagos').startOf('week').add(3, 'days').format('dddd, MMMM DD, YYYY'); // Wednesday
+  const nextWCW = moment.tz('Africa/Lagos').startOf('week').add(1, 'week').add(3, 'days').format('dddd, MMMM DD, YYYY'); // Next Wednesday
   
-  const menuText = `💃 *WOMAN CRUSH WEDNESDAY (WCW)* 💃\n\n` +
+  const menuText = `💃 *WOMAN CRUSH WEDNESDAY (WCW) - ENHANCED* 💃\n\n` +
                   `📊 *User Commands:*\n` +
                   `• *current* - View current WCW status\n` +
                   `• *stats* - View your WCW statistics\n` +
                   `• *history* - View WCW history\n` +
-                  `• *leaderboard* - View all-time winners\n\n` +
+                  `• *leaderboard* - View all-time queens\n\n` +
                   `👑 *Admin Commands:*\n` +
                   `• *start* - Start WCW manually\n` +
-                  `• *end* - End current WCW\n` +
+                  `• *end* - Start end sequence manually\n` +
                   `• *settings* - System settings\n` +
                   `• *reschedule* - Update cron schedules\n\n` +
-                  `⏰ *Schedule (Node-Cron):*\n` +
+                  `⏰ *Enhanced Schedule (Node-Cron):*\n` +
                   `• Every Wednesday 8:00 PM - 10:00 PM\n` +
-                  `• Two reminders: 10:00 AM & 4:00 PM\n` +
-                  `• Auto-start and auto-end with timezone support\n\n` +
+                  `• Smart photo recognition with keywords\n` +
+                  `• TV glamour show style results at 10:00 PM\n` +
+                  `• Auto-start and dramatic end sequence\n\n` +
+                  `🔑 *New Features:*\n` +
+                  `• Only accepts photos with WCW/Rate captions\n` +
+                  `• Live TV glamour show experience\n` +
+                  `• Enhanced queen announcement\n` +
+                  `• Countdown and suspense elements\n` +
+                  `• Emoji rating support (8️⃣, 🔟)\n\n` +
                   `💰 *Rewards:*\n` +
-                  `• Winner: ₦${wcwSettings.winnerReward.toLocaleString()}\n` +
+                  `• Queen: ₦${wcwSettings.winnerReward.toLocaleString()}\n` +
                   `• Participation: ₦${wcwSettings.participationReward.toLocaleString()}\n\n` +
                   `📅 *Next WCW: ${nextWCW} 8:00 PM*\n\n` +
                   `💡 *Usage:* ${prefix}wcw [command]`;
@@ -860,7 +1053,7 @@ async function handleWCWStart(context) {
     }
     
     await startWCWSession(sock, from);
-    await reply('✅ *WCW session started manually!*');
+    await reply('✅ *WCW glamour show started manually!*');
     
   } catch (error) {
     await reply('❌ *Error starting WCW session.*');
@@ -872,23 +1065,32 @@ async function handleWCWEnd(context) {
   const { reply, senderId, sock, from } = context;
   
   if (!await isAuthorized(sock, from, senderId)) {
-    return reply('🚫 Only admins can end WCW manually.');
+    return reply('🚫 Only admins can trigger the end sequence manually.');
   }
   
   if (!from.endsWith('@g.us')) {
-    return reply('❌ WCW can only be ended in groups.');
+    return reply('❌ WCW end sequence can only be triggered in groups.');
   }
   
   try {
-    const success = await endWCWSession(sock, from);
+    const session = await getCurrentSession(from);
+    if (!session) {
+      return reply('❌ *No active WCW session found.*');
+    }
+    
+    if (session.status === 'ending' || session.countdownStarted) {
+      return reply('🎬 *End sequence already in progress!*');
+    }
+    
+    const success = await startEndSequence(sock, from);
     if (success) {
-      await reply('✅ *WCW session ended and winner declared!*');
+      await reply('✅ *WCW end sequence started! Check the group for the glamour show experience.*');
     } else {
-      await reply('❌ *No active WCW session found.*');
+      await reply('❌ *Error starting end sequence.*');
     }
     
   } catch (error) {
-    await reply('❌ *Error ending WCW session.*');
+    await reply('❌ *Error triggering end sequence.*');
     console.error('WCW end error:', error);
   }
 }
@@ -908,7 +1110,7 @@ async function handleWCWCurrent(context) {
         ? `Today at ${wcwSettings.startTime}`
         : moment.tz('Africa/Lagos').startOf('week').add(1, 'week').add(3, 'days').format('dddd, MMMM DD') + ` at ${wcwSettings.startTime}`;
       
-      return reply(`📅 *No active WCW session*\n\n💃 *Next WCW:* ${nextWCW}\n💰 *Winner Prize:* ₦${wcwSettings.winnerReward.toLocaleString()}`);
+      return reply(`📅 *No active WCW session*\n\n💃 *Next WCW:* ${nextWCW}\n💰 *Queen Prize:* ₦${wcwSettings.winnerReward.toLocaleString()}\n\n🔑 *Remember:* Photos must have WCW/Rate captions!`);
     }
     
     const participants = await db.collection(COLLECTIONS.WCW_PARTICIPANTS).find({
@@ -921,9 +1123,10 @@ async function handleWCWCurrent(context) {
     
     let statusMessage = `💃 *WCW LIVE STATUS* 💃\n\n`;
     statusMessage += `📅 Date: ${session.date}\n`;
+    statusMessage += `🎭 Status: ${session.status === 'active' ? '🔴 LIVE' : session.status === 'ending' ? '🎬 ENDING' : '✅ ENDED'}\n`;
     statusMessage += `🕐 Started: ${moment(session.startedAt).tz('Africa/Lagos').format('HH:mm')}\n`;
     statusMessage += `⏰ Ends: ${wcwSettings.endTime}\n\n`;
-    statusMessage += `👥 Participants: ${participants.length}\n`;
+    statusMessage += `👥 Contestants: ${participants.length}\n`;
     statusMessage += `⭐ Total Ratings: ${totalRatings}\n\n`;
     
     if (participants.length > 0) {
@@ -933,17 +1136,22 @@ async function handleWCWCurrent(context) {
         const emoji = position === 1 ? '👑' : position === 2 ? '🥈' : position === 3 ? '🥉' : '🏅';
         const avgRating = participant.averageRating > 0 ? participant.averageRating.toFixed(1) : '0.0';
         
-        statusMessage += `${emoji} ${position}. +${participant.userPhone} - ${participant.totalRating} pts (${participant.ratingCount} ratings)\n`;
+        statusMessage += `${emoji} ${position}. +${participant.userPhone} - ${avgRating}/10 (${participant.ratingCount} votes)\n`;
       });
       
       if (participants.length > 5) {
-        statusMessage += `... and ${participants.length - 5} more participants\n`;
+        statusMessage += `... and ${participants.length - 5} more contestants\n`;
       }
     } else {
-      statusMessage += `❌ *No participants yet!*\n`;
+      statusMessage += `❌ *No contestants yet!*\n`;
+      statusMessage += `🔑 *Remember:* Photos must include WCW/Rate keywords in caption\n`;
     }
     
-    statusMessage += `\n💰 *Winner gets ₦${wcwSettings.winnerReward.toLocaleString()}!*`;
+    statusMessage += `\n💰 *Queen gets ₦${wcwSettings.winnerReward.toLocaleString()}!*`;
+    
+    if (session.status === 'ending') {
+      statusMessage += `\n\n🎬 *Glamour show ending sequence in progress! Stay tuned!* 🎬`;
+    }
     
     await reply(statusMessage);
     
@@ -992,7 +1200,7 @@ async function handleWCWStats(context) {
     let statsMessage = `📊 *YOUR WCW STATISTICS* 📊\n\n`;
     statsMessage += `💃 *Participation Record:*\n`;
     statsMessage += `• Total participations: ${participationCount}\n`;
-    statsMessage += `• Wins: ${winsCount} 👑\n`;
+    statsMessage += `• Queens crowned: ${winsCount} 👑\n`;
     statsMessage += `• Win rate: ${winRate}%\n\n`;
     statsMessage += `⭐ *Rating Statistics:*\n`;
     statsMessage += `• Total ratings received: ${totalRatingsReceived}\n`;
@@ -1010,121 +1218,66 @@ async function handleWCWStats(context) {
   }
 }
 
-async function handleWCWHistory(context, args) {
-  const { reply } = context;
+async function handleWCWTest(context, args) {
+  const { reply, config } = context;
   
-  try {
-    const limit = args[0] ? Math.min(parseInt(args[0]), 10) : 5;
-    
-    const records = await db.collection(COLLECTIONS.WCW_RECORDS).find({})
-      .sort({ date: -1 })
-      .limit(limit)
-      .toArray();
-    
-    if (records.length === 0) {
-      return reply('📅 *No WCW history found.*');
-    }
-    
-    let historyMessage = `📚 *WCW HISTORY (Last ${records.length})* 📚\n\n`;
-    
-    records.forEach((record, index) => {
-      historyMessage += `${index + 1}. 📅 ${record.date}\n`;
-      if (record.winner) {
-        historyMessage += `   👑 Winner: +${record.winner.userPhone}\n`;
-        historyMessage += `   ⭐ Rating: ${record.winner.averageRating.toFixed(1)}/10\n`;
-        historyMessage += `   💰 Prize: ₦${record.winner.prizeAwarded.toLocaleString()}\n`;
-      } else {
-        historyMessage += `   🤷‍♀️ No winner (no ratings)\n`;
-      }
-      historyMessage += `   👥 Participants: ${record.totalParticipants}\n\n`;
-    });
-    
-    historyMessage += `💡 Use *wcw history [number]* for more records`;
-    
-    await reply(historyMessage);
-    
-  } catch (error) {
-    await reply('❌ *Error loading WCW history.*');
-    console.error('WCW history error:', error);
+  if (args.length === 0) {
+    return reply(`🔍 *WCW VALIDATION TESTER* 🔍\n\n*Usage:*\n• ${config.PREFIX}wcwtest caption [your_caption]\n• ${config.PREFIX}wcwtest rating [your_rating]\n\n*Examples:*\n• ${config.PREFIX}wcwtest caption "Rate me for WCW! ✨"\n• ${config.PREFIX}wcwtest rating "9️⃣ gorgeous queen!"\n• ${config.PREFIX}wcwtest rating "She's a perfect 10"`);
   }
-}
-
-async function handleWCWLeaderboard(context) {
-  const { reply } = context;
+  
+  const testType = args[0].toLowerCase();
+  const testContent = args.slice(1).join(' ');
   
   try {
-    // Get all winners from WCW records
-    const records = await db.collection(COLLECTIONS.WCW_RECORDS).find({
-      winner: { $exists: true, $ne: null }
-    }).toArray();
-    
-    if (records.length === 0) {
-      return reply('🏆 *No WCW winners yet!*\n\nBe the first to win WCW! 💪');
+    if (testType === 'caption') {
+      const isValid = hasValidWCWCaption(testContent);
+      
+      let result = `🔍 *CAPTION VALIDATION RESULTS* 🔍\n\n`;
+      result += `📝 Test caption: "${testContent}"\n\n`;
+      
+      if (isValid) {
+        result += `✅ *VALID WCW CAPTION!*\n`;
+        result += `🎯 Status: Would be accepted for WCW\n`;
+        result += `🔑 Keywords detected: ${wcwSettings.captionKeywords.filter(keyword => 
+          testContent.toLowerCase().includes(keyword.toLowerCase())
+        ).join(', ')}`;
+      } else {
+        result += `❌ *INVALID WCW CAPTION*\n`;
+        result += `🎯 Status: Would be rejected\n\n`;
+        result += `💡 *Required Keywords (any one):*\n`;
+        result += wcwSettings.captionKeywords.map(keyword => `• "${keyword}"`).join('\n');
+      }
+      
+      await reply(result);
+      
+    } else if (testType === 'rating') {
+      const rating = extractRating(testContent);
+      
+      let result = `🔍 *RATING VALIDATION RESULTS* 🔍\n\n`;
+      result += `📝 Test message: "${testContent}"\n\n`;
+      
+      if (rating) {
+        result += `✅ *VALID RATING DETECTED!*\n`;
+        result += `⭐ Rating: ${rating}/10\n`;
+        result += `🎯 Status: Would be accepted ✅`;
+      } else {
+        result += `❌ *NO VALID RATING FOUND*\n`;
+        result += `🎯 Status: Would be rejected ❌\n\n`;
+        result += `💡 *Valid Rating Formats:*\n`;
+        result += `• Regular numbers: "9", "10", "She's a perfect 8"\n`;
+        result += `• Emoji numbers: "9️⃣", "🔟", "Beautiful 1️⃣0️⃣"\n`;
+        result += `• Valid range: 1-10 only`;
+      }
+      
+      await reply(result);
+      
+    } else {
+      await reply(`❓ Unknown test type: *${testType}*\n\nAvailable: caption, rating`);
     }
-    
-    // Count wins per user
-    const winCounts = {};
-    const userStats = {};
-    
-    records.forEach(record => {
-      const winner = record.winner;
-      const userId = winner.userId;
-      const userPhone = winner.userPhone;
-      
-      if (!winCounts[userId]) {
-        winCounts[userId] = 0;
-        userStats[userId] = {
-          userPhone: userPhone,
-          wins: 0,
-          totalEarnings: 0,
-          bestRating: 0,
-          totalRatings: 0
-        };
-      }
-      
-      winCounts[userId]++;
-      userStats[userId].wins++;
-      userStats[userId].totalEarnings += winner.prizeAwarded || 0;
-      userStats[userId].totalRatings += winner.ratingCount || 0;
-      
-      if (winner.averageRating > userStats[userId].bestRating) {
-        userStats[userId].bestRating = winner.averageRating;
-      }
-    });
-    
-    // Sort by wins, then by best rating
-    const sortedLeaders = Object.values(userStats).sort((a, b) => {
-      if (b.wins === a.wins) {
-        return b.bestRating - a.bestRating;
-      }
-      return b.wins - a.wins;
-    });
-    
-    let leaderboardMessage = `🏆 *WCW HALL OF FAME* 🏆\n\n`;
-    leaderboardMessage += `👑 *ALL-TIME LEADERBOARD:*\n\n`;
-    
-    sortedLeaders.slice(0, 10).forEach((leader, index) => {
-      const position = index + 1;
-      const emoji = position === 1 ? '👑' : position === 2 ? '🥈' : position === 3 ? '🥉' : '🏅';
-      
-      leaderboardMessage += `${emoji} ${position}. +${leader.userPhone}\n`;
-      leaderboardMessage += `   🏆 Wins: ${leader.wins}\n`;
-      leaderboardMessage += `   ⭐ Best: ${leader.bestRating.toFixed(1)}/10\n`;
-      leaderboardMessage += `   💰 Earned: ₦${leader.totalEarnings.toLocaleString()}\n\n`;
-    });
-    
-    if (sortedLeaders.length > 10) {
-      leaderboardMessage += `... and ${sortedLeaders.length - 10} more queens\n\n`;
-    }
-    
-    leaderboardMessage += `💃 *Think you can make it to the top?*\n`;
-    leaderboardMessage += `Next WCW: Every Wednesday 8:00 PM!`;
-    
-    await reply(leaderboardMessage);
     
   } catch (error) {
-    await reply('❌ *Error loading WCW leaderboard.*');
-    console.error('WCW leaderboard error:', error);
+    await reply('❌ *Error testing WCW validation.*');
+    console.error('WCW test error:', error);
   }
 }
 
@@ -1144,16 +1297,18 @@ async function handleWCWSettings(context, args) {
       settingsMessage += `• Auto-start: ${wcwSettings.autoStartEnabled ? 'Enabled ✅' : 'Disabled ❌'}\n`;
       settingsMessage += `• Reminder times: ${wcwSettings.reminderTimes.join(', ')}\n\n`;
       settingsMessage += `💰 *Rewards:*\n`;
-      settingsMessage += `• Winner prize: ₦${wcwSettings.winnerReward.toLocaleString()}\n`;
+      settingsMessage += `• Queen prize: ₦${wcwSettings.winnerReward.toLocaleString()}\n`;
       settingsMessage += `• Participation reward: ₦${wcwSettings.participationReward.toLocaleString()}\n`;
       settingsMessage += `• Participation rewards: ${wcwSettings.enableParticipationReward ? 'Enabled ✅' : 'Disabled ❌'}\n\n`;
+      settingsMessage += `🔑 *Caption Recognition:*\n`;
+      settingsMessage += `• Keywords required: ${wcwSettings.requireCaptionKeywords ? 'Enabled ✅' : 'Disabled ❌'}\n`;
+      settingsMessage += `• Keywords: ${wcwSettings.captionKeywords.join(', ')}\n\n`;
       settingsMessage += `🔧 *Available Commands:*\n`;
       settingsMessage += `• \`${config.PREFIX}wcw settings prize 15000\`\n`;
       settingsMessage += `• \`${config.PREFIX}wcw settings participation 1500\`\n`;
       settingsMessage += `• \`${config.PREFIX}wcw settings starttime 20:30\`\n`;
       settingsMessage += `• \`${config.PREFIX}wcw settings endtime 22:30\`\n`;
-      settingsMessage += `• \`${config.PREFIX}wcw settings autostart on/off\`\n`;
-      settingsMessage += `• \`${config.PREFIX}wcw settings parreward on/off\`\n`;
+      settingsMessage += `• \`${config.PREFIX}wcw settings keywords on/off\`\n`;
       settingsMessage += `• \`${config.PREFIX}wcw reschedule\` (restart cron jobs)`;
       
       await reply(settingsMessage);
@@ -1167,13 +1322,13 @@ async function handleWCWSettings(context, args) {
     
     switch (setting) {
       case 'prize':
-      case 'winner':
+      case 'queen':
         if (!value || isNaN(value)) {
           responseText = `⚠️ Invalid amount. Use: ${config.PREFIX}wcw settings prize 15000`;
         } else {
           wcwSettings.winnerReward = parseInt(value);
           await saveSettings();
-          responseText = `✅ Winner prize set to ₦${parseInt(value).toLocaleString()}`;
+          responseText = `✅ Queen prize set to ₦${parseInt(value).toLocaleString()}`;
         }
         break;
         
@@ -1212,40 +1367,23 @@ async function handleWCWSettings(context, args) {
         }
         break;
         
-      case 'autostart':
-      case 'auto':
+      case 'keywords':
+      case 'caption':
         if (['on', 'true', '1', 'enable'].includes(value?.toLowerCase())) {
-          wcwSettings.autoStartEnabled = true;
+          wcwSettings.requireCaptionKeywords = true;
           await saveSettings();
-          needsReschedule = true;
-          responseText = "✅ Auto-start enabled 🤖. Cron jobs will be rescheduled.";
+          responseText = "✅ Caption keyword requirement enabled 🔑";
         } else if (['off', 'false', '0', 'disable'].includes(value?.toLowerCase())) {
-          wcwSettings.autoStartEnabled = false;
+          wcwSettings.requireCaptionKeywords = false;
           await saveSettings();
-          needsReschedule = true;
-          responseText = "✅ Auto-start disabled. Cron jobs will be rescheduled.";
-        } else {
-          responseText = `⚠️ Invalid value. Use: on/off`;
-        }
-        break;
-        
-      case 'parreward':
-      case 'participation-reward':
-        if (['on', 'true', '1', 'enable'].includes(value?.toLowerCase())) {
-          wcwSettings.enableParticipationReward = true;
-          await saveSettings();
-          responseText = "✅ Participation rewards enabled 💰";
-        } else if (['off', 'false', '0', 'disable'].includes(value?.toLowerCase())) {
-          wcwSettings.enableParticipationReward = false;
-          await saveSettings();
-          responseText = "✅ Participation rewards disabled";
+          responseText = "✅ Caption keyword requirement disabled";
         } else {
           responseText = `⚠️ Invalid value. Use: on/off`;
         }
         break;
         
       default:
-        responseText = `⚠️ Unknown setting: *${setting}*\n\nAvailable: prize, participation, starttime, endtime, autostart, parreward`;
+        responseText = `⚠️ Unknown setting: *${setting}*\n\nAvailable: prize, participation, starttime, endtime, keywords`;
     }
     
     await reply(responseText);
@@ -1272,45 +1410,10 @@ async function handleWCWReschedule(context) {
   
   try {
     await setupWCWCronJobs(sock);
-    await reply('✅ *WCW cron jobs rescheduled successfully!*\n\nAll reminder, start, and end schedules have been updated with current settings.');
+    await reply('✅ *WCW cron jobs rescheduled successfully!*\n\nAll reminder, start, and end schedules have been updated with current settings and TV show experience.');
   } catch (error) {
     await reply('❌ *Error rescheduling WCW cron jobs.*');
     console.error('WCW reschedule error:', error);
-  }
-}
-
-async function handleWCWTest(context, args) {
-  const { reply, config } = context;
-  
-  const testText = args.join(' ');
-  if (!testText) {
-    return reply(`🔍 *WCW RATING VALIDATOR* 🔍\n\n*Usage:* ${config.PREFIX}wcwtest [your_rating_message]\n\n*Examples:*\n• ${config.PREFIX}wcwtest "She looks amazing! 9"\n• ${config.PREFIX}wcwtest "8️⃣ beautiful"\n• ${config.PREFIX}wcwtest "🔟 stunning queen!"`);
-  }
-  
-  try {
-    const rating = extractRating(testText);
-    
-    let result = `🔍 *RATING VALIDATION RESULTS* 🔍\n\n`;
-    result += `📝 Test message: "${testText}"\n\n`;
-    
-    if (rating) {
-      result += `✅ *VALID RATING DETECTED!*\n`;
-      result += `⭐ Rating: ${rating}/10\n`;
-      result += `🎯 Status: Would be accepted ✅`;
-    } else {
-      result += `❌ *NO VALID RATING FOUND*\n`;
-      result += `🎯 Status: Would be rejected ❌\n\n`;
-      result += `💡 *Valid Rating Formats:*\n`;
-      result += `• Regular numbers: "9", "10", "She's a perfect 8"\n`;
-      result += `• Emoji numbers: "9️⃣", "🔟", "Beautiful 1️⃣0️⃣"\n`;
-      result += `• Valid range: 1-10 only`;
-    }
-    
-    await reply(result);
-    
-  } catch (error) {
-    await reply('❌ *Error testing rating format.*');
-    console.error('WCW test error:', error);
   }
 }
 
@@ -1318,13 +1421,13 @@ async function handleWCWTest(context, args) {
 // MAIN PLUGIN HANDLER
 // =======================================================================
 
-export default async function wcwHandler(m, sock, config) {
+export default async function enhancedWcwHandler(m, sock, config) {
   try {
     // Initialize database and settings
     if (!db) {
       await initDatabase();
       await loadSettings();
-      // Setup cron jobs
+      // Setup enhanced cron jobs with TV show experience
       await setupWCWCronJobs(sock);
     }
     
@@ -1335,10 +1438,10 @@ export default async function wcwHandler(m, sock, config) {
     
     // Handle photo submissions and ratings (non-command messages)
     if (m.body && !m.body.startsWith(config.PREFIX)) {
-      // Check for photo submission
+      // Check for photo submission with smart caption recognition
       if (await handlePhotoSubmission(m, sock)) return;
       
-      // Check for rating submission
+      // Check for rating submission with emoji support
       if (await handleRatingSubmission(m, sock)) return;
     }
     
@@ -1373,7 +1476,7 @@ export default async function wcwHandler(m, sock, config) {
     }
     
   } catch (error) {
-    console.error('❌ WCW plugin error:', error);
+    console.error('❌ Enhanced WCW plugin error:', error);
   }
 }
 
@@ -1421,5 +1524,7 @@ export {
   setupWCWCronJobs,
   stopAllCronJobs,
   setGroupJid,
-  wcwSettings
+  wcwSettings,
+  hasValidWCWCaption,
+  startEndSequence
 };
