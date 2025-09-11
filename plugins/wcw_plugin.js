@@ -933,7 +933,7 @@ async function handleWCWCurrent(context) {
         const emoji = position === 1 ? '👑' : position === 2 ? '🥈' : position === 3 ? '🥉' : '🏅';
         const avgRating = participant.averageRating > 0 ? participant.averageRating.toFixed(1) : '0.0';
         
-        statusMessage += `${emoji} ${position}. +${participant.userPhone} - ${avgRating}/10 (${participant.ratingCount} ratings)\n`;
+        statusMessage += `${emoji} ${position}. +${participant.userPhone} - ${participant.totalRating} pts (${participant.ratingCount} ratings)\n`;
       });
       
       if (participants.length > 5) {
