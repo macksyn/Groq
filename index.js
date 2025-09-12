@@ -25,8 +25,8 @@ import GroupHandler from './handlers/groupHandler.js';
 import PluginManager from './lib/pluginManager.js';
 
 // FIXED: Import MongoDB connection manager
-import mongoManager, { mongoHealthCheck } from './lib/mongoManager.js';
-import { connectionMonitor, PluginHelpers } from './lib/pluginIntegration.js';
+import mongoManager from './lib/mongoManager.js';
+import { connectionMonitor, PluginHelpers, mongoHealthCheck } from './lib/pluginIntegration.js';
 
 // Import welcome/goodbye plugin handlers
 import welcomeGoodbyeCommandHandler, { 
