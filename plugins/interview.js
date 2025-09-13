@@ -1,10 +1,10 @@
-// plugins/autoInterview.js - Gist HQ Intelligent Interview System
+// plugins/autoInterview.js - Fixed isAdmin function
 import axios from 'axios';
 import { unifiedUserManager } from '../lib/pluginIntegration.js';
 
 export const info = {
   name: 'autoInterview',
-  version: '1.0.0',
+  version: '1.0.1',
   author: 'Alex Macksyn',
   description: 'Intelligent AI-powered interview system for Gist HQ group screening 🎯🤖',
   commands: [
@@ -701,12 +701,62 @@ function updateInterviewStats(groupId, outcome, session) {
   interviewStats.set(groupId, stats);
 }
 
-// Check if user is admin
+// FIXED: Check if user is admin with proper null/undefined checks
 function isAdmin(userId, groupId, config) {
-  const settings = groupSettings.get(groupId);
-  return config.OWNER_NUMBER === userId || 
-         (config.ADMIN_NUMBERS && config.MODS.includes(userId)) || 
-         (settings && settings.adminIds.includes(userId));
+  try {
+    // Ensure userId is valid
+    if (!userId || typeof userId !== 'string') {
+      return false;
+    }
+
+    // Clean userId for comparison
+    const cleanUserId = userId.replace('@s.whatsapp.net', '');
+    
+    // Check owner number
+    const ownerNumber = config.OWNER_NUMBER?.replace('@s.whatsapp.net', '');
+    if (ownerNumber && cleanUserId === ownerNumber) {
+      return true;
+    }
+    
+    // Check admin numbers with proper null/undefined checks
+    if (config.ADMIN_NUMBERS) {
+      let adminNumbers = [];
+      
+      // Handle different formats
+      if (typeof config.ADMIN_NUMBERS === 'string') {
+        adminNumbers = config.ADMIN_NUMBERS.split(',').map(num => num.trim().replace('@s.whatsapp.net', ''));
+      } else if (Array.isArray(config.ADMIN_NUMBERS)) {
+        adminNumbers = config.ADMIN_NUMBERS.map(num => String(num).replace('@s.whatsapp.net', ''));
+      }
+      
+      if (adminNumbers.length > 0 && adminNumbers.includes(cleanUserId)) {
+        return true;
+      }
+    }
+    
+    // Check MODS array with proper null/undefined checks
+    if (config.MODS && Array.isArray(config.MODS)) {
+      const cleanMods = config.MODS.map(mod => String(mod).replace('@s.whatsapp.net', ''));
+      if (cleanMods.includes(cleanUserId)) {
+        return true;
+      }
+    }
+    
+    // Check group-specific admin IDs
+    const settings = groupSettings.get(groupId);
+    if (settings && Array.isArray(settings.adminIds) && settings.adminIds.length > 0) {
+      const cleanGroupAdmins = settings.adminIds.map(admin => String(admin).replace('@s.whatsapp.net', ''));
+      if (cleanGroupAdmins.includes(cleanUserId)) {
+        return true;
+      }
+    }
+    
+    return false;
+    
+  } catch (error) {
+    console.error('isAdmin function error:', error);
+    return false;
+  }
 }
 
 // Main plugin handler
@@ -794,11 +844,16 @@ Current question: ${activeSession.currentQuestion + 1} of ${interviewQuestions.g
         return;
       }
 
-      // Admin-only commands
-      if (!isAdmin(userId, groupId, config)) {
-        if (['activateinterviews', 'deactivateinterviews', 'interviewstatus', 'addquestion', 
-             'removequestion', 'listquestions', 'interviewsettings', 'interviewstats', 
-             'approveuser', 'rejectuser', 'setmaingroup'].includes(command)) {
+      // Admin-only commands check with proper error handling
+      const adminOnlyCommands = [
+        'activateinterviews', 'deactivateinterviews', 'interviewstatus', 'addquestion', 
+        'removequestion', 'listquestions', 'interviewsettings', 'interviewstats', 
+        'approveuser', 'rejectuser', 'setmaingroup'
+      ];
+
+      if (adminOnlyCommands.includes(command)) {
+        const userIsAdmin = isAdmin(userId, groupId, config);
+        if (!userIsAdmin) {
           await sock.sendMessage(groupId, {
             text: `❌ This command is only available to admins! 👮‍♀️`
           }, { quoted: m });
