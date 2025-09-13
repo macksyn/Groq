@@ -697,7 +697,6 @@ function isConnectionHealthy(socket) {
 
 // Make functions globally available
 global.sendMessageSafely = sendMessageSafely;
-global.sendMessageWithRetry = sendMessageWithRetry;
 global.isConnectionHealthy = isConnectionHealthy;
 
 // FIXED: Enhanced event handlers setup
