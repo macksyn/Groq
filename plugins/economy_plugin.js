@@ -8,7 +8,7 @@ export const info = {
   name: 'Enhanced Economy System',
   version: '3.0.0',
   author: 'Bot Developer',
-  description: 'Complete economy system with gambling, investments, shop, achievements and more',
+  description: 'Complete economy system with investments, shop, achievements and more',
   commands: [
     // Basic Economy
     { name: 'economy', aliases: ['eco', 'money'], description: 'Access the economy system' },
@@ -23,13 +23,7 @@ export const info = {
     { name: 'daily', aliases: [], description: 'Claim daily reward' },
     { name: 'heist', aliases: [], description: 'Plan team robberies' },
     
-    // Gambling & Games
-    { name: 'coinflip', aliases: ['cf'], description: 'Bet on coin flip' },
-    { name: 'dice', aliases: [], description: 'Roll dice for money' },
-    { name: 'slots', aliases: [], description: 'Play slot machine' },
-    { name: 'lottery', aliases: [], description: 'Buy lottery tickets' },
-    { name: 'roulette', aliases: [], description: 'Russian roulette game' },
-    { name: 'guess', aliases: [], description: 'Number guessing game' },
+    // --- GAMBLING FEATURES REMOVED ---
     
     // Investments
     { name: 'invest', aliases: [], description: 'Investment system' },
@@ -154,24 +148,9 @@ const defaultSettings = {
   heistSuccessBaseRate: 0.3,
   heistMemberBonus: 0.1, // Per additional member
   
-  // Gambling Settings
-  gamblingEnabled: true,
-  coinflipMinBet: 10,
-  coinflipMaxBet: 50000,
-  diceMinBet: 10,
-  diceMaxBet: 25000,
-  slotsMinBet: 25,
-  slotsMaxBet: 10000,
-  slotJackpot: 100000,
-  rouletteMinBet: 100,
-  rouletteMaxBet: 75000,
+  // --- GAMBLING SETTINGS REMOVED ---
   
-  // Lottery System
-  lotteryEnabled: true,
-  lotteryTicketPrice: 500,
-  lotteryMaxTickets: 10,
-  lotteryDrawDays: [0, 3, 6], // Sunday, Wednesday, Saturday
-  lotteryJackpotSeed: 50000,
+  // --- LOTTERY SYSTEM REMOVED ---
   
   // Investment System
   investmentsEnabled: true,
@@ -1339,31 +1318,7 @@ export default async function economyHandler(m, sock, config) {
         await handleHeist(context, args.slice(1));
         break;
         
-      // Gambling Commands
-      case 'coinflip':
-      case 'cf':
-        await handleCoinflip(context, args.slice(1));
-        break;
-        
-      case 'dice':
-        await handleDice(context, args.slice(1));
-        break;
-        
-      case 'slots':
-        await handleSlots(context, args.slice(1));
-        break;
-        
-      case 'lottery':
-        await handleLottery(context, args.slice(1));
-        break;
-        
-      case 'roulette':
-        await handleRoulette(context, args.slice(1));
-        break;
-        
-      case 'guess':
-        await handleGuess(context, args.slice(1));
-        break;
+      // --- GAMBLING COMMANDS REMOVED ---
         
       // Investment Commands
       case 'invest':
@@ -1446,12 +1401,6 @@ async function showEconomyMenu(reply, prefix) {
                     `• *daily* - Daily rewards with streaks\n` +
                     `• *rob @user* - Risk/reward robbery\n` +
                     `• *heist* - Team robberies\n\n` +
-                    `🎰 *Gambling:*\n` +
-                    `• *coinflip amount* - Heads or tails\n` +
-                    `• *dice amount* - Roll the dice\n` +
-                    `• *slots amount* - Slot machine\n` +
-                    `• *lottery* - Buy tickets\n` +
-                    `• *roulette amount* - Russian roulette\n\n` +
                     `📈 *Investments:*\n` +
                     `• *stocks* - Stock market\n` +
                     `• *crypto* - Cryptocurrency\n` +
@@ -1540,240 +1489,7 @@ async function handleBalance(context, args) {
   }
 }
 
-// Gambling Commands
-
-// Coinflip
-async function handleCoinflip(context, args) {
-  const { reply, senderId } = context;
-  
-  try {
-    if (!ecoSettings.gamblingEnabled) {
-      await reply('🚫 *Gambling is currently disabled*');
-      return;
-    }
-    
-    if (!args || args.length < 2) {
-      await reply(`🪙 *Coinflip Usage:*\n${context.config.PREFIX}coinflip [heads/tails] [amount]\n\n💡 Example: ${context.config.PREFIX}coinflip heads 1000`);
-      return;
-    }
-    
-    const choice = args[0].toLowerCase();
-    const amount = parseInt(args[1]);
-    
-    if (!['heads', 'tails', 'h', 't'].includes(choice)) {
-      await reply('⚠️ *Choose heads or tails*');
-      return;
-    }
-    
-    if (isNaN(amount) || amount < ecoSettings.coinflipMinBet || amount > ecoSettings.coinflipMaxBet) {
-      await reply(`⚠️ *Bet amount must be between ${ecoSettings.currency}${ecoSettings.coinflipMinBet} and ${ecoSettings.currency}${ecoSettings.coinflipMaxBet.toLocaleString()}*`);
-      return;
-    }
-    
-    const userData = await getUserData(senderId);
-    if (userData.balance < amount) {
-      await reply('🚫 *Insufficient balance*');
-      return;
-    }
-    
-    // Process bet
-    await removeMoney(senderId, amount, 'Coinflip bet');
-    
-    const userChoice = choice.startsWith('h') ? 'heads' : 'tails';
-    const result = Math.random() < 0.5 ? 'heads' : 'tails';
-    const won = userChoice === result;
-    
-    let winnings = 0;
-    if (won) {
-      winnings = amount * 2;
-      // Apply gambling luck effect
-      if (userData.activeEffects?.gamblingLuck && userData.activeEffects.gamblingLuck > Date.now()) {
-        winnings = Math.floor(winnings * 1.1); // 10% bonus
-      }
-      await addMoney(senderId, winnings, 'Coinflip win');
-    }
-    
-    // Update gambling stats
-    await updateUserData(senderId, {
-      'stats.totalGambled': (userData.stats?.totalGambled || 0) + amount
-    });
-    
-    // Check achievements
-    await checkAchievements(senderId, 'gambling', { 
-      totalGambled: (userData.stats?.totalGambled || 0) + amount 
-    });
-    
-    const resultEmoji = result === 'heads' ? '🙂' : '🪙';
-    const statusEmoji = won ? '🎉' : '😭';
-    
-    await reply(`🪙 *COINFLIP RESULT* 🪙\n\n${resultEmoji} *Result:* ${result.toUpperCase()}\n${statusEmoji} *You ${won ? 'WON' : 'LOST'}!*\n\n💰 *${won ? 'Winnings' : 'Lost'}:* ${ecoSettings.currency}${won ? winnings.toLocaleString() : amount.toLocaleString()}`);
-  } catch (error) {
-    await reply('❌ *Error processing coinflip. Please try again.*');
-    console.error('Coinflip error:', error);
-  }
-}
-
-// Dice Game
-async function handleDice(context, args) {
-  const { reply, senderId } = context;
-  
-  try {
-    if (!ecoSettings.gamblingEnabled) {
-      await reply('🚫 *Gambling is currently disabled*');
-      return;
-    }
-    
-    if (!args || args.length < 2) {
-      await reply(`🎲 *Dice Usage:*\n${context.config.PREFIX}dice [1-6] [amount]\n\n💡 Example: ${context.config.PREFIX}dice 6 1000\n\n🎯 *Payouts:*\n• Exact match: 6x bet\n• ±1 number: 2x bet`);
-      return;
-    }
-    
-    const guess = parseInt(args[0]);
-    const amount = parseInt(args[1]);
-    
-    if (isNaN(guess) || guess < 1 || guess > 6) {
-      await reply('⚠️ *Choose a number between 1 and 6*');
-      return;
-    }
-    
-    if (isNaN(amount) || amount < ecoSettings.diceMinBet || amount > ecoSettings.diceMaxBet) {
-      await reply(`⚠️ *Bet amount must be between ${ecoSettings.currency}${ecoSettings.diceMinBet} and ${ecoSettings.currency}${ecoSettings.diceMaxBet.toLocaleString()}*`);
-      return;
-    }
-    
-    const userData = await getUserData(senderId);
-    if (userData.balance < amount) {
-      await reply('🚫 *Insufficient balance*');
-      return;
-    }
-    
-    await removeMoney(senderId, amount, 'Dice bet');
-    
-    const roll = Math.floor(Math.random() * 6) + 1;
-    let multiplier = 0;
-    let winType = '';
-    
-    if (roll === guess) {
-      multiplier = 3;
-      winType = 'EXACT MATCH!';
-    } else if (Math.abs(roll - guess) === 1) {
-      multiplier = 1.3;
-      winType = 'CLOSE GUESS!';
-    }
-    
-    let winnings = 0;
-    if (multiplier > 0) {
-      winnings = amount * multiplier;
-      if (userData.activeEffects?.gamblingLuck && userData.activeEffects.gamblingLuck > Date.now()) {
-        winnings = Math.floor(winnings * 1.1);
-      }
-      await addMoney(senderId, winnings, 'Dice win');
-    }
-    
-    await updateUserData(senderId, {
-      'stats.totalGambled': (userData.stats?.totalGambled || 0) + amount
-    });
-    
-    const diceEmojis = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
-    await reply(`🎲 *DICE RESULT* 🎲\n\n${diceEmojis[roll]} *Rolled:* ${roll}\n🎯 *Your guess:* ${guess}\n\n${multiplier > 0 ? '🎉 ' + winType : '😭 NO MATCH'}\n💰 *${multiplier > 0 ? 'Winnings' : 'Lost'}:* ${ecoSettings.currency}${multiplier > 0 ? winnings.toLocaleString() : amount.toLocaleString()}`);
-  } catch (error) {
-    await reply('❌ *Error processing dice game. Please try again.*');
-    console.error('Dice error:', error);
-  }
-}
-
-// Slot Machine
-async function handleSlots(context, args) {
-  const { reply, senderId } = context;
-  
-  try {
-    if (!ecoSettings.gamblingEnabled) {
-      await reply('🚫 *Gambling is currently disabled*');
-      return;
-    }
-    
-    if (!args || args.length === 0) {
-      await reply(`🎰 *Slots Usage:*\n${context.config.PREFIX}slots [amount]\n\n💡 Example: ${context.config.PREFIX}slots 1000\n\n🎯 *Payouts:*\n• 🍒🍒🍒 = 3x\n• 🍋🍋🍋 = 5x\n• 🍊🍊🍊 = 8x\n• 💎💎💎 = 15x\n• 🎰🎰🎰 = JACKPOT!`);
-      return;
-    }
-    
-    const amount = parseInt(args[0]);
-    
-    if (isNaN(amount) || amount < ecoSettings.slotsMinBet || amount > ecoSettings.slotsMaxBet) {
-      await reply(`⚠️ *Bet amount must be between ${ecoSettings.currency}${ecoSettings.slotsMinBet} and ${ecoSettings.currency}${ecoSettings.slotsMaxBet.toLocaleString()}*`);
-      return;
-    }
-    
-    const userData = await getUserData(senderId);
-    if (userData.balance < amount) {
-      await reply('🚫 *Insufficient balance*');
-      return;
-    }
-    
-    await removeMoney(senderId, amount, 'Slots bet');
-    
-    const symbols = ['🍒', '🍋', '🍊', '💎', '🎰', '⭐'];
-    const weights = [30, 25, 20, 15, 8, 2]; // Weighted probabilities
-    
-    function getRandomSymbol() {
-      const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
-      let random = Math.random() * totalWeight;
-      
-      for (let i = 0; i < symbols.length; i++) {
-        random -= weights[i];
-        if (random <= 0) return symbols[i];
-      }
-      return symbols[0];
-    }
-    
-    const slot1 = getRandomSymbol();
-    const slot2 = getRandomSymbol();
-    const slot3 = getRandomSymbol();
-    
-    let multiplier = 0;
-    let winType = '';
-    let isJackpot = false;
-    
-    if (slot1 === slot2 && slot2 === slot3) {
-      switch (slot1) {
-        case '🍒': multiplier = 3; winType = 'Cherry Match!'; break;
-        case '🍋': multiplier = 5; winType = 'Lemon Match!'; break;
-        case '🍊': multiplier = 8; winType = 'Orange Match!'; break;
-        case '💎': multiplier = 15; winType = 'Diamond Match!'; break;
-        case '🎰': 
-          multiplier = 0;
-          isJackpot = true;
-          winType = 'JACKPOT!!!';
-          break;
-        case '⭐': multiplier = 25; winType = 'Star Match!'; break;
-      }
-    }
-    
-    let winnings = 0;
-    if (isJackpot) {
-      winnings = ecoSettings.slotJackpot;
-      await checkAchievements(senderId, 'gambling', { jackpot: true });
-    } else if (multiplier > 0) {
-      winnings = amount * multiplier;
-    }
-    
-    if (winnings > 0) {
-      if (userData.activeEffects?.gamblingLuck && userData.activeEffects.gamblingLuck > Date.now()) {
-        winnings = Math.floor(winnings * 1.1);
-      }
-      await addMoney(senderId, winnings, isJackpot ? 'Slots jackpot' : 'Slots win');
-    }
-    
-    await updateUserData(senderId, {
-      'stats.totalGambled': (userData.stats?.totalGambled || 0) + amount
-    });
-    
-    await reply(`🎰 *SLOT MACHINE* 🎰\n\n[ ${slot1} | ${slot2} | ${slot3} ]\n\n${winnings > 0 ? '🎉 ' + winType : '😭 NO MATCH'}\n💰 *${winnings > 0 ? 'Winnings' : 'Lost'}:* ${ecoSettings.currency}${winnings > 0 ? winnings.toLocaleString() : amount.toLocaleString()}`);
-  } catch (error) {
-    await reply('❌ *Error processing slots. Please try again.*');
-    console.error('Slots error:', error);
-  }
-}
+// --- GAMBLING COMMANDS REMOVED ---
 
 // Investment System - Stocks
 async function handleStocks(context, args) {
@@ -2913,26 +2629,7 @@ async function handleSubCommand(subCommand, args, context) {
         await handleHeist(context, args);
         break;
         
-      // Gambling
-      case 'coinflip':
-      case 'cf':
-        await handleCoinflip(context, args);
-        break;
-      case 'dice':
-        await handleDice(context, args);
-        break;
-      case 'slots':
-        await handleSlots(context, args);
-        break;
-      case 'lottery':
-        await handleLottery(context, args);
-        break;
-      case 'roulette':
-        await handleRoulette(context, args);
-        break;
-      case 'guess':
-        await handleGuess(context, args);
-        break;
+      // --- GAMBLING SUBCOMMANDS REMOVED ---
         
       // Investments
       case 'invest':
