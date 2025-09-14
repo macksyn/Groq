@@ -6,9 +6,9 @@ import { TimeHelpers } from '../lib/helpers.js';
 // Plugin information export
 export const info = {
   name: 'Enhanced Economy System',
-  version: '3.0.0',
+  version: '3.1.0',
   author: 'Bot Developer',
-  description: 'Complete economy system with investments, shop, achievements and more',
+  description: 'A focused economy system with investments, shop, and achievements.',
   commands: [
     // Basic Economy
     { name: 'economy', aliases: ['eco', 'money'], description: 'Access the economy system' },
@@ -21,9 +21,6 @@ export const info = {
     { name: 'work', aliases: [], description: 'Work to earn money' },
     { name: 'rob', aliases: [], description: 'Rob someone (risky!)' },
     { name: 'daily', aliases: [], description: 'Claim daily reward' },
-    { name: 'heist', aliases: [], description: 'Plan team robberies' },
-    
-    // --- GAMBLING FEATURES REMOVED ---
     
     // Investments
     { name: 'invest', aliases: [], description: 'Investment system' },
@@ -35,13 +32,11 @@ export const info = {
     { name: 'profile', aliases: [], description: 'View user profile' },
     { name: 'leaderboard', aliases: ['lb'], description: 'View top users' },
     { name: 'achievements', aliases: ['ach'], description: 'View achievements' },
-    { name: 'clan', aliases: [], description: 'Clan system commands' },
     
     // Shop & Items
     { name: 'shop', aliases: [], description: 'Browse shop items' },
     { name: 'inventory', aliases: ['inv'], description: 'View your inventory' },
     { name: 'use', aliases: [], description: 'Use an item' },
-    { name: 'vault', aliases: [], description: 'Access private vault' },
     
     // Events & Admin
     { name: 'events', aliases: [], description: 'View active events' },
@@ -54,13 +49,12 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
 const DATABASE_NAME = 'whatsapp_bot';
 const COLLECTIONS = {
   USERS: 'economy_users',
-  CLANS: 'economy_clans',
+  // --- CLANS COLLECTION REMOVED ---
   TRANSACTIONS: 'economy_transactions',
   SETTINGS: 'economy_settings',
   ACHIEVEMENTS: 'economy_achievements',
   INVESTMENTS: 'economy_investments',
   EVENTS: 'economy_events',
-  LOTTERY: 'economy_lottery',
   BUSINESSES: 'economy_businesses'
 };
 
@@ -79,20 +73,19 @@ async function initDatabase() {
     
     // Create indexes for better performance
     await db.collection(COLLECTIONS.USERS).createIndex({ userId: 1 }, { unique: true });
-    await db.collection(COLLECTIONS.CLANS).createIndex({ name: 1 }, { unique: true });
     await db.collection(COLLECTIONS.TRANSACTIONS).createIndex({ userId: 1, timestamp: -1 });
     await db.collection(COLLECTIONS.INVESTMENTS).createIndex({ userId: 1, type: 1 });
-    // Add after the existing indexes
-await loadCryptoPrices();
-console.log('✅ Crypto prices loaded');
-    await loadNewsSettings();
-console.log('✅ News system loaded');
 
-// Start auto-updates
-setTimeout(() => {
-  updateCryptoPrices();
-  updateBusinessROI();
-}, 5000); // Start after 5 seconds
+    await loadCryptoPrices();
+    console.log('✅ Crypto prices loaded');
+    await loadNewsSettings();
+    console.log('✅ News system loaded');
+
+    // Start auto-updates
+    setTimeout(() => {
+      updateCryptoPrices();
+      updateBusinessROI();
+    }, 5000); // Start after 5 seconds
     
     console.log('✅ MongoDB connected successfully');
     return db;
@@ -105,7 +98,7 @@ setTimeout(() => {
 // Set Nigeria timezone
 moment.tz.setDefault('Africa/Lagos');
 
-// Enhanced economy settings with all new features
+// Enhanced economy settings with removed features
 const defaultSettings = {
   // Basic Economy
   startingBalance: 1000,
@@ -141,16 +134,7 @@ const defaultSettings = {
   robMinSteal: 20,
   robFailPenalty: 200,
   
-  // Heist System
-  heistCooldownHours: 6,
-  heistMinMembers: 3,
-  heistMaxMembers: 6,
-  heistSuccessBaseRate: 0.3,
-  heistMemberBonus: 0.1, // Per additional member
-  
-  // --- GAMBLING SETTINGS REMOVED ---
-  
-  // --- LOTTERY SYSTEM REMOVED ---
+  // --- HEIST & CLAN SETTINGS REMOVED ---
   
   // Investment System
   investmentsEnabled: true,
@@ -165,12 +149,6 @@ const defaultSettings = {
     robProtection: 172800000, // 48 hours
     dailyBoost: 604800000 // 7 days
   },
-  
-  // Clan Settings
-  clanCreationCost: 10000,
-  clanMaxMembers: 20,
-  clanBankTax: 0.05, // 5% of deposits
-  clanWarEnabled: true,
   
   // Achievement Settings
   achievementRewards: {
@@ -193,7 +171,7 @@ const defaultSettings = {
   ownerCanAccessAllSettings: true
 };
 
-// Load and save settings (same as before but enhanced)
+// Load and save settings
 let ecoSettings = { ...defaultSettings };
 
 async function loadSettings() {
@@ -219,7 +197,7 @@ async function saveSettings() {
   }
 }
 
-// Enhanced user initialization with new fields
+// User initialization with removed fields
 async function initUser(userId) {
   try {
     const existingUser = await db.collection(COLLECTIONS.USERS).findOne({ userId });
@@ -230,14 +208,12 @@ async function initUser(userId) {
         // Basic Economy
         balance: ecoSettings.startingBalance,
         bank: ecoSettings.startingBankBalance,
-        vault: 0, // Private secure storage
         
         // Inventory & Items
         inventory: [],
         activeEffects: {},
         
         // Social
-        clan: null,
         bounty: 0,
         rank: 'Newbie',
         customTitle: null,
@@ -266,7 +242,6 @@ async function initUser(userId) {
         lastDaily: null,
         lastWork: null,
         lastRob: null,
-        lastHeist: null,
         lastGamble: null,
         
         // System
@@ -283,7 +258,6 @@ async function initUser(userId) {
       let needsUpdate = false;
       
       const requiredFields = {
-        vault: 0,
         activeEffects: {},
         customTitle: null,
         stats: {
@@ -326,7 +300,7 @@ async function initUser(userId) {
   }
 }
 
-// Shop Items Database
+// Shop Items Database with items removed
 const SHOP_ITEMS = {
   // Consumable Items
   workBoost: {
@@ -353,14 +327,6 @@ const SHOP_ITEMS = {
     effect: "dailyBoost",
     emoji: "🍀"
   },
-  gamblingLuck: {
-    name: "Rabbit's Foot",
-    price: 5000,
-    description: "Increases gambling luck for 12 hours",
-    type: "consumable",
-    effect: "gamblingLuck",
-    emoji: "🐰"
-  },
   
   // Permanent Upgrades
   vipStatus: {
@@ -371,15 +337,7 @@ const SHOP_ITEMS = {
     effect: "vipBonus",
     emoji: "👑"
   },
-  privateVault: {
-    name: "Private Vault",
-    price: 50000,
-    description: "Secure storage that can't be robbed",
-    type: "upgrade",
-    effect: "vault",
-    emoji: "🔐"
-  },
-  
+
   // Tools & Equipment
   lockpicks: {
     name: "Professional Lockpicks",
@@ -418,14 +376,6 @@ const SHOP_ITEMS = {
   },
   
   // Special Items
-  heistPlans: {
-    name: "Heist Plans",
-    price: 15000,
-    description: "Reduces heist cooldown by 50%",
-    type: "consumable",
-    effect: "heistCooldown",
-    emoji: "📋"
-  },
   marketTip: {
     name: "Market Insider Info",
     price: 10000,
@@ -442,14 +392,11 @@ function getItemId(inputId) {
     'workboost': 'workBoost',
     'bodyguard': 'Bodyguard', 
     'dailyboost': 'dailyBoost',
-    'gamblingluck': 'gamblingLuck',
     'vipstatus': 'vipStatus',
-    'privatevault': 'privateVault',
     'lockpicks': 'lockpicks',
     'businesssuit': 'businessSuit',
     'goldencrown': 'goldenCrown',
     'customtitle': 'customTitle',
-    'heistplans': 'heistPlans',
     'markettip': 'marketTip'
   };
   
@@ -829,12 +776,6 @@ const ACHIEVEMENTS = {
     reward: 50000,
     emoji: "💰"
   },
-  gamblingAddict: {
-    name: "High Roller",
-    description: "Gamble 100,000 total",
-    reward: 10000,
-    emoji: "🎰"
-  },
   robKing: {
     name: "Robbery King",
     description: "Successfully rob 50 people",
@@ -846,18 +787,6 @@ const ACHIEVEMENTS = {
     description: "Maintain a 30-day daily streak",
     reward: 30000,
     emoji: "🔥"
-  },
-  clanLeader: {
-    name: "Clan Leader",
-    description: "Create and lead a clan",
-    reward: 5000,
-    emoji: "🛡️"
-  },
-  jackpotWinner: {
-    name: "Jackpot Winner",
-    description: "Win a slots jackpot",
-    reward: 20000,
-    emoji: "🎯"
   },
   businessTycoon: {
     name: "Business Tycoon",
@@ -984,9 +913,6 @@ async function checkAchievements(userId, type, data = {}) {
     
     switch (type) {
       case 'registration':
-        if (!user.achievements.includes('firstDaily')) {
-          // This will be awarded when they claim first daily
-        }
         break;
         
       case 'daily':
@@ -1014,24 +940,9 @@ async function checkAchievements(userId, type, data = {}) {
         break;
         
       case 'money':
-        const totalWealth = user.balance + user.bank + (user.vault || 0);
+        const totalWealth = user.balance + user.bank;
         if (totalWealth >= 1000000 && !user.achievements.includes('millionaire')) {
           newAchievements.push('millionaire');
-        }
-        break;
-        
-      case 'gambling':
-        if (data.totalGambled >= 100000 && !user.achievements.includes('gamblingAddict')) {
-          newAchievements.push('gamblingAddict');
-        }
-        if (data.jackpot && !user.achievements.includes('jackpotWinner')) {
-          newAchievements.push('jackpotWinner');
-        }
-        break;
-        
-      case 'clan':
-        if (data.created && !user.achievements.includes('clanLeader')) {
-          newAchievements.push('clanLeader');
         }
         break;
         
@@ -1219,7 +1130,7 @@ async function cleanupExpiredEffects(userId) {
   }
 }
 
-// Main plugin handler - Enhanced but kept lightweight
+// Main plugin handler
 export default async function economyHandler(m, sock, config) {
   try {
     if (!m || !m.body || typeof m.body !== 'string') return;
@@ -1297,10 +1208,6 @@ export default async function economyHandler(m, sock, config) {
         await handleWithdraw(context, args.slice(1));
         break;
         
-      case 'vault':
-        await handleVault(context, args.slice(1));
-        break;
-        
       // Earning Commands
       case 'work':
         await handleWork(context);
@@ -1313,12 +1220,6 @@ export default async function economyHandler(m, sock, config) {
       case 'daily':
         await handleDaily(context);
         break;
-        
-      case 'heist':
-        await handleHeist(context, args.slice(1));
-        break;
-        
-      // --- GAMBLING COMMANDS REMOVED ---
         
       // Investment Commands
       case 'invest':
@@ -1352,10 +1253,6 @@ export default async function economyHandler(m, sock, config) {
         await handleAchievements(context, args.slice(1));
         break;
         
-      case 'clan':
-        await handleClan(context, args.slice(1));
-        break;
-        
       // Shop Commands
       case 'shop':
         await handleShop(context, args.slice(1));
@@ -1387,20 +1284,18 @@ export default async function economyHandler(m, sock, config) {
   }
 }
 
-// Enhanced Economy Menu
+// Simplified Economy Menu
 async function showEconomyMenu(reply, prefix) {
   try {
     const menuText = `💰 *ENHANCED ECONOMY SYSTEM* 💰\n\n` +
                     `💵 *Basic Commands:*\n` +
-                    `• *balance* - Check balance & vault\n` +
+                    `• *balance* - Check your balance\n` +
                     `• *send @user amount* - Transfer money\n` +
-                    `• *deposit/withdraw amount* - Bank operations\n` +
-                    `• *vault* - Access secure storage\n\n` +
+                    `• *deposit/withdraw amount* - Bank operations\n\n` +
                     `💼 *Earning:*\n` +
                     `• *work* - Work for money\n` +
                     `• *daily* - Daily rewards with streaks\n` +
-                    `• *rob @user* - Risk/reward robbery\n` +
-                    `• *heist* - Team robberies\n\n` +
+                    `• *rob @user* - Risk/reward robbery\n\n` +
                     `📈 *Investments:*\n` +
                     `• *stocks* - Stock market\n` +
                     `• *crypto* - Cryptocurrency\n` +
@@ -1412,8 +1307,7 @@ async function showEconomyMenu(reply, prefix) {
                     `👥 *Social:*\n` +
                     `• *profile* - View stats\n` +
                     `• *achievements* - Your badges\n` +
-                    `• *leaderboard* - Top players\n` +
-                    `• *clan* - Clan system\n\n` +
+                    `• *leaderboard* - Top players\n\n` +
                     `🎉 *Events:* ${prefix}events\n` +
                     `⚙️ *Admin:* ${prefix}economy admin (admin only)\n📰 *News:* ${prefix}economy admin news (admin only)`;
     
@@ -1423,7 +1317,7 @@ async function showEconomyMenu(reply, prefix) {
   }
 }
 
-// Enhanced Balance Command - CORRECTED
+// Balance Command without vault
 async function handleBalance(context, args) {
   const { reply, senderId, m, sock, from } = context;
   
@@ -1433,7 +1327,7 @@ async function handleBalance(context, args) {
     await initUser(targetUser);
     const userData = await getUserData(targetUser);
     
-    const totalWealth = userData.balance + userData.bank + (userData.vault || 0);
+    const totalWealth = userData.balance + userData.bank;
     const isOwnBalance = targetUser === senderId;
     const userNumber = targetUser.split('@')[0];
     
@@ -1441,13 +1335,8 @@ async function handleBalance(context, args) {
     balanceText += `💵 *Wallet:* ${ecoSettings.currency}${userData.balance.toLocaleString()}\n`;
     balanceText += `🏦 *Bank:* ${ecoSettings.currency}${userData.bank.toLocaleString()}\n`;
     
-    if (isOwnBalance && userData.vault) {
-      balanceText += `🔐 *Vault:* ${ecoSettings.currency}${userData.vault.toLocaleString()}\n`;
-    }
-    
     balanceText += `💎 *Total Wealth:* ${ecoSettings.currency}${totalWealth.toLocaleString()}\n`;
     
-    // **MODIFIED BLOCK START**
     if (isOwnBalance && userData.activeEffects) {
       const activeEffects = Object.keys(userData.activeEffects).filter(effect => {
         const expiry = userData.activeEffects[effect];
@@ -1461,7 +1350,6 @@ async function handleBalance(context, args) {
           if (typeof expiry === 'boolean') {
             balanceText += `• ${effect} (Permanent)\n`;
           } else {
-            // Use the imported helper function for a readable format
             const remainingMs = expiry - Date.now();
             const timeString = TimeHelpers.formatDuration(remainingMs);
             balanceText += `• ${effect} (${timeString} left)\n`;
@@ -1469,9 +1357,7 @@ async function handleBalance(context, args) {
         });
       }
     }
-    // **MODIFIED BLOCK END**
     
-    // **NEW SYNTAX:** Separating content and options into two objects
     const content = {
       text: balanceText,
       mentions: [targetUser]
@@ -1488,8 +1374,6 @@ async function handleBalance(context, args) {
     console.error('Balance error:', error);
   }
 }
-
-// --- GAMBLING COMMANDS REMOVED ---
 
 // Investment System - Stocks
 async function handleStocks(context, args) {
@@ -1563,37 +1447,37 @@ async function handleStocks(context, args) {
         break;
         
       case 'sell':
-  if (args.length < 3) {
-    await reply('⚠️ *Usage: stocks sell [symbol] [amount]*');
-    return;
-  }
-  
-  const sellSymbol = args[1].toUpperCase();
-  const sellAmount = parseInt(args[2]);
-  
-  if (!stocks[sellSymbol]) {
-    await reply('❌ *Invalid stock symbol*');
-    return;
-  }
-  
-  const sellUserData = await getUserData(senderId);
-  const shares = sellUserData.investments?.stocks?.[sellSymbol] || 0;
-  
-  if (shares < sellAmount) {
-    await reply(`🚫 *Insufficient shares*\n\nYou own: ${shares}\nTrying to sell: ${sellAmount}`);
-    return;
-  }
-  
-  const sellPrice = stocks[sellSymbol].price;
-  const totalEarned = sellPrice * sellAmount;
-  
-  await addMoney(senderId, totalEarned, 'Stock sale', false);
-  await updateUserData(senderId, {
-    [`investments.stocks.${sellSymbol}`]: shares - sellAmount
-  });
-  
-  await reply(`📈 *Stock Sale Successful!*\n\n🏢 *Company:* ${stocks[sellSymbol].name}\n📊 *Symbol:* ${sellSymbol}\n💰 *Price per share:* ${ecoSettings.currency}${sellPrice.toFixed(2)}\n📦 *Shares sold:* ${sellAmount}\n💸 *Total earned:* ${ecoSettings.currency}${totalEarned.toLocaleString()}`);
-  break;
+        if (args.length < 3) {
+          await reply('⚠️ *Usage: stocks sell [symbol] [amount]*');
+          return;
+        }
+        
+        const sellSymbol = args[1].toUpperCase();
+        const sellAmount = parseInt(args[2]);
+        
+        if (!stocks[sellSymbol]) {
+          await reply('❌ *Invalid stock symbol*');
+          return;
+        }
+        
+        const sellUserData = await getUserData(senderId);
+        const shares = sellUserData.investments?.stocks?.[sellSymbol] || 0;
+        
+        if (shares < sellAmount) {
+          await reply(`🚫 *Insufficient shares*\n\nYou own: ${shares}\nTrying to sell: ${sellAmount}`);
+          return;
+        }
+        
+        const sellPrice = stocks[sellSymbol].price;
+        const totalEarned = sellPrice * sellAmount;
+        
+        await addMoney(senderId, totalEarned, 'Stock sale', false);
+        await updateUserData(senderId, {
+          [`investments.stocks.${sellSymbol}`]: shares - sellAmount
+        });
+        
+        await reply(`📈 *Stock Sale Successful!*\n\n🏢 *Company:* ${stocks[sellSymbol].name}\n📊 *Symbol:* ${sellSymbol}\n💰 *Price per share:* ${ecoSettings.currency}${sellPrice.toFixed(2)}\n📦 *Shares sold:* ${sellAmount}\n💸 *Total earned:* ${ecoSettings.currency}${totalEarned.toLocaleString()}`);
+        break;
         
       case 'portfolio':
         const portfolioData = await getUserData(senderId);
@@ -1654,16 +1538,6 @@ async function handleShop(context, args) {
       
       const itemId = getItemId(args[1]);
       const item = SHOP_ITEMS[itemId];
-
-       // --- OUT OF STOCK MODIFICATION ---
-
-      // Check if the item is robProtection and set it to out of stock
-      if (itemId === 'robProtection') {
-        await reply('🚫 *Sorry, Rob Protection is currently out of stock.*');
-        return; // This stops the rest of the buy process
-      }
-
-      // --- END OF MODIFICATION ---
       
       if (!item) {
         await reply('❌ *Item not found*');
@@ -1703,8 +1577,8 @@ async function handleShop(context, args) {
     } else {
       // Show category items
       const categories = {
-        consumables: ['workBoost', 'robProtection', 'dailyBoost', 'gamblingLuck', 'heistPlans'],
-        upgrades: ['vipStatus', 'privateVault'],
+        consumables: ['workBoost', 'robProtection', 'dailyBoost'],
+        upgrades: ['vipStatus'],
         tools: ['lockpicks', 'businessSuit'],
         cosmetics: ['goldenCrown', 'customTitle'],
         special: ['marketTip']
@@ -1787,74 +1661,6 @@ async function handleInventory(context) {
   } catch (error) {
     await reply('❌ *Error loading inventory. Please try again.*');
     console.error('Inventory error:', error);
-  }
-}
-
-// Vault Command
-async function handleVault(context, args) {
-  const { reply, senderId } = context;
-  
-  try {
-    const userData = await getUserData(senderId);
-    
-    // Check if user has vault access
-    if (!userData.activeEffects?.vault && !userData.activeEffects?.privateVault) {
-      await reply(`🔐 *Private Vault*\n\n🚫 *You don't have vault access*\n\n🛍️ Buy "Private Vault" from the shop to unlock secure storage that can't be robbed!`);
-      return;
-    }
-    
-    if (!args || args.length === 0) {
-      await reply(`🔐 *PRIVATE VAULT* 🔐\n\n💰 *Balance:* ${ecoSettings.currency}${(userData.vault || 0).toLocaleString()}\n\n📋 *Commands:*\n• *${context.config.PREFIX}vault deposit [amount]* - Store money\n• *${context.config.PREFIX}vault withdraw [amount]* - Take money\n\n🛡️ *Vault money is 100% safe from robberies!*`);
-      return;
-    }
-    
-    const itemId = getItemId(args[0]);
-    const amount = parseInt(args[1]);
-    
-    if (isNaN(amount) || amount <= 0) {
-      await reply('⚠️ *Please provide a valid amount*');
-      return;
-    }
-    
-    switch (action) {
-      case 'deposit':
-      case 'dep':
-        if (userData.balance < amount) {
-          await reply('🚫 *Insufficient wallet balance*');
-          return;
-        }
-        
-        await updateUserData(senderId, {
-          balance: userData.balance - amount,
-          vault: (userData.vault || 0) + amount
-        });
-        
-        const updatedUser = await getUserData(senderId);
-        await reply(`🔐 *Successfully deposited ${ecoSettings.currency}${amount.toLocaleString()} to your vault*\n\n💵 *Wallet:* ${ecoSettings.currency}${updatedUser.balance.toLocaleString()}\n🔐 *Vault:* ${ecoSettings.currency}${updatedUser.vault.toLocaleString()}`);
-        break;
-        
-      case 'withdraw':
-      case 'wd':
-        if ((userData.vault || 0) < amount) {
-          await reply('🚫 *Insufficient vault balance*');
-          return;
-        }
-        
-        await updateUserData(senderId, {
-          balance: userData.balance + amount,
-          vault: (userData.vault || 0) - amount
-        });
-        
-        const updatedUserWithdraw = await getUserData(senderId);
-        await reply(`🔐 *Successfully withdrew ${ecoSettings.currency}${amount.toLocaleString()} from your vault*\n\n💵 *Wallet:* ${ecoSettings.currency}${updatedUserWithdraw.balance.toLocaleString()}\n🔐 *Vault:* ${ecoSettings.currency}${updatedUserWithdraw.vault.toLocaleString()}`);
-        break;
-        
-      default:
-        await reply('❓ *Unknown vault command*');
-    }
-  } catch (error) {
-    await reply('❌ *Error processing vault command. Please try again.*');
-    console.error('Vault error:', error);
   }
 }
 
@@ -1990,7 +1796,7 @@ async function handleDaily(context) {
   }
 }
 
-// Enhanced Profile with achievements and stats
+// Profile command without vault and clan
 async function handleProfile(context, args) {
   const { reply, senderId, sock, m, from } = context;
   
@@ -1999,7 +1805,7 @@ async function handleProfile(context, args) {
     await initUser(targetUser);
     const profileData = await getUserData(targetUser);
     
-    const totalWealth = profileData.balance + profileData.bank + (profileData.vault || 0);
+    const totalWealth = profileData.balance + profileData.bank;
     const isOwnProfile = targetUser === senderId;
     const userNumber = targetUser.split('@')[0];
     
@@ -2031,19 +1837,12 @@ async function handleProfile(context, args) {
     profileText += `💵 *Wallet:* ${ecoSettings.currency}${profileData.balance.toLocaleString()}\n`;
     profileText += `🏦 *Bank:* ${ecoSettings.currency}${profileData.bank.toLocaleString()}\n`;
     
-    if (isOwnProfile && profileData.vault) {
-      profileText += `🔐 *Vault:* ${ecoSettings.currency}${profileData.vault.toLocaleString()}\n`;
-    }
-    
-    profileText += `🛡️ *Clan:* ${profileData.clan || 'None'}\n`;
-    
     if (profileData.stats) {
       profileText += `\n📊 *STATISTICS*\n`;
       profileText += `💼 *Jobs Completed:* ${profileData.stats.workCount || 0}\n`;
       profileText += `🔥 *Daily Streak:* ${profileData.stats.dailyStreak || 0} days\n`;
       profileText += `🏆 *Best Streak:* ${profileData.stats.maxDailyStreak || 0} days\n`;
       profileText += `🦹 *Robberies:* ${profileData.stats.robsSuccessful || 0}/${profileData.stats.robsAttempted || 0}\n`;
-      profileText += `🎰 *Total Gambled:* ${ecoSettings.currency}${(profileData.stats.totalGambled || 0).toLocaleString()}\n`;
     }
     
     if (profileData.achievements && profileData.achievements.length > 0) {
@@ -2128,7 +1927,7 @@ async function handleLeaderboard(context, args) {
     switch (category) {
       case 'wealth':
       case 'money':
-        sortField = { $add: ['$balance', '$bank', { $ifNull: ['$vault', 0] }] };
+        sortField = { $add: ['$balance', '$bank'] };
         title = 'WEALTH LEADERBOARD';
         emoji = '💰';
         break;
@@ -2144,12 +1943,6 @@ async function handleLeaderboard(context, args) {
         title = 'STREAK LEADERBOARD';
         emoji = '🔥';
         break;
-      case 'gambling':
-      case 'gamble':
-        sortField = '$stats.totalGambled';
-        title = 'GAMBLING LEADERBOARD';
-        emoji = '🎰';
-        break;
       case 'achievements':
       case 'ach':
         sortField = { $size: { $ifNull: ['$achievements', []] } };
@@ -2157,7 +1950,7 @@ async function handleLeaderboard(context, args) {
         emoji = '🏆';
         break;
       default:
-        await reply(`📊 *Leaderboard Categories:*\n• *wealth* - Total money\n• *work* - Jobs completed\n• *streak* - Best daily streak\n• *gambling* - Total gambled\n• *achievements* - Achievement count\n\n💡 Usage: ${context.config.PREFIX}leaderboard [category]`);
+        await reply(`📊 *Leaderboard Categories:*\n• *wealth* - Total money\n• *work* - Jobs completed\n• *streak* - Best daily streak\n• *achievements* - Achievement count\n\n💡 Usage: ${context.config.PREFIX}leaderboard [category]`);
         return;
     }
     
@@ -2193,7 +1986,7 @@ async function handleLeaderboard(context, args) {
       
       switch (category) {
         case 'wealth':
-          const wealth = user.balance + user.bank + (user.vault || 0);
+          const wealth = user.balance + user.bank;
           leaderboard += `   💰 ${ecoSettings.currency}${wealth.toLocaleString()}\n`;
           break;
         case 'work':
@@ -2201,9 +1994,6 @@ async function handleLeaderboard(context, args) {
           break;
         case 'streak':
           leaderboard += `   🔥 ${user.stats?.maxDailyStreak || 0} days\n`;
-          break;
-        case 'gambling':
-          leaderboard += `   🎰 ${ecoSettings.currency}${(user.stats?.totalGambled || 0).toLocaleString()}\n`;
           break;
         case 'achievements':
           leaderboard += `   🏆 ${user.achievements?.length || 0} achievements\n`;
@@ -2246,7 +2036,6 @@ async function handleAdminSettings(context, args) {
       
       // Feature Toggles
       settingsText += `🎛️ *Features:*\n`;
-      settingsText += `• Gambling: ${ecoSettings.gamblingEnabled ? '✅' : '❌'}\n`;
       settingsText += `• Investments: ${ecoSettings.investmentsEnabled ? '✅' : '❌'}\n`;
       settingsText += `• Shop: ${ecoSettings.shopEnabled ? '✅' : '❌'}\n`;
       settingsText += `• Events: ${ecoSettings.eventsEnabled ? '✅' : '❌'}\n\n`;
@@ -2254,8 +2043,7 @@ async function handleAdminSettings(context, args) {
       // Cooldowns
       settingsText += `⏱️ *Cooldowns:*\n`;
       settingsText += `• Work: ${ecoSettings.workCooldownMinutes}m\n`;
-      settingsText += `• Rob: ${ecoSettings.robCooldownMinutes}m\n`;
-      settingsText += `• Heist: ${ecoSettings.heistCooldownHours}h\n\n`;
+      settingsText += `• Rob: ${ecoSettings.robCooldownMinutes}m\n\n`;
       
       // Admin Commands
       settingsText += `🔧 *Admin Commands:*\n`;
@@ -2392,7 +2180,6 @@ async function handleAdminSettings(context, args) {
         await updateUserData(resetTarget, {
           balance: ecoSettings.startingBalance,
           bank: ecoSettings.startingBankBalance,
-          vault: 0,
           inventory: [],
           activeEffects: {},
           achievements: [],
@@ -2409,7 +2196,6 @@ async function handleAdminSettings(context, args) {
           lastDaily: null,
           lastWork: null,
           lastRob: null,
-          lastHeist: null
         });
         
         await reply(`🔄 *Successfully reset @${resetTarget.split('@')[0]}'s economy data*`);
@@ -2438,8 +2224,6 @@ async function handleAdminSettings(context, args) {
         });
         break;
         
-        // NEWS ADMIN SWITCH COMMAND
-
    case 'news': {
         const newsAction = args[1] ? args[1].toLowerCase() : null;
 
@@ -2611,9 +2395,6 @@ async function handleSubCommand(subCommand, args, context) {
       case 'wd':
         await handleWithdraw(context, args);
         break;
-      case 'vault':
-        await handleVault(context, args);
-        break;
         
       // Earning
       case 'work':
@@ -2625,11 +2406,6 @@ async function handleSubCommand(subCommand, args, context) {
       case 'daily':
         await handleDaily(context);
         break;
-      case 'heist':
-        await handleHeist(context, args);
-        break;
-        
-      // --- GAMBLING SUBCOMMANDS REMOVED ---
         
       // Investments
       case 'invest':
@@ -2656,9 +2432,6 @@ async function handleSubCommand(subCommand, args, context) {
       case 'achievements':
       case 'ach':
         await handleAchievements(context, args);
-        break;
-      case 'clan':
-        await handleClan(context, args);
         break;
         
       // Shop
@@ -2692,9 +2465,6 @@ async function handleSubCommand(subCommand, args, context) {
     await context.reply('❌ *Error processing command. Please try again.*');
   }
 }
-
-// Keep all existing functions (handleBalance, handleSend, handleDeposit, handleWithdraw, etc.)
-// that were in your original code but enhance them with the new features
 
 // Enhanced handleSend with transaction limits and fees
 async function handleSend(context, args) {
@@ -2759,7 +2529,7 @@ async function handleSend(context, args) {
 }
 
 
-// Keep original handleDeposit and handleWithdraw but add bank interest
+// Bank commands
 async function handleDeposit(context, args) {
   const { reply, senderId } = context;
   
@@ -2955,22 +2725,6 @@ async function handleRob(context, args) {
 
 
 // Placeholder functions for remaining features
-async function handleHeist(context, args) {
-  await context.reply('🚧 *Heist system coming soon!* Team up with clan members for big scores! 🚧');
-}
-
-async function handleLottery(context, args) {
-  await context.reply('🚧 *Lottery system coming soon!* Weekly jackpots await! 🚧');
-}
-
-async function handleRoulette(context, args) {
-  await context.reply('🚧 *Russian Roulette coming soon!* High risk, high reward! 🚧');
-}
-
-async function handleGuess(context, args) {
-  await context.reply('🚧 *Number guessing game coming soon!* 🚧');
-}
-
 async function handleInvest(context, args) {
   await context.reply('🚧 *Investment overview coming soon!* 🚧');
 }
@@ -3120,7 +2874,6 @@ async function handleBusiness(context, args) {
     
     switch (action) {
       case 'list':
-        // ... (this case remains unchanged) ...
         let businessList = '🏢 *AVAILABLE BUSINESSES* 🏢\n\n';
         for (const [id, business] of Object.entries(businessData)) {
           businessList += `🏪 *${business.name}*\n`;
@@ -3133,7 +2886,6 @@ async function handleBusiness(context, args) {
         break;
         
       case 'buy':
-        // ... (this case remains unchanged) ...
         if (args.length < 2) {
           await reply('⚠️ *Usage: business buy [business_id]*');
           return;
@@ -3182,7 +2934,6 @@ async function handleBusiness(context, args) {
         break;
         
       case 'portfolio':
-        // ... (this case remains unchanged) ...
         const portfolioData = await getUserData(senderId);
         const businesses = portfolioData.investments?.businesses || [];
         
@@ -3221,7 +2972,6 @@ async function handleBusiness(context, args) {
         let totalProfit = 0;
         const now = new Date();
         const updatedBusinesses = [];
-        // **FIX:** Variable is declared here so it can be used everywhere in this block
         const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
         
         userBusinesses.forEach(business => {
@@ -3243,7 +2993,6 @@ async function handleBusiness(context, args) {
         if (totalProfit === 0) {
           let soonestNextCollection = Infinity;
           userBusinesses.forEach(business => {
-            // It can now be safely used here
             const nextCollectionTime = new Date(business.lastCollected).getTime() + twentyFourHoursInMs;
             if (nextCollectionTime < soonestNextCollection) {
               soonestNextCollection = nextCollectionTime;
@@ -3271,10 +3020,6 @@ async function handleBusiness(context, args) {
     await reply('❌ *Error processing business command. Please try again.*');
     console.error('Business error:', error);
   }
-}
-
-async function handleClan(context, args) {
-  await context.reply('🚧 *Enhanced clan system coming soon!* Clan wars, shared vaults, and more! 🚧');
 }
 
 async function handleEvents(context) {
