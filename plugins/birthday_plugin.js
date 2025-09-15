@@ -1,12 +1,15 @@
-// At the top of your birthday plugin, add:
+// At the top of your birthday plugin, add: (UNCHANGED)
 const isConnectionHealthy = global.isConnectionHealthy || (() => true);
 const safeSend = global.sendMessageSafely || ((sock, jid, msg) => sock.sendMessage(jid, msg));
 
 // plugins/birthday.js - Birthday plugin compatible with PluginManager
-import { MongoClient } from 'mongodb';
+// ✅ REFACTORED: Removed direct MongoClient import
 import moment from 'moment-timezone';
+// ✅ REFACTORED: Import the new helper for database access
+import { getCollection } from '../lib/pluginIntegration.js';
 
-// Plugin information export
+
+// Plugin information export (UNCHANGED)
 export const info = {
   name: 'Birthday System',
   version: '2.0.0',
@@ -26,9 +29,13 @@ export const info = {
   ]
 };
 
-// MongoDB Configuration
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-const DATABASE_NAME = process.env.DATABASE_NAME || 'whatsapp_bot';
+// ❌ REMOVED: Old MongoDB Configuration and connection variables
+// const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+// const DATABASE_NAME = process.env.DATABASE_NAME || 'whatsapp_bot';
+// let db = null;
+// let mongoClient = null;
+
+// ✅ REFACTORED: Collection names are kept for local use
 const COLLECTIONS = {
   BIRTHDAYS: 'birthdays',
   BIRTHDAY_SETTINGS: 'birthday_settings',
@@ -36,37 +43,13 @@ const COLLECTIONS = {
   BIRTHDAY_REMINDERS: 'birthday_reminders'
 };
 
-// Database connection
-let db = null;
-let mongoClient = null;
+// ❌ REMOVED: The old initDatabase function is no longer needed.
+// The mongoManager handles the connection automatically.
 
-// Initialize MongoDB connection
-async function initDatabase() {
-  if (db) return db;
-  
-  try {
-    mongoClient = new MongoClient(MONGODB_URI);
-    await mongoClient.connect();
-    db = mongoClient.db(DATABASE_NAME);
-    
-    // Create indexes for better performance
-    await db.collection(COLLECTIONS.BIRTHDAYS).createIndex({ userId: 1 }, { unique: true });
-    await db.collection(COLLECTIONS.BIRTHDAYS).createIndex({ 'birthday.searchKey': 1 });
-    await db.collection(COLLECTIONS.BIRTHDAY_WISHES).createIndex({ date: -1, userId: 1 });
-    await db.collection(COLLECTIONS.BIRTHDAY_REMINDERS).createIndex({ reminderKey: 1 }, { unique: true });
-    
-    console.log('✅ MongoDB connected successfully for Birthday system');
-    return db;
-  } catch (error) {
-    console.error('❌ MongoDB connection failed for Birthday system:', error);
-    throw error;
-  }
-}
-
-// Set Nigeria timezone
+// Set Nigeria timezone (UNCHANGED)
 moment.tz.setDefault('Africa/Lagos');
 
-// Default birthday settings
+// Default birthday settings (UNCHANGED)
 const defaultSettings = {
   enableReminders: true,
   enableAutoWishes: true,
@@ -82,9 +65,11 @@ const defaultSettings = {
 // Load settings from database
 let birthdaySettings = { ...defaultSettings };
 
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function loadSettings() {
   try {
-    const settings = await db.collection(COLLECTIONS.BIRTHDAY_SETTINGS).findOne({ type: 'birthday' });
+    const collection = await getCollection(COLLECTIONS.BIRTHDAY_SETTINGS);
+    const settings = await collection.findOne({ type: 'birthday' });
     if (settings) {
       birthdaySettings = { ...defaultSettings, ...settings.data };
     }
@@ -93,10 +78,11 @@ async function loadSettings() {
   }
 }
 
-// Save settings to database
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function saveSettings() {
   try {
-    await db.collection(COLLECTIONS.BIRTHDAY_SETTINGS).replaceOne(
+    const collection = await getCollection(COLLECTIONS.BIRTHDAY_SETTINGS);
+    await collection.replaceOne(
       { type: 'birthday' },
       { type: 'birthday', data: birthdaySettings, updatedAt: new Date() },
       { upsert: true }
@@ -106,7 +92,7 @@ async function saveSettings() {
   }
 }
 
-// Check if user is authorized
+// Check if user is authorized (UNCHANGED)
 function isAuthorized(senderId) {
   // Check if user is in admin list
   if (birthdaySettings.adminNumbers.includes(senderId.split('@')[0])) {
@@ -124,10 +110,11 @@ function isAuthorized(senderId) {
   return false;
 }
 
-// Get all birthdays from database
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function getAllBirthdays() {
   try {
-    const birthdays = await db.collection(COLLECTIONS.BIRTHDAYS).find({}).toArray();
+    const collection = await getCollection(COLLECTIONS.BIRTHDAYS);
+    const birthdays = await collection.find({}).toArray();
     const formattedBirthdays = {};
     
     birthdays.forEach(entry => {
@@ -145,23 +132,25 @@ async function getAllBirthdays() {
   }
 }
 
-// Get birthday data for specific user
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function getBirthdayData(userId) {
   try {
-    return await db.collection(COLLECTIONS.BIRTHDAYS).findOne({ userId });
+    const collection = await getCollection(COLLECTIONS.BIRTHDAYS);
+    return await collection.findOne({ userId });
   } catch (error) {
     console.error('Error getting birthday data:', error);
     return null;
   }
 }
 
-// Get today's birthdays
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function getTodaysBirthdays() {
   const today = moment.tz('Africa/Lagos');
   const todayKey = `${String(today.month() + 1).padStart(2, '0')}-${String(today.date()).padStart(2, '0')}`;
   
   try {
-    const birthdays = await db.collection(COLLECTIONS.BIRTHDAYS)
+    const collection = await getCollection(COLLECTIONS.BIRTHDAYS);
+    const birthdays = await collection
       .find({ 'birthday.searchKey': todayKey })
       .toArray();
     
@@ -172,13 +161,14 @@ async function getTodaysBirthdays() {
   }
 }
 
-// Get upcoming birthdays for reminders
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function getUpcomingBirthdays(daysAhead) {
   const targetDate = moment.tz('Africa/Lagos').add(daysAhead, 'days');
   const targetKey = `${String(targetDate.month() + 1).padStart(2, '0')}-${String(targetDate.date()).padStart(2, '0')}`;
   
   try {
-    const birthdays = await db.collection(COLLECTIONS.BIRTHDAYS)
+    const collection = await getCollection(COLLECTIONS.BIRTHDAYS);
+    const birthdays = await collection
       .find({ 'birthday.searchKey': targetKey })
       .toArray();
     
@@ -189,7 +179,7 @@ async function getUpcomingBirthdays(daysAhead) {
   }
 }
 
-// Generate birthday wish message (without specific names - uses mentions)
+// Generate birthday wish message (UNCHANGED)
 function getBirthdayWishMessage(birthdayPerson) {
   const wishes = [
     `🎉🎂 HAPPY BIRTHDAY! 🎂🎉\n\nWishing you a day filled with happiness and a year filled with joy! 🎈✨`,
@@ -217,7 +207,7 @@ function getBirthdayWishMessage(birthdayPerson) {
   return message;
 }
 
-// Generate reminder message (without specific names - uses mentions)
+// Generate reminder message (UNCHANGED)
 function getReminderMessage(birthdayPerson, daysUntil) {
   let message;
   
@@ -235,7 +225,7 @@ function getReminderMessage(birthdayPerson, daysUntil) {
   return message;
 }
 
-// Send birthday wishes
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function sendBirthdayWishes(sock) {
   if (!birthdaySettings.enableAutoWishes) {
     console.log('🎂 Auto wishes disabled, skipping...');
@@ -254,11 +244,12 @@ async function sendBirthdayWishes(sock) {
   console.log(`🎂 Found ${todaysBirthdays.length} birthday(s) today!`);
   const today = moment.tz('Africa/Lagos').format('YYYY-MM-DD');
   
+  const wishesCollection = await getCollection(COLLECTIONS.BIRTHDAY_WISHES);
+
   for (const birthdayPerson of todaysBirthdays) {
     try {
       // Check if already wished today
-      const existingWish = await db.collection(COLLECTIONS.BIRTHDAY_WISHES)
-        .findOne({ userId: birthdayPerson.userId, date: today });
+      const existingWish = await wishesCollection.findOne({ userId: birthdayPerson.userId, date: today });
       
       if (existingWish) {
         console.log(`⏭️ Already wished ${birthdayPerson.name} today`);
@@ -316,7 +307,7 @@ async function sendBirthdayWishes(sock) {
       
       // Mark as sent if at least one succeeded (to avoid duplicate wishes)
       if (successfulSends > 0) {
-        await db.collection(COLLECTIONS.BIRTHDAY_WISHES).insertOne({
+        await wishesCollection.insertOne({
           userId: birthdayPerson.userId,
           name: birthdayPerson.name,
           date: today,
@@ -336,13 +327,14 @@ async function sendBirthdayWishes(sock) {
   }
 }
 
-// Send birthday reminders
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function sendBirthdayReminders(sock) {
   if (!birthdaySettings.enableReminders) {
     return;
   }
   
   const today = moment.tz('Africa/Lagos').format('YYYY-MM-DD');
+  const remindersCollection = await getCollection(COLLECTIONS.BIRTHDAY_REMINDERS);
   
   for (const daysAhead of birthdaySettings.reminderDays) {
     const upcomingBirthdays = await getUpcomingBirthdays(daysAhead);
@@ -356,8 +348,7 @@ async function sendBirthdayReminders(sock) {
       
       try {
         // Skip if reminder already sent today for this person and days ahead
-        const existingReminder = await db.collection(COLLECTIONS.BIRTHDAY_REMINDERS)
-          .findOne({ reminderKey });
+        const existingReminder = await remindersCollection.findOne({ reminderKey });
         
         if (existingReminder) {
           continue;
@@ -382,7 +373,7 @@ async function sendBirthdayReminders(sock) {
         }
         
         // Mark reminder as sent
-        await db.collection(COLLECTIONS.BIRTHDAY_REMINDERS).insertOne({
+        await remindersCollection.insertOne({
           reminderKey,
           userId: birthdayPerson.userId,
           daysAhead,
@@ -397,18 +388,20 @@ async function sendBirthdayReminders(sock) {
   }
 }
 
-// Clean up old reminder records (keep only last 30 days)
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function cleanupReminderRecords() {
   try {
     const cutoffDate = moment.tz('Africa/Lagos').subtract(30, 'days').toDate();
     
     // Clean up old wishes
-    await db.collection(COLLECTIONS.BIRTHDAY_WISHES).deleteMany({
+    const wishesCollection = await getCollection(COLLECTIONS.BIRTHDAY_WISHES);
+    await wishesCollection.deleteMany({
       timestamp: { $lt: cutoffDate }
     });
     
     // Clean up old reminders
-    await db.collection(COLLECTIONS.BIRTHDAY_REMINDERS).deleteMany({
+    const remindersCollection = await getCollection(COLLECTIONS.BIRTHDAY_REMINDERS);
+    await remindersCollection.deleteMany({
       timestamp: { $lt: cutoffDate }
     });
     
@@ -418,7 +411,7 @@ async function cleanupReminderRecords() {
   }
 }
 
-// Birthday scheduler class
+// Birthday scheduler class (UNCHANGED)
 class BirthdayScheduler {
   constructor(sock) {
     this.sock = sock;
@@ -480,10 +473,10 @@ class BirthdayScheduler {
   }
 }
 
-// Global scheduler instance
+// Global scheduler instance (UNCHANGED)
 let birthdayScheduler = null;
 
-// Initialize scheduler
+// Initialize scheduler (UNCHANGED)
 function initializeBirthdayScheduler(sock) {
   if (birthdayScheduler) {
     birthdayScheduler.stop();
@@ -495,21 +488,18 @@ function initializeBirthdayScheduler(sock) {
   return birthdayScheduler;
 }
 
-// Main plugin handler function
+// ✅ REFACTORED: Main plugin handler no longer inits database.
 export default async function birthdayHandler(m, sock, config) {
   try {
-    // Initialize database connection
-    if (!db) {
-      await initDatabase();
-      await loadSettings();
+    // Load settings which implicitly ensures DB connection is ready
+    await loadSettings();
       
-      // Initialize scheduler if not already running
-      if (!birthdayScheduler) {
-        initializeBirthdayScheduler(sock);
-      }
+    // Initialize scheduler if not already running
+    if (!birthdayScheduler) {
+      initializeBirthdayScheduler(sock);
     }
     
-    // Handle commands
+    // Handle commands (UNCHANGED)
     if (!m.body || !m.body.startsWith(config.PREFIX)) return;
     
     const args = m.body.slice(config.PREFIX.length).trim().split(' ');
@@ -544,7 +534,10 @@ export default async function birthdayHandler(m, sock, config) {
   }
 }
 
-// Handle subcommands for the main birthday command
+// All subsequent command handlers (handleSubCommand, showBirthdayMenu, handleToday, etc.)
+// remain UNCHANGED. They already use the refactored helper functions (like getAllBirthdays,
+// saveSettings, etc.), so no further changes are needed in them.
+
 async function handleSubCommand(subCommand, args, context) {
   switch (subCommand.toLowerCase()) {
     case 'today':
