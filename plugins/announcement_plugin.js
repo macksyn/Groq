@@ -1,8 +1,11 @@
 // plugins/announcement_plugin.js - Announcement System compatible with PluginManager
-import { MongoClient } from 'mongodb';
+// ✅ REFACTORED: Removed direct MongoClient import
 import moment from 'moment-timezone';
+// ✅ REFACTORED: Import the new helper for database access
+import { getCollection } from '../lib/pluginIntegration.js';
 
-// Plugin information export
+
+// Plugin information export (UNCHANGED)
 export const info = {
   name: 'Announcement System',
   version: '1.0.0',
@@ -32,52 +35,31 @@ export const info = {
   ]
 };
 
-// MongoDB Configuration
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-const DATABASE_NAME = process.env.DATABASE_NAME || 'whatsapp_bot';
+// ❌ REMOVED: Old MongoDB Configuration and connection variables
+// const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+// const DATABASE_NAME = process.env.DATABASE_NAME || 'whatsapp_bot';
+// let db = null;
+// let mongoClient = null;
+
+// ✅ REFACTORED: Collection names are kept for local use
 const COLLECTIONS = {
   ANNOUNCEMENTS: 'announcements',
-  SETTINGS: 'announcement_settings'
+  SETTINGS: 'announcement_settings',
+  SETUP_CODES: 'setup_codes' // Added for clarity
 };
 
-// Database connection
-let db = null;
-let mongoClient = null;
 
-// Initialize MongoDB connection
-async function initDatabase() {
-  if (db) return db;
-  
-  try {
-    mongoClient = new MongoClient(MONGODB_URI);
-    await mongoClient.connect();
-    db = mongoClient.db(DATABASE_NAME);
-    
-    // Create indexes for better performance
-    await db.collection(COLLECTIONS.ANNOUNCEMENTS).createIndex({ groupJid: 1, createdAt: -1 });
-    await db.collection(COLLECTIONS.ANNOUNCEMENTS).createIndex({ createdAt: -1 });
-    await db.collection(COLLECTIONS.SETTINGS).createIndex({ groupJid: 1 }, { unique: true });
-    
-    console.log('✅ MongoDB connected successfully for Announcement System');
-    
-    return db;
-  } catch (error) {
-    console.error('❌ MongoDB connection failed for Announcement System:', error);
-    throw error;
-  }
-}
+// ❌ REMOVED: The old initDatabase function is no longer needed.
 
-// Handle set main group command (for cross-group announcements)
+// ✅ REFACTORED: handleSetMainGroup now uses getCollection
 async function handleSetMainGroup(context, args) {
   const { reply, senderId, sock, from } = context;
   
-  // Check if this is a group
   if (!from.endsWith('@g.us')) {
     await reply('❌ This command can only be used in groups.');
     return;
   }
   
-  // Check authorization
   const isAdminUser = await isAuthorized(sock, from, senderId);
   if (!isAdminUser) {
     await reply('🚫 Only admins can set the target group.');
@@ -117,10 +99,8 @@ async function handleSetMainGroup(context, args) {
     const action = args[0].toLowerCase();
     
     if (action === 'accept') {
-      // This should be run in the target group to generate setup code
       const setupCode = Math.random().toString(36).substr(2, 8).toUpperCase();
       
-      // Store the setup code temporarily (expires in 10 minutes)
       const setupData = {
         groupJid: from,
         setupCode: setupCode,
@@ -128,7 +108,8 @@ async function handleSetMainGroup(context, args) {
         expiresAt: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
       };
       
-      await db.collection('setup_codes').insertOne(setupData);
+      const setupCodesCollection = await getCollection(COLLECTIONS.SETUP_CODES);
+      await setupCodesCollection.insertOne(setupData);
       
       await reply(`🎯 *Target Group Setup*\n\n✅ This group is ready to receive announcements!\n\n🔑 *Setup Code:* \`${setupCode}\`\n\n📝 *Instructions:*\nGo to your admin group and use:\n\`${context.config.PREFIX}setmaingroup ${setupCode}\`\n\n⏰ Code expires in 10 minutes.`);
       return;
@@ -162,11 +143,9 @@ async function handleSetMainGroup(context, args) {
       return;
     }
     
-    // Assume it's a setup code
     const setupCode = action.toUpperCase();
-    
-    // Find and validate setup code
-    const setupData = await db.collection('setup_codes').findOne({
+    const setupCodesCollection = await getCollection(COLLECTIONS.SETUP_CODES);
+    const setupData = await setupCodesCollection.findOne({
       setupCode: setupCode,
       expiresAt: { $gt: new Date() }
     });
@@ -176,16 +155,13 @@ async function handleSetMainGroup(context, args) {
       return;
     }
     
-    // Verify the target group still exists and bot has access
     try {
       const targetGroupMetadata = await sock.groupMetadata(setupData.groupJid);
       
-      // Set the target group
       settings.targetGroupJid = setupData.groupJid;
       await saveGroupSettings(from, settings);
       
-      // Clean up the setup code
-      await db.collection('setup_codes').deleteOne({ _id: setupData._id });
+      await setupCodesCollection.deleteOne({ _id: setupData._id });
       
       await reply(`✅ Target group set successfully!\n\n🎯 *Target:* ${targetGroupMetadata.subject}\n📤 Announcements from this group will now be posted to the target group.\n\n💡 Use \`${context.config.PREFIX}announce [message]\` to post cross-group announcements.`);
       
@@ -199,10 +175,10 @@ async function handleSetMainGroup(context, args) {
   }
 }
 
-// Set Nigeria timezone
+// Set Nigeria timezone (UNCHANGED)
 moment.tz.setDefault('Africa/Lagos');
 
-// Default announcement settings
+// Default announcement settings (UNCHANGED)
 const defaultSettings = {
   enabled: true,
   maxAnnouncementsPerDay: 10,
@@ -216,17 +192,17 @@ const defaultSettings = {
   targetGroupJid: null // For cross-group announcements
 };
 
-// Get current Nigeria time
+// Get current Nigeria time (UNCHANGED)
 function getNigeriaTime() {
   return moment.tz('Africa/Lagos');
 }
 
-// Get current date in Nigeria timezone
+// Get current date in Nigeria timezone (UNCHANGED)
 function getCurrentDate() {
   return getNigeriaTime().format('DD-MM-YYYY');
 }
 
-// Get all group members for silent tagging
+// Get all group members for silent tagging (UNCHANGED)
 async function getGroupMembers(sock, groupJid) {
   try {
     const groupMetadata = await sock.groupMetadata(groupJid);
@@ -237,7 +213,7 @@ async function getGroupMembers(sock, groupJid) {
   }
 }
 
-// Check if user is authorized (admin or group admin)
+// Check if user is authorized (admin or group admin) (UNCHANGED)
 async function isAuthorized(sock, from, sender) {
   // Check owner/admin from environment
   const ownerNumber = process.env.OWNER_NUMBER || '';
@@ -263,10 +239,11 @@ async function isAuthorized(sock, from, sender) {
   }
 }
 
-// Load settings for specific group
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function loadGroupSettings(groupJid) {
   try {
-    const settings = await db.collection(COLLECTIONS.SETTINGS).findOne({ groupJid: groupJid });
+    const collection = await getCollection(COLLECTIONS.SETTINGS);
+    const settings = await collection.findOne({ groupJid: groupJid });
     if (settings) {
       return { ...defaultSettings, ...settings.data };
     }
@@ -277,10 +254,11 @@ async function loadGroupSettings(groupJid) {
   }
 }
 
-// Save settings for specific group
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function saveGroupSettings(groupJid, settings) {
   try {
-    await db.collection(COLLECTIONS.SETTINGS).replaceOne(
+    const collection = await getCollection(COLLECTIONS.SETTINGS);
+    await collection.replaceOne(
       { groupJid: groupJid },
       { 
         groupJid: groupJid,
@@ -294,14 +272,15 @@ async function saveGroupSettings(groupJid, settings) {
   }
 }
 
-// Check cooldown and rate limits
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function checkLimits(groupJid, senderId, settings) {
   try {
     const now = new Date();
     const today = getCurrentDate();
+    const announcementsCollection = await getCollection(COLLECTIONS.ANNOUNCEMENTS);
     
     // Check daily limit
-    const todayCount = await db.collection(COLLECTIONS.ANNOUNCEMENTS).countDocuments({
+    const todayCount = await announcementsCollection.countDocuments({
       groupJid: groupJid,
       date: today
     });
@@ -315,7 +294,7 @@ async function checkLimits(groupJid, senderId, settings) {
     
     // Check cooldown
     const cooldownMs = settings.cooldownMinutes * 60 * 1000;
-    const lastAnnouncement = await db.collection(COLLECTIONS.ANNOUNCEMENTS).findOne(
+    const lastAnnouncement = await announcementsCollection.findOne(
       { groupJid: groupJid },
       { sort: { createdAt: -1 } }
     );
@@ -335,7 +314,7 @@ async function checkLimits(groupJid, senderId, settings) {
   }
 }
 
-// Format announcement message
+// Format announcement message (UNCHANGED)
 function formatAnnouncementMessage(content, settings, groupName = null) {
   const nigeriaTime = getNigeriaTime();
   const timeStr = nigeriaTime.format('MMMM DD, YYYY [at] h:mm A');
@@ -361,13 +340,11 @@ function formatAnnouncementMessage(content, settings, groupName = null) {
   return message;
 }
 
-// Post announcement (updated to support cross-group posting)
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function postAnnouncement(sock, sourceGroupJid, content, senderId, senderName = null, targetGroupJid = null) {
   try {
-    // Determine target group - use targetGroupJid if provided, otherwise use sourceGroupJid
     const finalTargetJid = targetGroupJid || sourceGroupJid;
     
-    // Load settings from the source group (admin group)
     const settings = await loadGroupSettings(sourceGroupJid);
     
     if (!settings.enabled) {
@@ -377,7 +354,6 @@ async function postAnnouncement(sock, sourceGroupJid, content, senderId, senderN
       };
     }
     
-    // Check limits against the target group (where announcement will be posted)
     const limitCheck = await checkLimits(finalTargetJid, senderId, settings);
     if (!limitCheck.allowed) {
       return {
@@ -386,7 +362,6 @@ async function postAnnouncement(sock, sourceGroupJid, content, senderId, senderN
       };
     }
     
-    // Get target group info
     let groupName = 'Group';
     try {
       const groupMetadata = await sock.groupMetadata(finalTargetJid);
@@ -395,27 +370,23 @@ async function postAnnouncement(sock, sourceGroupJid, content, senderId, senderN
       console.log('Could not get target group name');
     }
     
-    // Format announcement message
     const announcementMessage = formatAnnouncementMessage(content, settings, groupName);
     
-    // Get target group members for silent tagging
     let mentions = [];
     if (settings.silentNotifications) {
       mentions = await getGroupMembers(sock, finalTargetJid);
     }
     
-    // Send announcement to target group
     await sock.sendMessage(finalTargetJid, {
       text: announcementMessage,
       mentions: mentions // Silent notifications
     });
     
-    // Save to database if enabled (save against target group)
     if (settings.saveHistory) {
       const announcementDoc = {
         groupJid: finalTargetJid,
         groupName: groupName,
-        sourceGroupJid: sourceGroupJid, // Track where announcement came from
+        sourceGroupJid: sourceGroupJid,
         content: content,
         senderId: senderId,
         senderName: senderName,
@@ -425,7 +396,8 @@ async function postAnnouncement(sock, sourceGroupJid, content, senderId, senderN
         createdAt: new Date()
       };
       
-      await db.collection(COLLECTIONS.ANNOUNCEMENTS).insertOne(announcementDoc);
+      const announcementsCollection = await getCollection(COLLECTIONS.ANNOUNCEMENTS);
+      await announcementsCollection.insertOne(announcementDoc);
     }
     
     const logMessage = sourceGroupJid === finalTargetJid 
@@ -436,7 +408,7 @@ async function postAnnouncement(sock, sourceGroupJid, content, senderId, senderN
     
     return {
       success: true,
-      message: null, // No confirmation message to send back
+      message: null, 
       targetGroup: groupName,
       memberCount: mentions.length
     };
@@ -450,10 +422,11 @@ async function postAnnouncement(sock, sourceGroupJid, content, senderId, senderN
   }
 }
 
-// Get announcement history
+// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function getAnnouncementHistory(groupJid, limit = 10) {
   try {
-    const announcements = await db.collection(COLLECTIONS.ANNOUNCEMENTS)
+    const announcementsCollection = await getCollection(COLLECTIONS.ANNOUNCEMENTS);
+    const announcements = await announcementsCollection
       .find({ groupJid: groupJid })
       .sort({ createdAt: -1 })
       .limit(limit)
@@ -470,15 +443,9 @@ async function getAnnouncementHistory(groupJid, limit = 10) {
 // 🎯 COMMAND HANDLERS
 // =======================
 
-// Main plugin handler function
+// ✅ REFACTORED: Main plugin handler no longer inits database.
 export default async function announcementHandler(m, sock, config) {
   try {
-    // Initialize database connection
-    if (!db) {
-      await initDatabase();
-    }
-    
-    // Only handle commands that start with prefix
     if (!m.body || !m.body.startsWith(config.PREFIX)) return;
     
     const args = m.body.slice(config.PREFIX.length).trim().split(' ');
@@ -486,12 +453,10 @@ export default async function announcementHandler(m, sock, config) {
     const senderId = m.key.participant || m.key.remoteJid;
     const from = m.key.remoteJid;
     
-    // Helper function for sending replies
     const reply = async (text) => {
       await sock.sendMessage(from, { text }, { quoted: m });
     };
     
-    // Handle different commands
     switch (command) {
       case 'announce':
       case 'announcement':
@@ -519,24 +484,24 @@ export default async function announcementHandler(m, sock, config) {
   }
 }
 
-// Handle announcement command (updated for cross-group functionality)
+// All subsequent command handlers (handleAnnouncement, handleAnnouncementHistory, etc.)
+// remain UNCHANGED. They already use the refactored helper functions, so no
+// further changes are needed in them.
+
 async function handleAnnouncement(context, args) {
   const { reply, senderId, sock, from } = context;
   
-  // Check if this is a group
   if (!from.endsWith('@g.us')) {
     await reply('❌ Announcements can only be posted in groups.');
     return;
   }
   
-  // Check authorization
   const isAdminUser = await isAuthorized(sock, from, senderId);
   if (!isAdminUser) {
     await reply('🚫 Only admins can post announcements.');
     return;
   }
   
-  // Check if content is provided
   if (args.length === 0) {
     const settings = await loadGroupSettings(from);
     let helpMessage = `📢 *Announcement System*\n\nUsage: \`${context.config.PREFIX}announce [message]\`\n\nExample: \`${context.config.PREFIX}announce Please remember that our weekly meeting is tomorrow at 3 PM\`\n\n💡 This will notify all group members silently.`;
@@ -566,7 +531,6 @@ async function handleAnnouncement(context, args) {
     return;
   }
   
-  // Get sender name
   let senderName = 'Admin';
   try {
     const contact = await sock.onWhatsApp(senderId);
@@ -577,33 +541,26 @@ async function handleAnnouncement(context, args) {
     console.log('Could not get sender name');
   }
   
-  // Load settings to check if there's a target group
   const settings = await loadGroupSettings(from);
   const targetGroupJid = settings.targetGroupJid;
   
-  // Post announcement (cross-group if target is set, otherwise same group)
   const result = await postAnnouncement(sock, from, content, senderId, senderName, targetGroupJid);
   
-  // Only send reply if there was an error or if it was a cross-group announcement
   if (result.message) {
     await reply(result.message);
   } else if (targetGroupJid && result.success) {
-    // Send confirmation for cross-group announcements
     await reply(`✅ Announcement posted successfully to *${result.targetGroup}*!\n👥 ${result.memberCount} members notified`);
   }
 }
 
-// Handle announcement history command
 async function handleAnnouncementHistory(context, args) {
   const { reply, senderId, sock, from } = context;
   
-  // Check if this is a group
   if (!from.endsWith('@g.us')) {
     await reply('❌ This command can only be used in groups.');
     return;
   }
   
-  // Check authorization
   const isAdminUser = await isAuthorized(sock, from, senderId);
   if (!isAdminUser) {
     await reply('🚫 Only admins can view announcement history.');
@@ -641,17 +598,14 @@ async function handleAnnouncementHistory(context, args) {
   }
 }
 
-// Handle announcement settings command
 async function handleAnnouncementSettings(context, args) {
   const { reply, senderId, sock, from } = context;
   
-  // Check if this is a group
   if (!from.endsWith('@g.us')) {
     await reply('❌ This command can only be used in groups.');
     return;
   }
   
-  // Check authorization
   const isAdminUser = await isAuthorized(sock, from, senderId);
   if (!isAdminUser) {
     await reply('🚫 Only admins can manage announcement settings.');
@@ -662,7 +616,6 @@ async function handleAnnouncementSettings(context, args) {
     const settings = await loadGroupSettings(from);
     
     if (args.length === 0) {
-      // Show current settings
       let settingsMessage = `⚙️ *ANNOUNCEMENT SETTINGS* ⚙️\n\n`;
       settingsMessage += `📢 Status: ${settings.enabled ? 'Enabled ✅' : 'Disabled ❌'}\n`;
       settingsMessage += `📊 Daily Limit: ${settings.maxAnnouncementsPerDay} announcements\n`;
@@ -671,7 +624,6 @@ async function handleAnnouncementSettings(context, args) {
       settingsMessage += `📅 Include Timestamp: ${settings.includeTimestamp ? 'Yes ✅' : 'No ❌'}\n`;
       settingsMessage += `📝 Save History: ${settings.saveHistory ? 'Yes ✅' : 'No ❌'}\n`;
       
-      // Show target group info
       if (settings.targetGroupJid) {
         try {
           const targetGroupMetadata = await sock.groupMetadata(settings.targetGroupJid);
@@ -832,19 +784,10 @@ async function handleAnnouncementSettings(context, args) {
   }
 }
 
-// Initialize plugin when first loaded
-async function initializePlugin() {
-  try {
-    await initDatabase();
-    console.log('✅ Announcement Plugin initialized successfully');
-  } catch (error) {
-    console.error('❌ Failed to initialize Announcement Plugin:', error);
-  }
-}
+// ❌ REMOVED: initializePlugin is no longer needed.
 
-// Export functions for external use
+// Export functions for external use (UNCHANGED)
 export { 
   postAnnouncement,
-  getAnnouncementHistory,
-  initializePlugin
+  getAnnouncementHistory
 };
