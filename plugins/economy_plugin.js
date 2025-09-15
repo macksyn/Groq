@@ -6,7 +6,7 @@ import { TimeHelpers } from '../lib/helpers.js';
 // Plugin information export
 export const info = {
   name: 'Enhanced Economy System',
-  version: '3.4.0',
+  version: '3.5.0',
   author: 'Bot Developer',
   description: 'A focused economy system with investments, shop, and achievements.',
   commands: [
@@ -262,17 +262,17 @@ function getItemId(inputId) {
 // --- Investment Data ---
 // Mock stock data
 const stockData = {
-    AAPL: { name: 'Apple Inc.', price: 150 + (Math.random() - 0.5) * 30 },
-    GOOGL: { name: 'Alphabet Inc.', price: 2800 + (Math.random() - 0.5) * 400 },
-    TSLA: { name: 'Tesla Inc.', price: 800 + (Math.random() - 0.5) * 200 },
-    AMZN: { name: 'Amazon.com Inc.', price: 3300 + (Math.random() - 0.5) * 500 },
-    MSFT: { name: 'Microsoft Corp.', price: 300 + (Math.random() - 0.5) * 50 }
+    AAPL: { name: 'Apple Inc.', price: 150 + (Math.random() - 0.5) * 30, description: "Technology giant." },
+    GOOGL: { name: 'Alphabet Inc.', price: 2800 + (Math.random() - 0.5) * 400, description: "Search and cloud." },
+    TSLA: { name: 'Tesla Inc.', price: 800 + (Math.random() - 0.5) * 200, description: "Electric vehicles." },
+    AMZN: { name: 'Amazon.com Inc.', price: 3300 + (Math.random() - 0.5) * 500, description: "E-commerce leader." },
+    MSFT: { name: 'Microsoft Corp.', price: 300 + (Math.random() - 0.5) * 50, description: "Software and services." }
 };
 let cryptoData = {
-  BTC: { name: "Bitcoin", price: 45000, volatility: 0.05 }, ETH: { name: "Ethereum", price: 3200, volatility: 0.06 },
-  SOL: { name: "Solana", price: 120, volatility: 0.08 }, SHIB: { name: "Shiba Inu", price: 0.00002, volatility: 0.12 },
-  GROQ: { name: "Groq Coin", price: 15, volatility: 0.10 }, ADA: { name: "Cardano", price: 0.8, volatility: 0.07 },
-  DOT: { name: "Polkadot", price: 25, volatility: 0.08 }, MATIC: { name: "Polygon", price: 1.2, volatility: 0.09 }
+  BTC: { name: "Bitcoin", price: 45000, volatility: 0.05, description: "The original crypto." }, ETH: { name: "Ethereum", price: 3200, volatility: 0.06, description: "Smart contract platform." },
+  SOL: { name: "Solana", price: 120, volatility: 0.08, description: "High-speed blockchain." }, SHIB: { name: "Shiba Inu", price: 0.00002, volatility: 0.12, description: "Popular meme coin." },
+  GROQ: { name: "Groq Coin", price: 15, volatility: 0.10, description: "AI-focused token." }, ADA: { name: "Cardano", price: 0.8, volatility: 0.07, description: "Proof-of-stake blockchain." },
+  DOT: { name: "Polkadot", price: 25, volatility: 0.08, description: "Interoperability protocol." }, MATIC: { name: "Polygon", price: 1.2, volatility: 0.09, description: "Ethereum scaling solution." }
 };
 let businessData = {
   restaurant: { name: "Restaurant", price: 50000, roi: 0.12, description: "Earn from food sales" },
@@ -337,7 +337,15 @@ async function getUserData(userId) {
 }
 async function updateUserData(userId, data) {
   try {
-    return await db.collection(COLLECTIONS.USERS).updateOne({ userId }, { $set: { ...data, updatedAt: new Date() } }, { upsert: true });
+    // Check if the data object already contains a MongoDB update operator
+    const hasOperator = Object.keys(data).some(key => key.startsWith('$'));
+    
+    // Construct the update document
+    const updateDoc = hasOperator 
+      ? { ...data, $set: { ...(data.$set || {}), updatedAt: new Date() } }
+      : { $set: { ...data, updatedAt: new Date() } };
+
+    return await db.collection(COLLECTIONS.USERS).updateOne({ userId }, updateDoc, { upsert: true });
   } catch (error) {
     console.error('Error updating user data:', error);
     throw error;
@@ -346,7 +354,6 @@ async function updateUserData(userId, data) {
 
 // Money functions
 async function addMoney(userId, amount, reason = 'Unknown', applyEffects = true) {
-    // This function remains largely the same, but simplified for brevity in this view
     const user = await getUserData(userId);
     let finalAmount = amount;
     if (applyEffects && user.activeEffects) {
@@ -397,7 +404,6 @@ async function checkAchievements(userId, type, data = {}) {
 
 // Item usage system
 async function useItem(userId, itemId) {
-    // This function remains the same, simplified for brevity
     const user = await getUserData(userId);
     const itemIndex = user.inventory.findIndex(item => item.id === itemId);
     if (itemIndex === -1) return { success: false, message: 'Item not found in inventory' };
@@ -416,7 +422,7 @@ async function useItem(userId, itemId) {
     updates.inventory = user.inventory;
     
     await updateUserData(userId, updates);
-    return { success: true, message: `Used ${shopItem.name}!`, effect: shopItem.description };
+    return { success: true, message: `Successfully used ${shopItem.name}!`, effect: shopItem.description };
 }
 
 // Helper functions
@@ -453,30 +459,66 @@ async function cleanupExpiredEffects(userId) {
   if (needsUpdate) await updateUserData(userId, { activeEffects: cleanEffects });
 }
 
-// --- COMMAND HANDLERS ---
+// --- COMMAND HANDLERS (with restored descriptive text) ---
 async function showEconomyMenu(context) {
     const { reply, config } = context;
-    const menuText = `💰 *ECONOMY SYSTEM* 💰\n\n` +
-        `💵 *Basic:*\n` + `• balance • send • deposit • withdraw\n\n` +
-        `💼 *Earning:*\n` + `• work • daily • rob\n\n` +
-        `📈 *Investments:*\n` + `• stocks • crypto • business\n\n` +
-        `🛍️ *Shopping:*\n` + `• shop • inventory • use\n\n` +
-        `👥 *Social:*\n` + `• profile • achievements • leaderboard\n\n` +
-        `⚙️ *Admin:* ${config.PREFIX}eco admin (admin only)`;
+    const menuText = `💰 *ENHANCED ECONOMY SYSTEM* 💰\n\n` +
+                    `💵 *Basic Commands:*\n` +
+                    `• *balance* - Check balance & vault\n` +
+                    `• *send @user amount* - Transfer money\n` +
+                    `• *deposit/withdraw amount* - Bank operations\n\n` +
+                    `💼 *Earning:*\n` +
+                    `• *work* - Work for money\n` +
+                    `• *daily* - Daily rewards with streaks\n` +
+                    `• *rob @user* - Risk/reward robbery\n\n` +
+                    `📈 *Investments:*\n` +
+                    `• *stocks* - Stock market\n` +
+                    `• *crypto* - Cryptocurrency\n` +
+                    `• *business* - Buy businesses\n\n` +
+                    `🛍️ *Shopping:*\n` +
+                    `• *shop* - Browse items\n` +
+                    `• *inventory* - Your items\n` +
+                    `• *use item* - Use items\n\n` +
+                    `👥 *Social:*\n` +
+                    `• *profile* - View stats\n` +
+                    `• *achievements* - Your badges\n` +
+                    `• *leaderboard* - Top players\n\n` +
+                    `⚙️ *Admin:* ${config.PREFIX}eco admin (admin only)`;
     await reply(menuText);
 }
 
 async function handleBalance(context) {
-  const { reply, senderId, m, sock, from, args } = context;
+  const { senderId, m, sock, from, args } = context;
   const targetUser = getTargetUser(m, args.join(' ')) || senderId;
   const userData = await getUserData(targetUser);
   const totalWealth = userData.balance + userData.bank;
   const isOwnBalance = targetUser === senderId;
   
-  let balanceText = `💰 *${isOwnBalance ? 'YOUR' : `@${targetUser.split('@')[0]}'S`} BALANCE*\n\n` +
+  let balanceText = `💰 *${isOwnBalance ? 'YOUR BALANCE' : `@${targetUser.split('@')[0]}'S BALANCE`}*\n\n` +
       `💵 *Wallet:* ${ecoSettings.currency}${userData.balance.toLocaleString()}\n` +
       `🏦 *Bank:* ${ecoSettings.currency}${userData.bank.toLocaleString()}\n` +
-      `💎 *Total:* ${ecoSettings.currency}${totalWealth.toLocaleString()}`;
+      `💎 *Total Wealth:* ${ecoSettings.currency}${totalWealth.toLocaleString()}\n`;
+      
+  if (isOwnBalance && userData.activeEffects) {
+      const activeEffects = Object.keys(userData.activeEffects).filter(effect => {
+        const expiry = userData.activeEffects[effect];
+        return typeof expiry === 'boolean' || expiry > Date.now();
+      });
+      
+      if (activeEffects.length > 0) {
+        balanceText += `\n✨ *Active Effects:*\n`;
+        activeEffects.forEach(effect => {
+          const expiry = userData.activeEffects[effect];
+          if (typeof expiry === 'boolean') {
+            balanceText += `• ${effect} (Permanent)\n`;
+          } else {
+            const remainingMs = expiry - Date.now();
+            const timeString = TimeHelpers.formatDuration(remainingMs);
+            balanceText += `• ${effect} (${timeString} left)\n`;
+          }
+        });
+      }
+    }
   
   await sock.sendMessage(from, { text: balanceText, mentions: [targetUser] }, { quoted: m });
 }
@@ -486,48 +528,53 @@ async function handleSend(context) {
     const targetUser = getTargetUser(m, args.join(' '));
     let amount = parseInt(args.find(arg => !isNaN(parseInt(arg))));
 
-    if (!targetUser || !amount || amount <= 0) return reply(`⚠️ Usage: send <@user> <amount>`);
-    if (targetUser === senderId) return reply('🧠 You cannot send money to yourself!');
+    if (!targetUser || !amount || amount <= 0) return reply(`⚠️ *Please provide a valid user and amount.*\n\n*Example:* send @user 1000`);
+    if (targetUser === senderId) return reply('🧠 *You cannot send money to yourself!*');
     
     const fee = Math.max(Math.floor(amount * 0.01), 5);
     const totalCost = amount + fee;
     const senderData = await getUserData(senderId);
 
-    if (senderData.balance < totalCost) return reply(`🚫 Insufficient balance. You need ${ecoSettings.currency}${totalCost.toLocaleString()}.`);
+    if (senderData.balance < totalCost) return reply(`🚫 *Insufficient balance*\n\n💵 *Your Balance:* ${ecoSettings.currency}${senderData.balance.toLocaleString()}\n💸 *Required:* ${ecoSettings.currency}${totalCost.toLocaleString()} (includes ${ecoSettings.currency}${fee} fee)`);
     
     await removeMoney(senderId, totalCost, 'Transfer sent');
     await addMoney(targetUser, amount, 'Transfer received', false);
     
     const updatedSender = await getUserData(senderId);
-    await sock.sendMessage(from, { text: `✅ Successfully sent ${ecoSettings.currency}${amount.toLocaleString()} to @${targetUser.split('@')[0]}!\n\nYour new balance: ${ecoSettings.currency}${updatedSender.balance.toLocaleString()}`, mentions: [senderId, targetUser] }, { quoted: m });
+    const updatedTarget = await getUserData(targetUser);
+    
+    await sock.sendMessage(from, {
+      text: `✅ *TRANSFER SUCCESSFUL* ✅\n\n💸 *@${senderId.split('@')[0]}* sent *${ecoSettings.currency}${amount.toLocaleString()}* to *@${targetUser.split('@')[0]}*\n\n💰 *Amount sent:* ${ecoSettings.currency}${amount.toLocaleString()}\n💳 *Transfer fee:* ${ecoSettings.currency}${fee.toLocaleString()}\n💵 *Sender's balance:* ${ecoSettings.currency}${updatedSender.balance.toLocaleString()}\n🎯 *Receiver's balance:* ${ecoSettings.currency}${updatedTarget.balance.toLocaleString()}`,
+      mentions: [senderId, targetUser]
+    }, { quoted: m });
 }
 
 async function handleDeposit(context) {
     const { reply, senderId, args } = context;
     const amount = parseInt(args[0]);
-    if (isNaN(amount) || amount <= 0) return reply(`⚠️ Usage: deposit <amount>`);
+    if (isNaN(amount) || amount <= 0) return reply(`🏦 *Bank Deposit*\n\n⚠️ *Usage:* deposit [amount]`);
     
     const userData = await getUserData(senderId);
-    if (userData.balance < amount) return reply('🚫 Insufficient wallet balance');
-    if (userData.bank + amount > ecoSettings.maxBankBalance) return reply(`🚫 Bank is full.`);
+    if (userData.balance < amount) return reply('🚫 *Insufficient wallet balance*');
+    if (userData.bank + amount > ecoSettings.maxBankBalance) return reply(`🚫 *Bank deposit limit exceeded*`);
     
     await updateUserData(senderId, { balance: userData.balance - amount, bank: userData.bank + amount });
     const updatedData = await getUserData(senderId);
-    await reply(`🏦 Deposited ${ecoSettings.currency}${amount.toLocaleString()}.\n\nNew Bank Balance: ${ecoSettings.currency}${updatedData.bank.toLocaleString()}`);
+    await reply(`🏦 *Successfully deposited ${ecoSettings.currency}${amount.toLocaleString()} to your bank*\n\n💵 *Wallet:* ${ecoSettings.currency}${updatedData.balance.toLocaleString()}\n🏦 *Bank:* ${ecoSettings.currency}${updatedData.bank.toLocaleString()}`);
 }
 
 async function handleWithdraw(context) {
     const { reply, senderId, args } = context;
     const amount = parseInt(args[0]);
-    if (isNaN(amount) || amount <= 0) return reply(`⚠️ Usage: withdraw <amount>`);
+    if (isNaN(amount) || amount <= 0) return reply(`🏦 *Bank Withdrawal*\n\n⚠️ *Usage:* withdraw [amount]`);
     
     const userData = await getUserData(senderId);
-    if (userData.bank < amount) return reply('🚫 Insufficient bank balance');
-    if (userData.balance + amount > ecoSettings.maxWalletBalance) return reply(`🚫 Wallet is full.`);
+    if (userData.bank < amount) return reply('🚫 *Insufficient bank balance*');
+    if (userData.balance + amount > ecoSettings.maxWalletBalance) return reply(`🚫 *Wallet limit exceeded*`);
 
     await updateUserData(senderId, { balance: userData.balance + amount, bank: userData.bank - amount });
     const updatedData = await getUserData(senderId);
-    await reply(`💵 Withdrew ${ecoSettings.currency}${amount.toLocaleString()}.\n\nNew Wallet Balance: ${ecoSettings.currency}${updatedData.balance.toLocaleString()}`);
+    await reply(`💵 *Successfully withdrew ${ecoSettings.currency}${amount.toLocaleString()} from your bank*\n\n💵 *Wallet:* ${ecoSettings.currency}${updatedData.balance.toLocaleString()}\n🏦 *Bank:* ${ecoSettings.currency}${updatedData.bank.toLocaleString()}`);
 }
 
 async function handleWork(context) {
@@ -538,25 +585,24 @@ async function handleWork(context) {
     const cooldownMs = ecoSettings.workCooldownMinutes * 60 * 1000;
     if (userData.lastWork && now - new Date(userData.lastWork) < cooldownMs) {
       const remaining = Math.ceil((cooldownMs - (now - new Date(userData.lastWork))) / 60000);
-      return reply(`⏱️ You're tired! Rest for ${remaining} more minutes.`);
+      return reply(`⏱️ *You're tired! Rest for ${remaining} minutes before working again.*`);
     }
     
     const job = ecoSettings.workJobs[Math.floor(Math.random() * ecoSettings.workJobs.length)];
     const earnings = Math.floor(Math.random() * (job.max - job.min + 1)) + job.min;
     
-    await addMoney(senderId, earnings, 'Work');
+    const finalEarnings = await addMoney(senderId, earnings, 'Work'); // addMoney returns the new balance now
     await updateUserData(senderId, { lastWork: now, [`stats.workCount`]: (userData.stats.workCount || 0) + 1 });
     await checkAchievements(senderId, 'work');
 
-    const updatedData = await getUserData(senderId);
-    await reply(`💼 You worked as a ${job.name} and earned ${ecoSettings.currency}${earnings.toLocaleString()}!\n\nNew balance: ${ecoSettings.currency}${updatedData.balance.toLocaleString()}`);
+    await reply(`💼 *WORK COMPLETE!* 💼\n\n🔨 *Job:* ${job.name}\n💰 *Earned:* ${ecoSettings.currency}${(finalEarnings - userData.balance).toLocaleString()}\n💵 *New Balance:* ${ecoSettings.currency}${finalEarnings.toLocaleString()}\n\n⏱️ *Next work available in ${ecoSettings.workCooldownMinutes} minutes*`);
 }
 
 async function handleRob(context) {
     const { reply, senderId, sock, m, from, args } = context;
     const targetUser = getTargetUser(m, args.join(' '));
-    if (!targetUser) return reply(`🦹 Who do you want to rob? Mention or reply to a user.`);
-    if (targetUser === senderId) return reply('🧠 You cannot rob yourself!');
+    if (!targetUser) return reply(`🦹 *Who do you want to rob?*\n\nReply to someone's message or mention them to specify a target.`);
+    if (targetUser === senderId) return reply('🧠 *You cannot rob yourself!*');
     
     const now = new Date();
     const robberData = await getUserData(senderId);
@@ -564,13 +610,13 @@ async function handleRob(context) {
     const cooldownMs = ecoSettings.robCooldownMinutes * 60 * 1000;
     if (robberData.lastRob && now - new Date(robberData.lastRob) < cooldownMs) {
       const remaining = Math.ceil((cooldownMs - (now - new Date(robberData.lastRob))) / 60000);
-      return reply(`⏱️ You need to lay low for ${remaining} more minutes.`);
+      return reply(`⏱️ *You're on cooldown. Try again in ${remaining} minutes.*`);
     }
 
     const targetData = await getUserData(targetUser);
-    if (targetData.activeEffects?.robProtection > Date.now()) return reply(`🛡️ @${targetUser.split('@')[0]} is protected by a bodyguard!`);
-    if (targetData.balance < ecoSettings.robMinTargetBalance) return reply(`👀 Target is too broke.`);
-    if (robberData.balance < ecoSettings.robMinRobberBalance) return reply(`💸 You need at least ${ecoSettings.currency}${ecoSettings.robMinRobberBalance} for bail money.`);
+    if (targetData.activeEffects?.robProtection > Date.now()) return reply(`🛡️ *@${targetUser.split('@')[0]} is protected by a bodyguard!*`);
+    if (targetData.balance < ecoSettings.robMinTargetBalance) return reply(`👀 *Target is too broke to rob.*`);
+    if (robberData.balance < ecoSettings.robMinRobberBalance) return reply(`💸 *Your balance is too low to attempt a robbery.* You need at least ${ecoSettings.currency}${ecoSettings.robMinRobberBalance} for bail money.`);
     
     await updateUserData(senderId, { lastRob: now, [`stats.robsAttempted`]: (robberData.stats.robsAttempted || 0) + 1 });
     
@@ -581,10 +627,12 @@ async function handleRob(context) {
       await addMoney(senderId, stolen, 'Robbery');
       await updateUserData(senderId, { [`stats.robsSuccessful`]: (robberData.stats.robsSuccessful || 0) + 1 });
       await checkAchievements(senderId, 'rob', { successful: true, successfulCount: (robberData.stats.robsSuccessful || 0) + 1 });
-      await sock.sendMessage(from, { text: `🦹‍♂️ SUCCESS! @${senderId.split('@')[0]} robbed ${ecoSettings.currency}${stolen.toLocaleString()} from @${targetUser.split('@')[0]}!`, mentions: [senderId, targetUser] }, { quoted: m });
+      const updatedRobber = await getUserData(senderId);
+      await sock.sendMessage(from, { text: `🦹‍♂️ *ROBBERY SUCCESS!* 🦹‍♂️\n\n💰 *@${senderId.split('@')[0]}* successfully robbed *${ecoSettings.currency}${stolen.toLocaleString()}* from *@${targetUser.split('@')[0]}*\n\n🤑 *Robber's new balance:* ${ecoSettings.currency}${updatedRobber.balance.toLocaleString()}`, mentions: [senderId, targetUser] }, { quoted: m });
     } else {
       await removeMoney(senderId, ecoSettings.robFailPenalty, 'Robbery failed');
-      await sock.sendMessage(from, { text: `🚨 FAILED! @${senderId.split('@')[0]} was caught and paid a fine of ${ecoSettings.currency}${ecoSettings.robFailPenalty.toLocaleString()}!`, mentions: [senderId, targetUser] }, { quoted: m });
+      const updatedRobber = await getUserData(senderId);
+      await sock.sendMessage(from, { text: `🚨 *ROBBERY FAILED!* 🚨\n\n❌ *@${senderId.split('@')[0]}* got caught and paid a fine of *${ecoSettings.currency}${ecoSettings.robFailPenalty.toLocaleString()}*!\n\n😔 *Your new balance:* ${ecoSettings.currency}${updatedRobber.balance.toLocaleString()}`, mentions: [senderId] }, { quoted: m });
     }
 }
 
@@ -593,38 +641,43 @@ async function handleDaily(context) {
     const currentDate = getCurrentDate();
     const userData = await getUserData(senderId);
 
-    if (userData.lastDaily === currentDate) return reply('⏰ You have already claimed your daily reward today!');
+    if (userData.lastDaily === currentDate) return reply('⏰ *You have already claimed your daily reward today! Come back tomorrow.*');
     
     const yesterday = getNigeriaTime().subtract(1, 'day').format('DD-MM-YYYY');
     const newStreak = userData.lastDaily === yesterday ? (userData.stats.dailyStreak || 0) + 1 : 1;
     
-    let dailyAmount = Math.floor(Math.random() * (ecoSettings.dailyMaxAmount - ecoSettings.dailyMinAmount + 1)) + ecoSettings.dailyMinAmount;
-    dailyAmount += newStreak * ecoSettings.dailyStreakBonus;
+    let baseAmount = Math.floor(Math.random() * (ecoSettings.dailyMaxAmount - ecoSettings.dailyMinAmount + 1)) + ecoSettings.dailyMinAmount;
+    let streakBonus = newStreak * ecoSettings.dailyStreakBonus;
+    let totalAmount = baseAmount + streakBonus;
     
-    await addMoney(senderId, dailyAmount, 'Daily reward');
+    const newBalance = await addMoney(senderId, totalAmount, 'Daily reward');
     await updateUserData(senderId, { lastDaily: currentDate, [`stats.dailyStreak`]: newStreak, [`stats.maxDailyStreak`]: Math.max(userData.stats.maxDailyStreak || 0, newStreak) });
-    await checkAchievements(senderId, 'daily', { streak: newStreak });
+    const achievements = await checkAchievements(senderId, 'daily', { streak: newStreak });
     
-    await reply(`🎁 You claimed your daily reward of ${ecoSettings.currency}${dailyAmount.toLocaleString()}!\n🔥 Current Streak: ${newStreak} days.`);
+    let rewardText = `🎁 *DAILY REWARD CLAIMED!* 🎁\n\n💰 *Base Reward:* ${ecoSettings.currency}${baseAmount.toLocaleString()}\n🔥 *Streak Bonus:* ${ecoSettings.currency}${streakBonus.toLocaleString()}\n💎 *Total Received:* ${ecoSettings.currency}${totalAmount.toLocaleString()}\n💵 *New Balance:* ${ecoSettings.currency}${newBalance.toLocaleString()}\n\n🔥 *Current Streak:* ${newStreak} days`;
+    if (achievements.length > 0) rewardText += `\n\n🏆 *Achievement Unlocked:* ${achievements.map(a => ACHIEVEMENTS[a]?.name || a).join(', ')}`;
+    await reply(rewardText);
 }
 
 async function handleProfile(context) {
-    // This function remains the same, simplified for brevity
-    const { reply, senderId, sock, m, from, args } = context;
+    const { senderId, sock, m, from, args } = context;
     const targetUser = getTargetUser(m, args.join(' ')) || senderId;
     const profileData = await getUserData(targetUser);
     const totalWealth = profileData.balance + profileData.bank;
     const crownEmoji = profileData.activeEffects?.crown ? '👑 ' : '';
     let profileText = `👤 *PROFILE for ${crownEmoji}@${targetUser.split('@')[0]}*\n\n` +
-        `💎 *Wealth:* ${ecoSettings.currency}${totalWealth.toLocaleString()}\n` +
+        `💎 *Total Wealth:* ${ecoSettings.currency}${totalWealth.toLocaleString()}\n` +
         `💵 *Wallet:* ${ecoSettings.currency}${profileData.balance.toLocaleString()}\n` +
         `🏦 *Bank:* ${ecoSettings.currency}${profileData.bank.toLocaleString()}\n\n` +
-        `📊 *STATS*\n` +
-        `💼 Jobs: ${profileData.stats.workCount || 0}\n` +
-        `🔥 Streak: ${profileData.stats.dailyStreak || 0} (Best: ${profileData.stats.maxDailyStreak || 0})\n` +
-        `🦹 Robs: ${profileData.stats.robsSuccessful || 0}/${profileData.stats.robsAttempted || 0}\n\n` +
-        `🏆 *ACHIEVEMENTS* (${profileData.achievements.length})\n` +
-        profileData.achievements.slice(-5).map(id => ACHIEVEMENTS[id] ? `${ACHIEVEMENTS[id].emoji} ${ACHIEVEMENTS[id].name}` : '').join('\n');
+        `📊 *STATISTICS*\n` +
+        `💼 *Jobs Completed:* ${profileData.stats.workCount || 0}\n` +
+        `🔥 *Daily Streak:* ${profileData.stats.dailyStreak || 0} (Best: ${profileData.stats.maxDailyStreak || 0})\n` +
+        `🦹 *Robberies:* ${profileData.stats.robsSuccessful || 0}/${profileData.stats.robsAttempted || 0}\n\n`;
+    
+    if (profileData.achievements && profileData.achievements.length > 0) {
+      profileText += `🏆 *ACHIEVEMENTS* (${profileData.achievements.length})\n` +
+      profileData.achievements.slice(-5).map(id => ACHIEVEMENTS[id] ? `${ACHIEVEMENTS[id].emoji} ${ACHIEVEMENTS[id].name}` : '').join('\n');
+    }
     await sock.sendMessage(from, { text: profileText, mentions: [targetUser] }, { quoted: m });
 }
 
@@ -645,7 +698,7 @@ async function handleLeaderboard(context) {
         { $limit: 10 }
     ]).toArray();
 
-    if (users.length === 0) return reply('📊 No data for this leaderboard yet.');
+    if (users.length === 0) return reply('📊 *No data available for this leaderboard yet.*');
     
     let leaderboard = `${emoji} *${title}* ${emoji}\n\n`;
     users.forEach((user, index) => {
@@ -666,11 +719,11 @@ async function handleAchievements(context) {
     if (args[0] === 'all') {
         let allAchText = '🏆 *ALL ACHIEVEMENTS* 🏆\n\n';
         for (const [id, ach] of Object.entries(ACHIEVEMENTS)) {
-            allAchText += `${userAchievements.includes(id) ? '✅' : '⬜'} ${ach.emoji} *${ach.name}* - ${ach.description}\n`;
+            allAchText += `${userAchievements.includes(id) ? '✅' : '⬜'} ${ach.emoji} *${ach.name}*\n   📝 ${ach.description}\n   💰 Reward: ${ecoSettings.currency}${ach.reward.toLocaleString()}\n\n`;
         }
         await reply(allAchText);
     } else {
-        if (userAchievements.length === 0) return reply(`📭 You have no achievements yet.`);
+        if (userAchievements.length === 0) return reply(`📭 *You have no achievements yet!*\n\n💡 Use \`achievements all\` to see what's available.`);
         let userAchText = `🏆 *YOUR ACHIEVEMENTS* (${userAchievements.length}/${Object.keys(ACHIEVEMENTS).length}) 🏆\n\n`;
         userAchievements.forEach(id => {
             const ach = ACHIEVEMENTS[id];
@@ -682,17 +735,17 @@ async function handleAchievements(context) {
 
 async function handleShop(context) {
     const { reply, senderId, args, config } = context;
-    if (!ecoSettings.shopEnabled) return reply('🚫 Shop is closed.');
+    if (!ecoSettings.shopEnabled) return reply('🚫 *Shop is currently closed.*');
 
     const action = args[0]?.toLowerCase();
     if (action === 'buy') {
         const itemId = getItemId(args[1]);
         const item = SHOP_ITEMS[itemId];
-        if (!item) return reply('❌ Item not found.');
+        if (!item) return reply('❌ *Item not found in the shop.*');
         
         const userData = await getUserData(senderId);
-        if (userData.balance < item.price) return reply(`🚫 Insufficient funds. You need ${ecoSettings.currency}${item.price.toLocaleString()}`);
-        if (item.type === 'permanent' && userData.activeEffects?.[item.effect]) return reply('⚠️ You already own this permanent upgrade.');
+        if (userData.balance < item.price) return reply(`🚫 *Insufficient funds.* You need ${ecoSettings.currency}${item.price.toLocaleString()}`);
+        if (item.type === 'permanent' && userData.activeEffects?.[item.effect]) return reply('⚠️ *You already own this permanent upgrade.*');
 
         await removeMoney(senderId, item.price, `Shop purchase: ${item.name}`);
         const existingItem = userData.inventory.find(inv => inv.id === itemId);
@@ -700,13 +753,13 @@ async function handleShop(context) {
         else userData.inventory.push({ id: itemId, name: item.name, quantity: 1, uses: item.uses || null });
         
         await updateUserData(senderId, { inventory: userData.inventory });
-        await reply(`✅ Purchased ${item.emoji} *${item.name}* for ${ecoSettings.currency}${item.price.toLocaleString()}!`);
+        await reply(`✅ *Purchase Successful!*\n\n${item.emoji} *${item.name}*\n💰 *Price:* ${ecoSettings.currency}${item.price.toLocaleString()}\n📝 *Description:* ${item.description}\n\n💡 *Use with:* ${config.PREFIX}use ${itemId}`);
     } else {
         let shopText = '🛍️ *ECONOMY SHOP* 🛍️\n\n';
         for (const [id, item] of Object.entries(SHOP_ITEMS)) {
-            shopText += `${item.emoji} *${item.name}* - ${ecoSettings.currency}${item.price.toLocaleString()}\n   📝 ${item.description} (ID: \`${id}\`)\n\n`;
+            shopText += `${item.emoji} *${item.name}* - ${ecoSettings.currency}${item.price.toLocaleString()}\n   📝 ${item.description}\n   🛒 ID: \`${id}\`\n\n`;
         }
-        shopText += `💡 Buy with: ${config.PREFIX}shop buy <item_id>`;
+        shopText += `💡 *Buy with:* ${config.PREFIX}shop buy [item_id]`;
         await reply(shopText);
     }
 }
@@ -714,7 +767,7 @@ async function handleShop(context) {
 async function handleInventory(context) {
     const { reply, senderId, config } = context;
     const userData = await getUserData(senderId);
-    if (!userData.inventory || userData.inventory.length === 0) return reply('📦 Your inventory is empty.');
+    if (!userData.inventory || userData.inventory.length === 0) return reply('📦 *Your inventory is empty*\n\n🛍️ Visit the shop to buy items!');
     
     let invText = '📦 *YOUR INVENTORY* 📦\n\n';
     userData.inventory.forEach(item => {
@@ -727,15 +780,19 @@ async function handleInventory(context) {
 async function handleUse(context) {
     const { reply, senderId, args } = context;
     const itemId = getItemId(args[0]);
-    if (!itemId) return reply(`💊 Usage: use <item_id>`);
+    if (!itemId) return reply(`💊 *Use Item Command:*\n${context.config.PREFIX}use [item_id]`);
     
     const result = await useItem(senderId, itemId);
-    await reply(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+    if (result.success) {
+      await reply(`✅ *${result.message}*\n\n📝 *Effect:* ${result.effect}`);
+    } else {
+      await reply(`❌ *${result.message}*`);
+    }
 }
 
 async function handleAdminSettings(context) {
-    const { reply, senderId, args, m } = context;
-    if (!isAdmin(senderId) && !isOwner(senderId)) return reply('🚫 Admins only.');
+    const { reply, senderId, args, m, config } = context;
+    if (!isAdmin(senderId) && !isOwner(senderId)) return reply('🚫 *Only admins can access these settings*');
 
     const action = args[0]?.toLowerCase();
     const targetUser = getTargetUser(m, args.join(' '));
@@ -745,28 +802,29 @@ async function handleAdminSettings(context) {
         case 'give':
             if (!targetUser || !amount) return reply("Usage: ...admin give <@user> <amount>");
             await addMoney(targetUser, amount, 'Admin grant');
-            await reply(`✅ Gave ${ecoSettings.currency}${amount.toLocaleString()} to @${targetUser.split('@')[0]}.`);
+            await reply(`✅ *Gave ${ecoSettings.currency}${amount.toLocaleString()} to @${targetUser.split('@')[0]}.*`);
             break;
         case 'take':
             if (!targetUser || !amount) return reply("Usage: ...admin take <@user> <amount>");
             await removeMoney(targetUser, amount, 'Admin removal');
-            await reply(`✅ Took ${ecoSettings.currency}${amount.toLocaleString()} from @${targetUser.split('@')[0]}.`);
+            await reply(`✅ *Took ${ecoSettings.currency}${amount.toLocaleString()} from @${targetUser.split('@')[0]}.*`);
             break;
         case 'reset':
             if (!targetUser) return reply("Usage: ...admin reset <@user>");
             await db.collection(COLLECTIONS.USERS).deleteOne({ userId: targetUser });
             await initUser(targetUser);
-            await reply(`🔄 Successfully reset @${targetUser.split('@')[0]}.`);
+            await reply(`🔄 *Successfully reset @${targetUser.split('@')[0]}.*`);
             break;
         default:
-            await reply(`⚙️ *Admin Commands:*\n• give <@user> <amount>\n• take <@user> <amount>\n• reset <@user>`);
+            await reply(`⚙️ *Admin Commands:*\n• ${config.PREFIX}eco admin give <@user> <amount>\n• ${config.PREFIX}eco admin take <@user> <amount>\n• ${config.PREFIX}eco admin reset <@user>`);
     }
 }
 
 // --- Investment Command Consolidation ---
 async function handleInvestment(context, args, type) {
-    const { reply, senderId } = context;
-    if (!ecoSettings.investmentsEnabled) return reply('🚫 Investments are disabled.');
+    const { reply, senderId, config } = context;
+    if (!ecoSettings.investmentsEnabled) return reply('🚫 *Investments are disabled.*');
+
 
     const configs = {
         stocks: { name: 'Stock', plural: 'Stocks', unit: 'share', data: stockData, path: 'investments.stocks', emoji: '📈' },
@@ -788,51 +846,51 @@ async function handleInvestment(context, args, type) {
             return reply(listText);
         }
         case 'buy': {
-            const id = args[1]?.toLowerCase();
+            const id = (type === 'business') ? args[1]?.toLowerCase() : args[1]?.toUpperCase();
             const amount = config.isOwnable ? 1 : parseFloat(args[2]);
             const item = config.data[id];
 
-            if (!item || !amount || amount <= 0) return reply(`⚠️ Usage: ${type} buy <id> ${config.isOwnable ? '' : '<amount>'}`);
+            if (!item || !amount || amount <= 0) return reply(`⚠️ *Usage:* ${type} buy <id> ${config.isOwnable ? '' : '<amount>'}`);
             
             const userData = await getUserData(senderId);
             const cost = item.price * amount;
 
-            if (userData.balance < cost) return reply(`🚫 Insufficient funds. You need ${ecoSettings.currency}${cost.toLocaleString()}.`);
+            if (userData.balance < cost) return reply(`🚫 *Insufficient funds.* You need ${ecoSettings.currency}${cost.toLocaleString()}.`);
             
             if (config.isOwnable) {
-                if (userData[config.path].some(b => b.id === id)) return reply(`⚠️ You already own this ${config.name}.`);
+                if (userData.investments.businesses.some(b => b.id === id)) return reply(`⚠️ *You already own this ${config.name}.*`);
                 const newBusiness = { id, name: item.name, price: item.price, roi: item.roi, purchaseDate: new Date(), lastCollected: new Date() };
-                await updateUserData(senderId, { $push: { [config.path]: newBusiness } });
-                await checkAchievements(senderId, 'business', { businessCount: userData[config.path].length + 1 });
+                await updateUserData(senderId, { $push: { 'investments.businesses': newBusiness } });
+                await checkAchievements(senderId, 'business', { businessCount: userData.investments.businesses.length + 1 });
             } else {
                 const currentAmount = userData[config.path]?.[id] || 0;
                 await updateUserData(senderId, { [`${config.path}.${id}`]: currentAmount + amount });
             }
 
             await removeMoney(senderId, cost, `${config.name} purchase`);
-            return reply(`✅ Purchased ${amount} ${config.unit}(s) of *${item.name}* for ${ecoSettings.currency}${cost.toLocaleString()}.`);
+            return reply(`✅ *${config.name} Purchase Successful!*\n\n📦 *Asset:* ${item.name}\n💸 *Total cost:* ${ecoSettings.currency}${cost.toLocaleString()}`);
         }
         case 'sell': {
-            if (config.isOwnable) return reply(`🚫 ${config.plural} cannot be sold.`);
+            if (config.isOwnable) return reply(`🚫 *${config.plural} cannot be sold, only collected from.*`);
             const id = args[1]?.toUpperCase();
             const amount = parseFloat(args[2]);
             const item = config.data[id];
             const userData = await getUserData(senderId);
             const userAmount = userData[config.path]?.[id] || 0;
 
-            if (!item || !amount || amount <= 0) return reply(`⚠️ Usage: ${type} sell <id> <amount>`);
-            if (userAmount < amount) return reply(`🚫 You only have ${userAmount} ${config.unit}s of ${id}.`);
+            if (!item || !amount || amount <= 0) return reply(`⚠️ *Usage:* ${type} sell <id> <amount>`);
+            if (userAmount < amount) return reply(`🚫 *Insufficient holdings.* You only have ${userAmount} ${config.unit}s of ${id}.`);
             
             const earnings = item.price * amount;
             await addMoney(senderId, earnings, `${config.name} sale`, false);
             await updateUserData(senderId, { [`${config.path}.${id}`]: userAmount - amount });
-            return reply(`✅ Sold ${amount} ${config.unit}(s) of *${item.name}* for ${ecoSettings.currency}${earnings.toLocaleString()}.`);
+            return reply(`✅ *${config.name} Sale Successful!*\n\n📦 *Asset:* ${item.name}\n💸 *Total earned:* ${ecoSettings.currency}${earnings.toLocaleString()}.`);
         }
         case 'collect': {
-            if (!config.isOwnable) return reply(`🚫 You can only collect from businesses.`);
+            if (!config.isOwnable) return reply(`🚫 *You can only collect profits from businesses.*`);
             const userData = await getUserData(senderId);
-            const businesses = userData[config.path] || [];
-            if (businesses.length === 0) return reply(`🏢 You don't own any businesses.`);
+            const businesses = userData.investments.businesses || [];
+            if (businesses.length === 0) return reply(`🏢 *You don't own any businesses to collect from.*`);
 
             let totalProfit = 0;
             const now = new Date();
@@ -847,16 +905,16 @@ async function handleInvestment(context, args, type) {
                 }
             });
 
-            if (totalProfit === 0) return reply(`⏰ No profits to collect yet.`);
+            if (totalProfit === 0) return reply(`⏰ *No profits to collect yet. Check back later!*`);
             
             await addMoney(senderId, totalProfit, 'Business profits', false);
-            await updateUserData(senderId, { [config.path]: businesses });
-            return reply(`🏢 Collected ${ecoSettings.currency}${Math.floor(totalProfit).toLocaleString()} from your businesses!`);
+            await updateUserData(senderId, { 'investments.businesses': businesses });
+            return reply(`🏢 *Business Profits Collected!* 🏢\n\n💰 *Total Profit:* ${ecoSettings.currency}${Math.floor(totalProfit).toLocaleString()}\n🏪 *From:* ${businesses.length} businesses`);
         }
         case 'portfolio': {
             const userData = await getUserData(senderId);
             const holdings = userData[config.path];
-            if (!holdings || Object.keys(holdings).length === 0) return reply(`📊 You don't own any ${config.plural}.`);
+            if (!holdings || (Array.isArray(holdings) ? holdings.length === 0 : Object.keys(holdings).length === 0)) return reply(`📊 *You don't own any ${config.plural} yet.*`);
 
             let portfolioText = `📊 *YOUR ${config.plural.toUpperCase()} PORTFOLIO* 📊\n\n`;
             let totalValue = 0;
@@ -864,7 +922,7 @@ async function handleInvestment(context, args, type) {
             if (config.isOwnable) {
                 holdings.forEach(item => {
                     totalValue += item.price;
-                    portfolioText += `*${item.name}*\n   💰 Value: ${ecoSettings.currency}${item.price.toLocaleString()}\n\n`;
+                    portfolioText += `*${item.name}*\n   💰 Value: ${ecoSettings.currency}${item.price.toLocaleString()}\n   📈 Daily Profit: ${ecoSettings.currency}${(item.price * (config.data[item.id]?.roi || item.roi)).toLocaleString()}\n\n`;
                 });
             } else {
                 for (const [id, amount] of Object.entries(holdings)) {
@@ -875,11 +933,11 @@ async function handleInvestment(context, args, type) {
                     }
                 }
             }
-            portfolioText += `💎 *Total Value:* ${ecoSettings.currency}${totalValue.toLocaleString()}`;
+            portfolioText += `💎 *Total Portfolio Value:* ${ecoSettings.currency}${totalValue.toLocaleString()}`;
             return reply(portfolioText);
         }
         default:
-            return reply(`❓ Unknown command. Try: list, buy, sell, collect, or portfolio.`);
+            return reply(`❓ *Unknown command.* Try: list, buy, sell, ${config.isOwnable ? 'collect, ' : ''}or portfolio.`);
     }
 }
 
@@ -891,9 +949,9 @@ const commandHandlers = {
     'deposit': handleDeposit, 'dep': handleDeposit,
     'withdraw': handleWithdraw, 'wd': handleWithdraw,
     'work': handleWork, 'rob': handleRob, 'daily': handleDaily,
-    'stocks': (context, args) => handleInvestment(context, args, 'stocks'),
-    'crypto': (context, args) => handleInvestment(context, args, 'crypto'),
-    'business': (context, args) => handleInvestment(context, args, 'business'),
+    'stocks': (context) => handleInvestment(context, context.args, 'stocks'),
+    'crypto': (context) => handleInvestment(context, context.args, 'crypto'),
+    'business': (context) => handleInvestment(context, context.args, 'business'),
     'profile': handleProfile,
     'leaderboard': handleLeaderboard, 'lb': handleLeaderboard,
     'achievements': handleAchievements, 'ach': handleAchievements,
@@ -961,3 +1019,4 @@ export {
   checkAchievements,
   cleanupExpiredEffects
 };
+
