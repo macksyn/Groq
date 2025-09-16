@@ -289,7 +289,7 @@ const SHOP_ITEMS = {
   },
   robProtection: {
     name: "Bodyguard",
-    price: 8000,
+    price: 50000,
     description: "Hire a bodyguard to prevent robberies for 48 hours",
     type: "consumable", 
     effect: "robProtection",
