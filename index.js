@@ -495,28 +495,12 @@ function setupConnectionHandler(socket, saveCreds) {
         lastSuccessfulConnection = Date.now();
         isConnecting = false;
 
-        // --- START: Added for Debugging ---
-        console.log(chalk.magenta(`[DEBUG] Connection opened. isNewLogin: ${isNewLogin}, OWNER_NUMBER: ${config.OWNER_NUMBER}`));
-        // --- END: Added for Debugging ---
-
-        // FIXED: Initialize plugins after successful connection
+        // Initialize plugins after successful connection
         await initializePluginManager();
-        
-        // --- START: Added for Debugging ---
-        console.log(chalk.blue('[DEBUG] Setting up "chats.set" event listener...'));
-        // --- END: Added for Debugging ---
 
-        const chatsSetHandler = async () => {
-            // --- START: Added for Debugging ---
-            console.log(chalk.green('[DEBUG] "chats.set" event fired. Bot is now ready to send messages.'));
-            // --- END: Added for Debugging ---
-            
-            socket.ev.off('chats.set', chatsSetHandler);
-
+        // Send startup notification after a brief, stable delay
+        setTimeout(async () => {
             if (isNewLogin || config.OWNER_NUMBER) {
-                // --- START: Added for Debugging ---
-                console.log(chalk.blue('[DEBUG] Condition to send startup message is TRUE. Attempting to send...'));
-                // --- END: Added for Debugging ---
                 try {
                     const pluginStats = getPluginStats();
                     const mongoHealth = mongoInitialized ? await mongoHealthCheck() : { healthy: false };
@@ -529,7 +513,7 @@ function setupConnectionHandler(socket, saveCreds) {
 ⏰ *Time:* ${moment().tz(config.TIMEZONE).format('DD/MM/YYYY HH:mm:ss')}
 
 🔌 *Plugins:* ${pluginStats.enabled}/${pluginStats.total} loaded
-- *Database:* ${mongoHealth.healthy ? '✅ Connected' : '❌ Offline'}
+🗄️ *Database:* ${mongoHealth.healthy ? '✅ Connected' : '❌ Offline'}
 
 🎮 *Active Features:*
 ${config.AUTO_READ ? '✅' : '❌'} Auto Read
@@ -542,31 +526,19 @@ ${config.REJECT_CALL ? '✅' : '❌'} Call Rejection
 💡 Type *${config.PREFIX}menu* to see available commands.`;
 
                     const targetJid = config.OWNER_NUMBER + '@s.whatsapp.net';
-
-                    // --- START: Added for Debugging ---
-                    console.log(chalk.cyan(`[DEBUG] Sending startup message to: ${targetJid}`));
-                    // --- END: Added for Debugging ---
-
                     await sendMessageSafely(socket, targetJid, { text: startupMsg });
                     console.log(chalk.green('📤 Startup notification sent to owner'));
 
                 } catch (error) {
-                    // --- START: Added for Debugging ---
-                    console.error(chalk.red('[DEBUG] An error occurred while sending the startup message:'), error);
-                    // --- END: Added for Debugging ---
                     console.log(chalk.yellow('⚠️ Could not send startup notification:'), error.message);
                 }
-            } else {
-                // --- START: Added for Debugging ---
-                console.log(chalk.yellow('[DEBUG] Condition to send startup message was FALSE. Skipping.'));
-                // --- END: Added for Debugging ---
             }
 
+            // Update bio after attempting to send notification
             updateBio(socket);
-        };
-        
-        socket.ev.on('chats.set', chatsSetHandler);
+        }, 3000); // 3-second delay to ensure stability
 
+        // Start bio update interval
         if (config.AUTO_BIO) {
           setInterval(() => updateBio(socket), 20 * 60 * 1000); // Every 20 minutes
         }
@@ -1250,15 +1222,9 @@ process.on('uncaughtException', (err) => {
   console.error(chalk.red('💥 Uncaught Exception:'), err.message);
   console.error('Stack:', err.stack);
   
-  if (config.NODE_ENV === 'production') {
-    console.log(chalk.yellow('⚠️ Attempting graceful recovery...'));
-    setTimeout(() => {
-      if (!shutdownInProgress) {
-        console.log(chalk.blue('🔄 Restarting application...'));
-        process.exit(1);
-      }
-    }, 5000);
-  } else {
+  // CRITICAL FIX: In production, do NOT exit. Let the container orchestrator handle the restart.
+  // This prevents a race condition where two processes start simultaneously.
+  if (config.NODE_ENV !== 'production') {
     process.exit(1);
   }
 });
@@ -1621,6 +1587,8 @@ export {
   startEnhancedHealthMonitoring,
   config
 };
+
+
 
 
 
