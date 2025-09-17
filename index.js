@@ -495,20 +495,28 @@ function setupConnectionHandler(socket, saveCreds) {
         lastSuccessfulConnection = Date.now();
         isConnecting = false;
 
+        // --- START: Added for Debugging ---
+        console.log(chalk.magenta(`[DEBUG] Connection opened. isNewLogin: ${isNewLogin}, OWNER_NUMBER: ${config.OWNER_NUMBER}`));
+        // --- END: Added for Debugging ---
+
         // FIXED: Initialize plugins after successful connection
         await initializePluginManager();
+        
+        // --- START: Added for Debugging ---
+        console.log(chalk.blue('[DEBUG] Setting up "chats.set" event listener...'));
+        // --- END: Added for Debugging ---
 
-        // *** FINAL FIX: Correctly handle the "once" event logic ***
-        // The Baileys event emitter uses .on() and .off(), not .once().
-        // We will create a handler that removes itself after running.
         const chatsSetHandler = async () => {
-            console.log(chalk.blue('✅ Chats synced. Bot is fully ready.'));
+            // --- START: Added for Debugging ---
+            console.log(chalk.green('[DEBUG] "chats.set" event fired. Bot is now ready to send messages.'));
+            // --- END: Added for Debugging ---
             
-            // Unregister this listener immediately so it only runs once per connection
             socket.ev.off('chats.set', chatsSetHandler);
 
-            // FIXED: Send startup notification with database status
             if (isNewLogin || config.OWNER_NUMBER) {
+                // --- START: Added for Debugging ---
+                console.log(chalk.blue('[DEBUG] Condition to send startup message is TRUE. Attempting to send...'));
+                // --- END: Added for Debugging ---
                 try {
                     const pluginStats = getPluginStats();
                     const mongoHealth = mongoInitialized ? await mongoHealthCheck() : { healthy: false };
@@ -534,22 +542,31 @@ ${config.REJECT_CALL ? '✅' : '❌'} Call Rejection
 💡 Type *${config.PREFIX}menu* to see available commands.`;
 
                     const targetJid = config.OWNER_NUMBER + '@s.whatsapp.net';
+
+                    // --- START: Added for Debugging ---
+                    console.log(chalk.cyan(`[DEBUG] Sending startup message to: ${targetJid}`));
+                    // --- END: Added for Debugging ---
+
                     await sendMessageSafely(socket, targetJid, { text: startupMsg });
                     console.log(chalk.green('📤 Startup notification sent to owner'));
 
                 } catch (error) {
+                    // --- START: Added for Debugging ---
+                    console.error(chalk.red('[DEBUG] An error occurred while sending the startup message:'), error);
+                    // --- END: Added for Debugging ---
                     console.log(chalk.yellow('⚠️ Could not send startup notification:'), error.message);
                 }
+            } else {
+                // --- START: Added for Debugging ---
+                console.log(chalk.yellow('[DEBUG] Condition to send startup message was FALSE. Skipping.'));
+                // --- END: Added for Debugging ---
             }
 
-            // FIXED: Update bio after connection and notification
             updateBio(socket);
         };
         
-        // Register the listener
         socket.ev.on('chats.set', chatsSetHandler);
 
-        // FIXED: Start bio update interval
         if (config.AUTO_BIO) {
           setInterval(() => updateBio(socket), 20 * 60 * 1000); // Every 20 minutes
         }
@@ -1604,5 +1621,6 @@ export {
   startEnhancedHealthMonitoring,
   config
 };
+
 
 
