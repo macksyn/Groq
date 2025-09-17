@@ -9,8 +9,8 @@ import { PluginHelpers, safeOperation, getCollection } from '../lib/pluginIntegr
 // Plugin information export (UNCHANGED)
 export const info = {
   name: 'Enhanced Economy System',
-  version: '3.2.0',
-  author: 'Bot Developer',
+  version: '3.2.1',
+  author: 'Alex Macksyn',
   description: 'A focused economy system with investments, shop, and achievements.',
   commands: [
     // Basic Economy
@@ -46,12 +46,6 @@ export const info = {
     { name: 'bounty', aliases: [], description: 'Bounty hunting system' }
   ]
 };
-
-// ❌ REMOVED: Old MongoDB Configuration and connection variables
-// const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-// const DATABASE_NAME = 'whatsapp_bot';
-// let db = null;
-// let mongoClient = null;
 
 // ✅ REFACTORED: Collection names are kept for local use
 const COLLECTIONS = {
@@ -379,16 +373,16 @@ function getItemId(inputId) {
   return itemMapping[inputId.toLowerCase()] || inputId;
 }
 
-// Cryptocurrency system (UNCHANGED)
+// MODIFIED: Cryptocurrency system with price fluctuation properties
 let cryptoData = {
-  BTC: { name: "Bitcoin", price: 45000, volatility: 0.05 },
-  ETH: { name: "Ethereum", price: 3200, volatility: 0.06 },
-  SOL: { name: "Solana", price: 120, volatility: 0.08 },
-  SHIB: { name: "Shiba Inu", price: 0.00002, volatility: 0.12 },
-  GROQ: { name: "Groq Coin", price: 15, volatility: 0.10 },
-  ADA: { name: "Cardano", price: 0.8, volatility: 0.07 },
-  DOT: { name: "Polkadot", price: 25, volatility: 0.08 },
-  MATIC: { name: "Polygon", price: 1.2, volatility: 0.09 }
+  BTC: { name: "Bitcoin", price: 45000, volatility: 0.05, trend: 0.001, history: [], lastChange: 'stable' },
+  ETH: { name: "Ethereum", price: 3200, volatility: 0.06, trend: -0.002, history: [], lastChange: 'stable' },
+  SOL: { name: "Solana", price: 120, volatility: 0.08, trend: 0.005, history: [], lastChange: 'stable' },
+  SHIB: { name: "Shiba Inu", price: 0.00002, volatility: 0.12, trend: 0.01, history: [], lastChange: 'stable' },
+  GROQ: { name: "Groq Coin", price: 15, volatility: 0.10, trend: -0.003, history: [], lastChange: 'stable' },
+  ADA: { name: "Cardano", price: 0.8, volatility: 0.07, trend: 0.002, history: [], lastChange: 'stable' },
+  DOT: { name: "Polkadot", price: 25, volatility: 0.08, trend: 0.001, history: [], lastChange: 'stable' },
+  MATIC: { name: "Polygon", price: 1.2, volatility: 0.09, trend: -0.001, history: [], lastChange: 'stable' }
 };
 
 // Business system (UNCHANGED)
@@ -403,15 +397,100 @@ let businessData = {
   barbershop: { name: "Barber Shop", price: 20000, roi: 0.11, description: "Hair cutting service income" }
 };
 
-// --- NEWS SYSTEM REMOVED ---
+// ✅ REFACTORED: Auto-update business ROI using safeOperation
+async function updateBusinessROI() {
+  try {
+    for (const [id, business] of Object.entries(businessData)) {
+      const change = (Math.random() - 0.5) * 0.02; // ±2% change
+      businessData[id].roi = Math.max(business.roi + change, 0.01); // Min 1% ROI
+    }
+    
+    await safeOperation(async (db) => {
+      await db.collection(COLLECTIONS.SETTINGS).replaceOne(
+        { type: 'business_data' },
+        { type: 'business_data', data: businessData, updatedAt: new Date() },
+        { upsert: true }
+      );
+    });
+  } catch (error) {
+    console.error('Error updating business ROI:', error);
+  }
+}
 
-// ✅ REFACTORED: Auto-update prices daily using safeOperation
+// NEW: Function to handle market trends and events
+async function updateMarketConditions() {
+  try {
+    // Update Crypto Trends
+    for (const symbol in cryptoData) {
+        if(!cryptoData[symbol].trend) cryptoData[symbol].trend = 0;
+        // Small random change to the trend
+        const trendChange = (Math.random() - 0.5) * 0.005; 
+        cryptoData[symbol].trend += trendChange;
+
+        // Clamp the trend to prevent it from running away
+        cryptoData[symbol].trend = Math.max(-0.02, Math.min(0.02, cryptoData[symbol].trend));
+    }
+
+    // Global market event (e.g., 5% chance)
+    if (Math.random() < 0.05) {
+        const marketBoom = Math.random() > 0.5;
+        const impact = (Math.random() * 0.15) + 0.1; // 10% to 25% impact
+        console.log(`MARKET EVENT: ${marketBoom ? 'BOOM' : 'CRASH'} of ${(impact * 100).toFixed(2)}%`);
+
+        for (const symbol in cryptoData) {
+            // Not all coins are affected equally
+            if (Math.random() > 0.3) { 
+                const coinImpact = impact * (marketBoom ? 1 : -1) * (1 + (Math.random() - 0.5) * 0.5);
+                cryptoData[symbol].price *= (1 + coinImpact);
+            }
+        }
+    }
+    
+    // Also update business ROI
+    await updateBusinessROI();
+  } catch(error) {
+    console.error('Error updating market conditions:', error);
+  }
+}
+
+// MODIFIED: Auto-update prices frequently for realistic fluctuation
 async function updateCryptoPrices() {
   try {
     for (const [symbol, data] of Object.entries(cryptoData)) {
-      const change = (Math.random() - 0.5) * data.volatility * 2;
-      const newPrice = Math.max(data.price * (1 + change), data.price * 0.1); // Prevent going too low
+      // Base change on volatility
+      const randomVolatility = (Math.random() - 0.5) * data.volatility;
+      
+      // Add the current trend
+      const trendEffect = data.trend || 0;
+      
+      // Calculate total change
+      const change = randomVolatility + trendEffect;
+      
+      const oldPrice = data.price;
+      let newPrice = oldPrice * (1 + change);
+      
+      // Prevent price from going to zero or negative
+      newPrice = Math.max(newPrice, 0.00000001); 
+
       cryptoData[symbol].price = parseFloat(newPrice.toFixed(symbol === 'SHIB' ? 8 : 2));
+
+      // Track history (last 20 ticks)
+      if (!cryptoData[symbol].history) {
+        cryptoData[symbol].history = [];
+      }
+      cryptoData[symbol].history.push(oldPrice); // Store the price before the change for comparison
+      if (cryptoData[symbol].history.length > 20) {
+        cryptoData[symbol].history.shift();
+      }
+
+      // Track last change direction
+      if (newPrice > oldPrice) {
+        cryptoData[symbol].lastChange = 'up';
+      } else if (newPrice < oldPrice) {
+        cryptoData[symbol].lastChange = 'down';
+      } else {
+         cryptoData[symbol].lastChange = 'stable';
+      }
     }
     
     // Save updated prices to database
@@ -441,29 +520,9 @@ async function loadCryptoPrices() {
   }
 }
 
-// ✅ REFACTORED: Auto-update business ROI using safeOperation
-async function updateBusinessROI() {
-  try {
-    for (const [id, business] of Object.entries(businessData)) {
-      const change = (Math.random() - 0.5) * 0.02; // ±2% change
-      businessData[id].roi = Math.max(business.roi + change, 0.01); // Min 1% ROI
-    }
-    
-    await safeOperation(async (db) => {
-      await db.collection(COLLECTIONS.SETTINGS).replaceOne(
-        { type: 'business_data' },
-        { type: 'business_data', data: businessData, updatedAt: new Date() },
-        { upsert: true }
-      );
-    });
-  } catch (error) {
-    console.error('Error updating business ROI:', error);
-  }
-}
-
-// Start daily updates (UNCHANGED)
-setInterval(updateCryptoPrices, 24 * 60 * 60 * 1000); // Daily
-setInterval(updateBusinessROI, 24 * 60 * 60 * 1000); // Daily
+// MODIFIED: Start dynamic market updates
+setInterval(updateCryptoPrices, 5 * 60 * 1000); // Every 5 minutes for price fluctuation
+setInterval(updateMarketConditions, 6 * 60 * 60 * 1000); // Every 6 hours for market trends and business ROI
 
 // Achievement definitions (UNCHANGED)
 const ACHIEVEMENTS = {
@@ -2330,10 +2389,22 @@ async function handleCrypto(context, args) {
       case 'list':
         let cryptoList = '₿ *CRYPTOCURRENCY MARKET* ₿\n\n';
         for (const [symbol, data] of Object.entries(cryptoData)) {
-          const change = (Math.random() - 0.5) * 10;
-          const changeEmoji = change >= 0 ? '📈' : '📉';
+          const changeEmoji = data.lastChange === 'up' ? '📈' : data.lastChange === 'down' ? '📉' : '📊';
+          
+          let percentChange = 0;
+          // Calculate change over the history period (approx last hour if ticks are 5 min)
+          if(data.history && data.history.length > 1) {
+              const startPrice = data.history[0];
+              const currentPrice = data.price;
+              if(startPrice > 0) {
+                 percentChange = ((currentPrice - startPrice) / startPrice) * 100;
+              }
+          }
+
           cryptoList += `${changeEmoji} *${symbol}* - ${data.name}\n`;
-          cryptoList += `   💰 ${ecoSettings.currency}${data.price.toLocaleString()} (${change >= 0 ? '+' : ''}${change.toFixed(2)}%)\n\n`;
+          // Use .toFixed() for prices to avoid scientific notation for small numbers like SHIB
+          const priceString = (symbol === 'SHIB' || data.price < 0.01) ? data.price.toFixed(8) : data.price.toLocaleString();
+          cryptoList += `   💰 ${ecoSettings.currency}${priceString} (${percentChange >= 0 ? '+' : ''}${percentChange.toFixed(2)}%)\n\n`;
         }
         await reply(cryptoList);
         break;
