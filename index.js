@@ -498,13 +498,17 @@ function setupConnectionHandler(socket, saveCreds) {
         // FIXED: Initialize plugins after successful connection
         await initializePluginManager();
 
-        // FIXED: Send startup notification with database status
-        if (isNewLogin || config.OWNER_NUMBER) {
-          try {
-            const pluginStats = getPluginStats();
-            const mongoHealth = mongoInitialized ? await mongoHealthCheck() : { healthy: false };
-            
-            const startupMsg = `🤖 *${config.BOT_NAME} Connected!*
+        // *** FIX: Added a delay to prevent "Socket not ready" race condition ***
+        // The `connection: 'open'` event fires slightly before the socket is truly ready
+        // to send messages. A short delay allows the library to finalize its setup.
+        setTimeout(async () => {
+            // FIXED: Send startup notification with database status
+            if (isNewLogin || config.OWNER_NUMBER) {
+                try {
+                    const pluginStats = getPluginStats();
+                    const mongoHealth = mongoInitialized ? await mongoHealthCheck() : { healthy: false };
+                    
+                    const startupMsg = `🤖 *${config.BOT_NAME} Connected!*
 
 📊 *Status:* Online ✅
 ⚙️ *Mode:* ${config.MODE.toUpperCase()}
@@ -524,17 +528,19 @@ ${config.REJECT_CALL ? '✅' : '❌'} Call Rejection
 
 💡 Type *${config.PREFIX}menu* to see available commands.`;
 
-            const targetJid = config.OWNER_NUMBER + '@s.whatsapp.net';
-            await sendMessageSafely(socket, targetJid, { text: startupMsg });
-            console.log(chalk.green('📤 Startup notification sent to owner'));
+                    const targetJid = config.OWNER_NUMBER + '@s.whatsapp.net';
+                    await sendMessageSafely(socket, targetJid, { text: startupMsg });
+                    console.log(chalk.green('📤 Startup notification sent to owner'));
 
-          } catch (error) {
-            console.log(chalk.yellow('⚠️ Could not send startup notification:'), error.message);
-          }
-        }
+                } catch (error) {
+                    console.log(chalk.yellow('⚠️ Could not send startup notification:'), error.message);
+                }
+            }
 
-        // FIXED: Update bio after connection
-        setTimeout(() => updateBio(socket), 5000);
+            // FIXED: Update bio after connection and notification
+            updateBio(socket);
+
+        }, 3000); // 3-second delay
 
         // FIXED: Start bio update interval
         if (config.AUTO_BIO) {
