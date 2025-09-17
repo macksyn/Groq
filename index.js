@@ -498,10 +498,12 @@ function setupConnectionHandler(socket, saveCreds) {
         // FIXED: Initialize plugins after successful connection
         await initializePluginManager();
 
-        // *** FIX: Added a delay to prevent "Socket not ready" race condition ***
-        // The `connection: 'open'` event fires slightly before the socket is truly ready
-        // to send messages. A short delay allows the library to finalize its setup.
-        setTimeout(async () => {
+        // *** NEW, MORE ROBUST FIX ***
+        // Wait for the 'chats.set' event, which indicates the bot is fully initialized and ready.
+        // This is much more reliable than a fixed timer.
+        socket.ev.once('chats.set', async () => {
+            console.log(chalk.blue('✅ Chats synced. Bot is fully ready.'));
+            
             // FIXED: Send startup notification with database status
             if (isNewLogin || config.OWNER_NUMBER) {
                 try {
@@ -539,8 +541,7 @@ ${config.REJECT_CALL ? '✅' : '❌'} Call Rejection
 
             // FIXED: Update bio after connection and notification
             updateBio(socket);
-
-        }, 3000); // 3-second delay
+        });
 
         // FIXED: Start bio update interval
         if (config.AUTO_BIO) {
@@ -1597,3 +1598,4 @@ export {
   startEnhancedHealthMonitoring,
   config
 };
+
