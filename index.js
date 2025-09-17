@@ -498,12 +498,15 @@ function setupConnectionHandler(socket, saveCreds) {
         // FIXED: Initialize plugins after successful connection
         await initializePluginManager();
 
-        // *** NEW, MORE ROBUST FIX ***
-        // Wait for the 'chats.set' event, which indicates the bot is fully initialized and ready.
-        // This is much more reliable than a fixed timer.
-        socket.ev.once('chats.set', async () => {
+        // *** FINAL FIX: Correctly handle the "once" event logic ***
+        // The Baileys event emitter uses .on() and .off(), not .once().
+        // We will create a handler that removes itself after running.
+        const chatsSetHandler = async () => {
             console.log(chalk.blue('✅ Chats synced. Bot is fully ready.'));
             
+            // Unregister this listener immediately so it only runs once per connection
+            socket.ev.off('chats.set', chatsSetHandler);
+
             // FIXED: Send startup notification with database status
             if (isNewLogin || config.OWNER_NUMBER) {
                 try {
@@ -518,7 +521,7 @@ function setupConnectionHandler(socket, saveCreds) {
 ⏰ *Time:* ${moment().tz(config.TIMEZONE).format('DD/MM/YYYY HH:mm:ss')}
 
 🔌 *Plugins:* ${pluginStats.enabled}/${pluginStats.total} loaded
-🗄️ *Database:* ${mongoHealth.healthy ? '✅ Connected' : '❌ Offline'}
+- *Database:* ${mongoHealth.healthy ? '✅ Connected' : '❌ Offline'}
 
 🎮 *Active Features:*
 ${config.AUTO_READ ? '✅' : '❌'} Auto Read
@@ -541,7 +544,10 @@ ${config.REJECT_CALL ? '✅' : '❌'} Call Rejection
 
             // FIXED: Update bio after connection and notification
             updateBio(socket);
-        });
+        };
+        
+        // Register the listener
+        socket.ev.on('chats.set', chatsSetHandler);
 
         // FIXED: Start bio update interval
         if (config.AUTO_BIO) {
@@ -1598,4 +1604,5 @@ export {
   startEnhancedHealthMonitoring,
   config
 };
+
 
