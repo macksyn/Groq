@@ -1,35 +1,25 @@
-// plugins/owner_db_helpers.js
+// Add this to your owner_db_helpers.js file
+
 import { getCollection } from '../lib/mongoManager.js';
 
-const BAN_COLLECTION = 'banned_users';
-const ADMIN_COLLECTION = 'admin_users';
+const BOT_SETTINGS_COLLECTION = 'bot_settings';
 
-export async function banUser(phone) {
-  const col = await getCollection(BAN_COLLECTION);
-  await col.updateOne({ phone }, { $set: { phone } }, { upsert: true });
+export async function setBotMode(mode) {
+  const col = await getCollection(BOT_SETTINGS_COLLECTION);
+  await col.updateOne(
+    { setting: 'bot_mode' }, 
+    { $set: { setting: 'bot_mode', value: mode, updatedAt: new Date() } }, 
+    { upsert: true }
+  );
 }
 
-export async function unbanUser(phone) {
-  const col = await getCollection(BAN_COLLECTION);
-  await col.deleteOne({ phone });
+export async function getBotMode() {
+  const col = await getCollection(BOT_SETTINGS_COLLECTION);
+  const result = await col.findOne({ setting: 'bot_mode' });
+  return result?.value || 'public'; // Default to public
 }
 
-export async function getBannedUsers() {
-  const col = await getCollection(BAN_COLLECTION);
-  return await col.find({}).toArray();
-}
-
-export async function addAdmin(phone) {
-  const col = await getCollection(ADMIN_COLLECTION);
-  await col.updateOne({ phone }, { $set: { phone } }, { upsert: true });
-}
-
-export async function removeAdmin(phone) {
-  const col = await getCollection(ADMIN_COLLECTION);
-  await col.deleteOne({ phone });
-}
-
-export async function getAdmins() {
-  const col = await getCollection(ADMIN_COLLECTION);
-  return await col.find({}).toArray();
+export async function isBotPublic() {
+  const mode = await getBotMode();
+  return mode === 'public';
 }
