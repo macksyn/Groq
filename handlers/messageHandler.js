@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { serializeMessage } from '../lib/serializer.js';
 import { PermissionHelpers, RateLimitHelpers } from '../lib/helpers.js';
 import PluginManager from '../lib/pluginManager.js';
+import { isBotPublic, getAdmins } from '../plugins/owner_db_helpers.js';
 
 // Auto reaction emojis
 const reactionEmojis = ['❤️', '👍', '🔥', '⚡', '🎉', '💯', '✨', '🚀'];
@@ -32,23 +33,53 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
     // FIXED: Safe permission checks with null safety
     const isOwner = PermissionHelpers.isOwner(m.sender || '', config.OWNER_NUMBER + '@s.whatsapp.net');
     
-    // FIXED: Check for multiple admin numbers
-    let isAdmin = isOwner;
+    // FIXED: Check for multiple admin numbers (config admins)
+    let isConfigAdmin = isOwner;
     if (config.ADMIN_NUMBERS) {
       const adminNumbers = Array.isArray(config.ADMIN_NUMBERS) 
         ? config.ADMIN_NUMBERS 
         : config.ADMIN_NUMBERS.split(',').map(num => num.trim());
       
       const senderNumber = (m.sender || '').replace('@s.whatsapp.net', '');
-      isAdmin = isOwner || adminNumbers.some(adminNum => {
+      isConfigAdmin = isOwner || adminNumbers.some(adminNum => {
         const cleanAdminNum = adminNum.replace('@s.whatsapp.net', '');
         return senderNumber === cleanAdminNum;
       });
     }
+
+    // ENHANCED: Check database admins (from owner plugin)
+    let isDbAdmin = false;
+    try {
+      const dbAdmins = await getAdmins();
+      const senderPhone = (m.sender || '').replace('@s.whatsapp.net', '');
+      isDbAdmin = dbAdmins.some(admin => admin.phone === senderPhone);
+    } catch (error) {
+      console.warn(chalk.yellow('⚠️ Error checking database admins:'), error.message);
+    }
+
+    // Combined admin check (either config admin or database admin)
+    const isAdmin = isConfigAdmin || isDbAdmin;
     
-    const isPublic = config.MODE === 'public';
+    // ENHANCED: Check bot mode from database instead of config
+    let isPublic = true;
+    try {
+      isPublic = await isBotPublic();
+    } catch (error) {
+      console.warn(chalk.yellow('⚠️ Error checking bot mode, defaulting to public:'), error.message);
+      // Fallback to config mode if database check fails
+      isPublic = config.MODE === 'public';
+    }
     
-    if (!isPublic && !isOwner && !isAdmin) return;
+    // Bot mode enforcement
+    if (!isPublic && !isOwner && !isAdmin) {
+      // Optional: Send private mode message (uncomment if desired)
+      // if (m.body && m.body.startsWith(config.PREFIX)) {
+      //   await sock.sendMessage(m.from, { 
+      //     text: '🔒 Bot is currently in private mode. Only admins can use commands.' 
+      //   });
+      // }
+      return;
+    }
 
     // FIXED: Safe rate limiting check with null safety
     const senderId = m.sender || 'unknown';
@@ -78,7 +109,7 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       const displayMessage = messageBody.length > 50 
         ? messageBody.substring(0, 50) + '...' 
         : messageBody;
-      console.log(chalk.blue(`📨 Command from ${senderName}: ${displayMessage}`));
+      console.log(chalk.blue(`📨 Command from ${senderName}: ${displayMessage} [Mode: ${isPublic ? 'Public' : 'Private'}]`));
     }
 
     // Auto react to messages (only for non-commands and random chance)
@@ -149,4 +180,4 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       }
     }
   }
-}
+        }
