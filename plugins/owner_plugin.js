@@ -34,12 +34,26 @@ import {
   getAdmins
 } from './owner_db_helpers.js';
 
+import { getAdmins } from './owner_db_helpers.js';
+
 export default async function ownerHandler(m, sock, config) {
   if (!m.body || !m.body.startsWith(config.PREFIX)) return;
   const args = m.body.slice(config.PREFIX.length).trim().split(' ');
   const command = args[0].toLowerCase();
   const isOwner = m.sender === config.OWNER_NUMBER + '@s.whatsapp.net';
-  if (!isOwner) return;
+  let isAdmin = false;
+  if (!isOwner && (command === 'ban' || command === 'unban')) {
+    // Check if sender is admin for ban/unban
+    const admins = await getAdmins();
+    isAdmin = admins.some(a => m.sender.includes(a.phone));
+    if (!isAdmin) {
+      await m.reply('❌ You are not authorized to use this command.');
+      return;
+    }
+  } else if (!isOwner) {
+    await m.reply('❌ You are not the owner. These commands are restricted.');
+    return;
+  }
 
   // Reload plugins
   if (command === 'reload' || command === 'rl') {
