@@ -24,17 +24,7 @@ export const info = {
   ]
 };
 
-import {
-  banUser,
-  unbanUser,
-  getBannedUsers,
-  addAdmin,
-  removeAdmin,
-  getAdmins,
-  setBotMode,
-  getBotMode,
-  isBotPublic
-} from './owner_db_helpers.js';
+import { OwnerHelpers } from '../lib/helpers.js';
 
 export default async function ownerHandler(m, sock, config) {
   if (!m.body || !m.body.startsWith(config.PREFIX)) return;
@@ -47,7 +37,7 @@ export default async function ownerHandler(m, sock, config) {
   let isAdmin = false;
   if (!isOwner && ['ban', 'unban', 'banned', 'addadmin', 'removeadmin', 'admins'].includes(command)) {
     try {
-      const admins = await getAdmins();
+      const admins = await OwnerHelpers.getAdmins();
       // Extract phone number from sender (remove @s.whatsapp.net)
       const senderPhone = m.sender.replace('@s.whatsapp.net', '');
       isAdmin = admins.some(admin => admin.phone === senderPhone);
@@ -156,7 +146,7 @@ export default async function ownerHandler(m, sock, config) {
         return;
       }
       
-      await banUser(number);
+      await OwnerHelpers.banUser(number);
       await sock.sendMessage(m.from, { text: `🚫 User *${number}* has been banned.` });
     }
 
@@ -168,13 +158,13 @@ export default async function ownerHandler(m, sock, config) {
         return;
       }
       
-      await unbanUser(number);
+      await OwnerHelpers.unbanUser(number);
       await sock.sendMessage(m.from, { text: `✅ User *${number}* has been unbanned.` });
     }
 
     // List banned users
     else if (command === 'banned') {
-      const list = await getBannedUsers();
+      const list = await OwnerHelpers.getBannedUsers();
       const message = list.length 
         ? `🚫 *Banned Users (${list.length}):*\n${list.map((u, i) => `${i + 1}. ${u.phone}`).join('\n')}` 
         : '✅ No banned users.';
@@ -189,8 +179,47 @@ export default async function ownerHandler(m, sock, config) {
         return;
       }
       
-      await addAdmin(number);
+      await OwnerHelpers.addAdmin(number);
       await sock.sendMessage(m.from, { text: `👑 User *${number}* has been added as admin.` });
+    }
+
+    // Remove admin
+    else if (command === 'removeadmin') {
+      const number = args[1];
+      if (!number) {
+        await sock.sendMessage(m.from, { text: `❌ Usage: ${config.PREFIX}removeadmin <phone-number>` });
+        return;
+      }
+      
+      await OwnerHelpers.removeAdmin(number);
+      await sock.sendMessage(m.from, { text: `❌ User *${number}* has been removed from admin.` });
+    }
+
+    // List admins
+    else if (command === 'admins') {
+      const list = await OwnerHelpers.getAdmins();
+      const message = list.length 
+        ? `👑 *Admin Users (${list.length}):*\n${list.map((u, i) => `${i + 1}. ${u.phone}`).join('\n')}` 
+        : '❌ No admin users.';
+      await sock.sendMessage(m.from, { text: message });
+    }
+
+    // Change bot mode
+    else if (command === 'mode') {
+      const mode = args[1];
+      if (!mode || !['public', 'private'].includes(mode.toLowerCase())) {
+        const currentMode = await OwnerHelpers.getBotMode();
+        await sock.sendMessage(m.from, { 
+          text: `❌ Usage: ${config.PREFIX}mode <public|private>\n\n📊 Current mode: *${currentMode}*` 
+        });
+        return;
+      }
+      
+      await OwnerHelpers.setBotMode(mode.toLowerCase());
+      await sock.sendMessage(m.from, { 
+        text: `🔧 Bot mode changed to *${mode.toLowerCase()}*.\n\n${mode.toLowerCase() === 'private' ? '🔒 Bot will only respond to owner and admins.' : '🌐 Bot will respond to everyone.'}` 
+      });
+    }.from, { text: `👑 User *${number}* has been added as admin.` });
     }
 
     // Remove admin
@@ -284,4 +313,4 @@ export default async function ownerHandler(m, sock, config) {
     console.error('Owner plugin error:', error);
     await sock.sendMessage(m.from, { text: `❌ An error occurred: ${error.message}` });
   }
-                                      }
+    }
