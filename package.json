@@ -1,35 +1,36 @@
 {
-  "name": "fresh-whatsapp-bot",
-  "version": "1.0.0",
-  "description": "A fresh WhatsApp bot built with Baileys and Mega session storage",
+  "name": "Groq AI",
+  "version": "2.0.0",
+  "description": "Modular WhatsApp Bot with PM2 Support",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
-    "pm2": "pm2 start index.js --name whatsapp-bot"
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop Groq AI",
+    "pm2:restart": "pm2 restart Groq AI",
+    "pm2:reload": "pm2 reload Groq AI",
+    "pm2:logs": "pm2 logs Groq AI --lines 100",
+    "pm2:monit": "pm2 monit",
+    "pm2:delete": "pm2 delete Groq AI",
+    "pm2:dev": "pm2 start ecosystem.config.cjs --env development",
+    "pm2:prod": "pm2 start ecosystem.config.cjs --env production",
+    "health": "curl http://localhost:3000/health"
   },
-  "keywords": [
-    "whatsapp",
-    "bot",
-    "baileys"
-  ],
-  "author": "Fresh Bot Developer",
-  "license": "MIT",
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.6.0",
-    "axios": "^1.11.0",
-    "chalk": "^5.3.0",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "file-type": "^21.0.0",
-    "megajs": "^1.1.0",
-    "moment-timezone": "^0.5.45",
-    "mongodb": "^6.3.0",
-    "node-cron": "^4.2.1",
-    "pino": "^8.20.0"
+    "@whiskeysockets/baileys": "^6.0.0",
+    "express": "^4.18.0",
+    "dotenv": "^16.0.0",
+    "chalk": "^5.0.0",
+    "pino": "^8.0.0",
+    "moment-timezone": "^0.5.0",
+    "mongodb": "^6.0.0",
+    "megajs": "^1.0.0",
+    "node-cron": "^3.0.0",
+    "axios": "^1.0.0"
   },
-  "engines": {
-    "node": ">=20.0.0"
+  "devDependencies": {
+    "pm2": "^5.3.0"
   }
 }
