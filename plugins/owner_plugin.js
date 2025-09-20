@@ -31,6 +31,19 @@ export default async function ownerHandler(m, sock, config) {
   
   const args = m.body.slice(config.PREFIX.length).trim().split(' ');
   const command = args[0].toLowerCase();
+  
+  // Define owner-only commands
+  const ownerCommands = [
+    'reload', 'rl', 'stats', 'status', 'enable', 'disable', 'mode', 
+    'ban', 'unban', 'banned', 'broadcast', 'addadmin', 'removeadmin', 
+    'admins', 'setname', 'setstatus', 'shutdown', 'restart'
+  ];
+  
+  // Only process if it's actually an owner command
+  if (!ownerCommands.includes(command)) {
+    return; // Let other plugins handle non-owner commands
+  }
+  
   const isOwner = m.sender === config.OWNER_NUMBER + '@s.whatsapp.net';
   
   // Check admin status for specific commands
@@ -455,4 +468,4 @@ export default async function ownerHandler(m, sock, config) {
     console.error('Owner plugin error:', error);
     await sock.sendMessage(m.from, { text: `❌ An error occurred: ${error.message}` });
   }
-}
+    }
