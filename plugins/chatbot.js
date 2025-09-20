@@ -740,39 +740,34 @@ export default async function groqHandler(m, sock, config) {
       }
     }
 
-    // Enhanced response logic with command filtering
+    // Enhanced response logic with smart command filtering
     const groupContext = isGroupChat ? await groqAI.getGroupContext(m.from) : [];
     const shouldRespondContextually = isGroupChat && 
       groqAI.shouldRespondContextually(m, groupContext, aiMode);
     
-    // ENHANCED: Don't respond to replies if the quoted message was a command
+    // ENHANCED: Don't respond to replies if the quoted message was a non-AI command
     const isValidReply = isReply && !isQuotedMessageCommand;
     
-    const shouldRespond = isCommand ||           // Direct AI commands
-                         isMentioned ||          // Mentions (but check if it's a command)
-                         isValidReply ||         // Valid replies (not to commands)
+    // ENHANCED: Allow AI commands but filter out other commands in contextual responses
+    const shouldRespond = isCommand ||           // Our AI commands always work
+                         (isMentioned && !isCurrentMessageCommand) ||  // Mentions (unless it's a non-AI command)
+                         isValidReply ||         // Valid replies (not to non-AI commands)
                          (!isGroupChat && aiMode !== AI_MODES.OFF && !isCurrentMessageCommand) || // DM (non-commands)
                          shouldRespondContextually; // Contextual group participation
 
     console.log(`📍 Enhanced Response Decision:
     - Mode: ${aiMode}
-    - Command: ${isCommand}
+    - AI Command: ${isCommand}
     - Mentioned: ${isMentioned}
     - Valid Reply: ${isValidReply} (isReply=${isReply}, quotedCmd=${isQuotedMessageCommand})
     - Contextual: ${shouldRespondContextually}
     - Should Respond: ${shouldRespond}
-    - Current Message is Command: ${isCurrentMessageCommand}`);
+    - Current Message is Non-AI Command: ${isCurrentMessageCommand}`);
 
     if (shouldRespond) {
-      // Don't respond if the current message is a command but we're not in command mode
-      if (isCurrentMessageCommand && !isCommand) {
-        console.log(`🚫 Ignoring command-like message: ${m.body}`);
-        return;
-      }
-      
-      // Don't respond contextually to command-like messages
+      // Don't respond contextually to non-AI command-like messages
       if (shouldRespondContextually && isCurrentMessageCommand) {
-        console.log(`🚫 Ignoring contextual response to command: ${m.body}`);
+        console.log(`🚫 Ignoring contextual response to non-AI command: ${m.body}`);
         return;
       }
       // Process query
