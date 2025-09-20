@@ -550,14 +550,7 @@ async function getUserModel(userId) {
   return model;
 }
 
-async function setUserModel(userId, model) {
-  // Update memory
-  userModels.set(userId, model);
-  
-  // Update database
-  await updateUserAISettings(userId, { preferredModel: model });
-  return model;
-}
+export default async function groqHandler(m, sock, config) {
 
 // Create enhanced Groq instance
 const groqAI = new EnhancedGroqAI();
@@ -624,7 +617,62 @@ function isReplyToBot(quotedMessage, botIds) {
   });
 }
 
-export default async function groqHandler(m, sock, config) {
+// Enhanced AI mode management with MongoDB persistence
+async function getAIMode(userId) {
+  // Check memory first
+  if (aiModeUsers.has(userId)) {
+    return aiModeUsers.get(userId);
+  }
+  
+  // Get from database
+  const settings = await getUserAISettings(userId);
+  const mode = settings.aiMode || AI_MODES.MENTIONS;
+  aiModeUsers.set(userId, mode);
+  return mode;
+}
+
+async function setAIMode(userId, mode) {
+  if (!Object.values(AI_MODES).includes(mode)) {
+    mode = AI_MODES.MENTIONS;
+  }
+  
+  // Update memory
+  aiModeUsers.set(userId, mode);
+  
+  // Update database
+  await updateUserAISettings(userId, { aiMode: mode });
+  return mode;
+}
+
+async function cycleAIMode(userId) {
+  const currentMode = await getAIMode(userId);
+  const modes = Object.values(AI_MODES);
+  const currentIndex = modes.indexOf(currentMode);
+  const nextMode = modes[(currentIndex + 1) % modes.length];
+  return await setAIMode(userId, nextMode);
+}
+
+async function getUserModel(userId) {
+  // Check memory first
+  if (userModels.has(userId)) {
+    return userModels.get(userId);
+  }
+  
+  // Get from database
+  const settings = await getUserAISettings(userId);
+  const model = settings.preferredModel || 'llama-3.3-70b-versatile';
+  userModels.set(userId, model);
+  return model;
+}
+
+async function setUserModel(userId, model) {
+  // Update memory
+  userModels.set(userId, model);
+  
+  // Update database
+  await updateUserAISettings(userId, { preferredModel: model });
+  return model;
+}
   try {
     const botIds = getBotIds(sock);
     const isMentioned = isBotMentioned(m.mentions, botIds) || isTextMention(m.body, botIds);
