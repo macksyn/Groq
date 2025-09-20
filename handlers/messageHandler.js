@@ -1,8 +1,7 @@
 import chalk from 'chalk';
 import { serializeMessage } from '../lib/serializer.js';
-import { PermissionHelpers, RateLimitHelpers } from '../lib/helpers.js';
+import { PermissionHelpers, RateLimitHelpers, OwnerHelpers } from '../lib/helpers.js';
 import PluginManager from '../lib/pluginManager.js';
-import { isBotPublic, getAdmins } from '../plugins/owner_db_helpers.js';
 
 // Auto reaction emojis
 const reactionEmojis = ['❤️', '👍', '🔥', '⚡', '🎉', '💯', '✨', '🚀'];
@@ -50,7 +49,7 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
     // ENHANCED: Check database admins (from owner plugin)
     let isDbAdmin = false;
     try {
-      const dbAdmins = await getAdmins();
+      const dbAdmins = await OwnerHelpers.getAdmins();
       const senderPhone = (m.sender || '').replace('@s.whatsapp.net', '');
       isDbAdmin = dbAdmins.some(admin => admin.phone === senderPhone);
     } catch (error) {
@@ -63,7 +62,7 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
     // ENHANCED: Check bot mode from database instead of config
     let isPublic = true;
     try {
-      isPublic = await isBotPublic();
+      isPublic = await OwnerHelpers.isBotPublic();
     } catch (error) {
       console.warn(chalk.yellow('⚠️ Error checking bot mode, defaulting to public:'), error.message);
       // Fallback to config mode if database check fails
@@ -180,4 +179,4 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       }
     }
   }
-        }
+                                                        }
