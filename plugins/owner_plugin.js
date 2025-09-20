@@ -2,7 +2,7 @@
 export const info = {
   name: 'Owner Manager',
   version: '2.0.0',
-  author: 'Alex Macksyn',
+  author: 'Bot Developer',
   description: 'Advanced owner-only administrative commands',
   commands: [
     { name: 'reload', aliases: ['rl'], description: 'Reload all plugins' },
@@ -30,7 +30,10 @@ import {
   getBannedUsers,
   addAdmin,
   removeAdmin,
-  getAdmins
+  getAdmins,
+  setBotMode,
+  getBotMode,
+  isBotPublic
 } from './owner_db_helpers.js';
 
 export default async function ownerHandler(m, sock, config) {
@@ -215,12 +218,17 @@ export default async function ownerHandler(m, sock, config) {
     else if (command === 'mode') {
       const mode = args[1];
       if (!mode || !['public', 'private'].includes(mode.toLowerCase())) {
-        await sock.sendMessage(m.from, { text: `❌ Usage: ${config.PREFIX}mode <public|private>` });
+        const currentMode = await getBotMode();
+        await sock.sendMessage(m.from, { 
+          text: `❌ Usage: ${config.PREFIX}mode <public|private>\n\n📊 Current mode: *${currentMode}*` 
+        });
         return;
       }
       
-      // You'll need to implement mode storage/retrieval
-      await sock.sendMessage(m.from, { text: `🔧 Bot mode changed to *${mode}*.` });
+      await setBotMode(mode.toLowerCase());
+      await sock.sendMessage(m.from, { 
+        text: `🔧 Bot mode changed to *${mode.toLowerCase()}*.\n\n${mode.toLowerCase() === 'private' ? '🔒 Bot will only respond to owner and admins.' : '🌐 Bot will respond to everyone.'}` 
+      });
     }
 
     // Broadcast message
@@ -276,4 +284,4 @@ export default async function ownerHandler(m, sock, config) {
     console.error('Owner plugin error:', error);
     await sock.sendMessage(m.from, { text: `❌ An error occurred: ${error.message}` });
   }
-}
+                                      }
