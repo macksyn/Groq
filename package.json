@@ -5,9 +5,9 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "pm2-runtime ecosystem.config.cjs",
+    "start": "pm2 start . --attach --name Groq AI",
     "dev": "node --watch index.js",
-    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:stop": "pm2 stop Groq AI",
     "pm2:restart": "pm2 restart Groq AI",
     "pm2:reload": "pm2 reload Groq AI",
