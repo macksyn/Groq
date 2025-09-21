@@ -132,7 +132,52 @@ class StreamingAnalyzer {
     this.updateRunningAverage(this.sentimentRunningAvg, sentiment);
     this.updatePersonalityScores(userId, personality);
     this.updateTopicCounts(topics);
-    this.updateWordFrequency(words.slice(0, 10)); // Only first 10 words
+    this.  updateWordFrequency(words.slice(0, 10)); // Only first 10 words
+  }
+
+  updateTopicCounts(topics) {
+    topics.forEach(topic => {
+      const count = this.topicCounts.get(topic) || 0;
+      this.topicCounts.set(topic, count + 1);
+    });
+    
+    // Limit topics tracked to prevent memory bloat
+    if (this.topicCounts.size > this.maxItems) {
+      // Remove least common topics
+      const sortedTopics = Array.from(this.topicCounts.entries())
+        .sort((a, b) => a[1] - b[1]);
+      
+      for (let i = 0; i < 100; i++) {
+        if (sortedTopics[i]) {
+          this.topicCounts.delete(sortedTopics[i][0]);
+        }
+      }
+    }
+  }
+
+  updateWordFrequency(words) {
+    // Only track meaningful words (not common stopwords)
+    const stopwords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these', 'those'];
+    
+    words
+      .filter(word => word.length > 2 && !stopwords.includes(word))
+      .forEach(word => {
+        const count = this.wordFrequency.get(word) || 0;
+        this.wordFrequency.set(word, count + 1);
+      });
+
+    // Limit word frequency map size
+    if (this.wordFrequency.size > this.maxItems) {
+      // Remove least frequent words
+      const sortedWords = Array.from(this.wordFrequency.entries())
+        .sort((a, b) => a[1] - b[1]);
+      
+      for (let i = 0; i < 200; i++) {
+        if (sortedWords[i]) {
+          this.wordFrequency.delete(sortedWords[i][0]);
+        }
+      }
+    }
   }
 
   quickSentimentAnalysis(text) {
@@ -192,6 +237,42 @@ class StreamingAnalyzer {
     scores.conscientiousness = words.filter(w => conscientiousnessWords.includes(w)).length / words.length;
     
     return scores;
+  }
+
+  // Extract top topics from message (lightweight)
+  extractTopTopics(messageBody, maxTopics = 3) {
+    const text = messageBody.toLowerCase();
+    const topics = [];
+    
+    // Define topic categories with keywords
+    const topicKeywords = {
+      'cryptocurrency': ['crypto', 'bitcoin', 'btc', 'eth', 'ethereum', 'sol', 'solana', 'trading', 'binance'],
+      'technology': ['coding', 'programming', 'javascript', 'python', 'react', 'node', 'api', 'database'],
+      'business': ['business', 'work', 'project', 'meeting', 'deadline', 'client', 'money', 'profit'],
+      'sports': ['football', 'soccer', 'basketball', 'match', 'game', 'team', 'player', 'score'],
+      'entertainment': ['movie', 'film', 'music', 'song', 'netflix', 'youtube', 'game', 'series'],
+      'education': ['school', 'study', 'exam', 'class', 'teacher', 'student', 'learn', 'university'],
+      'health': ['health', 'fitness', 'gym', 'exercise', 'diet', 'doctor', 'medicine', 'workout'],
+      'food': ['food', 'eat', 'restaurant', 'cooking', 'recipe', 'hungry', 'lunch', 'dinner']
+    };
+    
+    // Check for topic matches
+    Object.entries(topicKeywords).forEach(([topic, keywords]) => {
+      const matches = keywords.filter(keyword => text.includes(keyword)).length;
+      if (matches > 0) {
+        topics.push({
+          topic: topic,
+          relevance: matches / keywords.length,
+          matches: matches
+        });
+      }
+    });
+    
+    // Sort by relevance and return top topics
+    return topics
+      .sort((a, b) => b.relevance - a.relevance)
+      .slice(0, maxTopics)
+      .map(t => t.topic);
   }
 }
 
@@ -394,6 +475,60 @@ class MemoryEfficientGroqAI {
     return prompt + `\n\nKeep responses concise and natural for WhatsApp.`;
   }
 
+  // Groq API call with error handling
+  async callGroqAPI(query, systemPrompt, userId) {
+    const GROQ_CONFIG = {
+      API_KEY: process.env.GROQ_API_KEY || '',
+      BASE_URL: 'https://api.groq.com/openai/v1/chat/completions'
+    };
+
+    if (!GROQ_CONFIG.API_KEY) {
+      throw new Error('Groq API key not configured');
+    }
+
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: query }
+    ];
+
+    try {
+      const response = await axios.post(
+        GROQ_CONFIG.BASE_URL,
+        {
+          model: await this.getUserModel(userId),
+          messages: messages,
+          temperature: 0.8,
+          max_tokens: 1200,
+          top_p: 0.9,
+          frequency_penalty: 0.1,
+          presence_penalty: 0.1,
+          stream: false
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000
+        }
+      );
+
+      if (response.data?.choices?.[0]?.message?.content) {
+        return response.data.choices[0].message.content.trim();
+      } else {
+        throw new Error('Invalid response format from Groq API');
+      }
+      
+    } catch (error) {
+      if (error.response) {
+        const status = error.response.status;
+        const message = error.response.data?.error?.message || 'Unknown API error';
+        throw new Error(`Groq API Error ${status}: ${message}`);
+      }
+      throw new Error(`Request error: ${error.message}`);
+    }
+  }
+
   // Rate limiting (keep existing logic but optimize)
   checkRateLimit(userId, type = 'normal') {
     const now = Date.now();
@@ -457,6 +592,60 @@ class MemoryEfficientGroqAI {
     // Don't store full conversation history in memory
     // This would normally come from a cache or be rebuilt as needed
     return []; // Simplified for memory efficiency
+  }
+
+  // Helper methods for profile creation
+  summarizePersonality(personalityTraits) {
+    if (!personalityTraits) return 'analyzing...';
+    
+    const traits = [];
+    Object.entries(personalityTraits).forEach(([trait, data]) => {
+      if (data && data.score > 0.6) {
+        if (trait === 'extraversion') traits.push('social');
+        if (trait === 'openness') traits.push('creative');
+        if (trait === 'conscientiousness') traits.push('organized');
+        if (trait === 'agreeableness') traits.push('friendly');
+      }
+    });
+    
+    return traits.length > 0 ? traits.join(', ') : 'balanced';
+  }
+
+  getRecentMood(moodHistory) {
+    if (!moodHistory || moodHistory.length === 0) return 'neutral';
+    
+    const recent = moodHistory.slice(-5); // Last 5 moods
+    const avgSentiment = recent.reduce((sum, mood) => sum + (mood.sentiment || 0), 0) / recent.length;
+    
+    if (avgSentiment > 0.3) return 'positive';
+    if (avgSentiment < -0.3) return 'negative';
+    return 'neutral';
+  }
+
+  simplifyCommunicationStyle(style) {
+    if (!style) return 'casual';
+    
+    const descriptors = [];
+    if (style.formality && style.formality > 0.7) descriptors.push('formal');
+    if (style.humorUsage && style.humorUsage > 0.6) descriptors.push('humorous');
+    if (style.emotiveness && style.emotiveness > 0.6) descriptors.push('expressive');
+    
+    return descriptors.length > 0 ? descriptors.join(', ') : 'casual';
+  }
+
+  // Database loading method
+  async loadMemberProfileFromDB(groupId, userId) {
+    try {
+      return await safeOperation(async (db) => {
+        return await db.collection('memberProfiles').findOne({
+          groupId,
+          userId
+        });
+      });
+    } catch (error) {
+      console.error('Error loading member profile:', error);
+      return null;
+    }
   }
 }
 
