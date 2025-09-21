@@ -4,7 +4,7 @@ import { getCollection, safeOperation } from '../lib/mongoManager.js';
 
 export const info = {
   name: 'groq',
-  version: '3.0.0',
+  version: '3.1.0',
   author: 'Alex Macksyn',
   description: 'Smart AI that participates naturally in group conversations 🇳🇬⚡',
   commands: [
@@ -59,10 +59,138 @@ const groupMemory = new Map();
 const groupMemberProfiles = new Map();
 const conversationContext = new Map();
 
-// MongoDB User Management Functions
+// Cleanup intervals to prevent memory leaks
+const cleanupIntervals = new Map();
+
+// UTILITY FUNCTIONS - Moved outside handler to fix scoping issues
+function getRandomResponse(responses) {
+  return responses[Math.floor(Math.random() * responses.length)];
+}
+
+function getBotIds(sock) {
+  const botUserId = sock.user?.id;
+  if (!botUserId) return [];
+  
+  let botNumber = botUserId;
+  if (botUserId.includes(':')) botNumber = botUserId.split(':')[0];
+  if (botUserId.includes('@')) botNumber = botUserId.split('@')[0];
+  
+  return [...new Set([
+    `${botNumber}@s.whatsapp.net`,
+    `${botNumber}@c.us`,
+    `${botNumber}@lid`,
+    botUserId,
+    botNumber,
+    '19851909324808@s.whatsapp.net',
+    '19851909324808@c.us',
+    '19851909324808@lid',
+    '19851909324808'
+  ])];
+}
+
+function isTextMention(messageBody, botIds) {
+  if (!messageBody || typeof messageBody !== 'string') return false;
+  
+  if (messageBody.includes('@19851909324808')) return true;
+  
+  return botIds.some(botId => {
+    const botNumber = botId.split('@')[0];
+    const mentionRegex = new RegExp(`@${botNumber}(?:\\s|$)`, 'i');
+    return mentionRegex.test(messageBody);
+  });
+}
+
+function isBotMentioned(mentions, botIds) {
+  if (!mentions || !Array.isArray(mentions) || mentions.length === 0) return false;
+  
+  return mentions.some(mention => {
+    return botIds.some(botId => {
+      if (mention === botId) return true;
+      const mentionNumber = mention.split('@')[0];
+      const botNumber = botId.split('@')[0];
+      return mentionNumber === botNumber || mentionNumber === '19851909324808';
+    });
+  });
+}
+
+function isReplyToBot(quotedMessage, botIds) {
+  if (!quotedMessage?.participant) return false;
+  
+  return botIds.some(botId => {
+    if (quotedMessage.participant === botId) return true;
+    const participantNumber = quotedMessage.participant.split('@')[0];
+    const botNumber = botId.split('@')[0];
+    return participantNumber === botNumber || participantNumber === '19851909324808';
+  });
+}
+
+function isMessageACommand(messageBody, config) {
+  if (!messageBody || typeof messageBody !== 'string') return false;
+  
+  // Check if message starts with command prefix
+  if (messageBody.startsWith(config.PREFIX)) {
+    return true;
+  }
+  
+  // Check for other command patterns
+  const commandPatterns = [
+    /^[.!\/]/,  // Commands starting with ., !, or /
+    /^@\w+/,    // Mentions that might be commands
+  ];
+  
+  return commandPatterns.some(pattern => pattern.test(messageBody));
+}
+
+function isQuotedMessageACommand(quotedMessage, config) {
+  if (!quotedMessage?.body) return false;
+  return isMessageACommand(quotedMessage.body, config);
+}
+
+function isNaturalQuestion(messageBody) {
+  if (!messageBody || typeof messageBody !== 'string') return false;
+  
+  const text = messageBody.toLowerCase().trim();
+  
+  // Direct questions
+  if (text.includes('?')) return true;
+  
+  // Question words
+  const questionWords = ['what', 'how', 'why', 'when', 'where', 'who', 'which', 'whose'];
+  const startsWithQuestion = questionWords.some(word => 
+    text.startsWith(word + ' ') || text.startsWith(word + "'")
+  );
+  
+  // Nigerian question patterns
+  const nigerianQuestions = ['wetin', 'how far', 'which kain', 'na wetin'];
+  const hasNigerianQuestion = nigerianQuestions.some(phrase => text.includes(phrase));
+  
+  // Help requests
+  const helpPatterns = ['help me', 'can you', 'please', 'i need', 'tell me'];
+  const isHelpRequest = helpPatterns.some(phrase => text.includes(phrase));
+  
+  return startsWithQuestion || hasNigerianQuestion || isHelpRequest;
+}
+
+// Memory cleanup function to prevent leaks
+function scheduleCleanup(key, callback, delay) {
+  // Clear existing timeout if exists
+  if (cleanupIntervals.has(key)) {
+    clearTimeout(cleanupIntervals.get(key));
+  }
+  
+  // Set new timeout
+  const timeoutId = setTimeout(() => {
+    callback();
+    cleanupIntervals.delete(key);
+  }, delay);
+  
+  cleanupIntervals.set(key, timeoutId);
+}
+
+// MongoDB User Management Functions with better error handling
 async function initUser(userId) {
   try {
-    return await safeOperation(async (db, collection) => {
+    const result = await safeOperation(async (db, collection) => {
       const users = db.collection('users');
       const existingUser = await users.findOne({ userId });
       
@@ -90,9 +218,23 @@ async function initUser(userId) {
       );
       return existingUser;
     });
+    
+    return result;
   } catch (error) {
     console.error('Error initializing user:', error);
-    return null;
+    // Return default user object instead of null to prevent crashes
+    return {
+      userId,
+      balance: 0,
+      totalEarned: 0,
+      joinedAt: new Date(),
+      lastActive: new Date(),
+      aiInteractions: 0,
+      settings: {
+        aiMode: 'mentions',
+        preferredModel: 'llama-3.3-70b-versatile'
+      }
+    };
   }
 }
 
@@ -200,6 +342,63 @@ async function getGroupContext(groupId) {
   }
 }
 
+// AI mode management functions (single definitions only)
+async function getAIMode(userId) {
+  // Check memory first
+  if (aiModeUsers.has(userId)) {
+    return aiModeUsers.get(userId);
+  }
+  
+  // Get from database
+  const settings = await getUserAISettings(userId);
+  const mode = settings.aiMode || AI_MODES.MENTIONS;
+  aiModeUsers.set(userId, mode);
+  return mode;
+}
+
+async function setAIMode(userId, mode) {
+  if (!Object.values(AI_MODES).includes(mode)) {
+    mode = AI_MODES.MENTIONS;
+  }
+  
+  // Update memory
+  aiModeUsers.set(userId, mode);
+  
+  // Update database
+  await updateUserAISettings(userId, { aiMode: mode });
+  return mode;
+}
+
+async function cycleAIMode(userId) {
+  const currentMode = await getAIMode(userId);
+  const modes = Object.values(AI_MODES);
+  const currentIndex = modes.indexOf(currentMode);
+  const nextMode = modes[(currentIndex + 1) % modes.length];
+  return await setAIMode(userId, nextMode);
+}
+
+async function getUserModel(userId) {
+  // Check memory first
+  if (userModels.has(userId)) {
+    return userModels.get(userId);
+  }
+  
+  // Get from database
+  const settings = await getUserAISettings(userId);
+  const model = settings.preferredModel || 'llama-3.3-70b-versatile';
+  userModels.set(userId, model);
+  return model;
+}
+
+async function setUserModel(userId, model) {
+  // Update memory
+  userModels.set(userId, model);
+  
+  // Update database
+  await updateUserAISettings(userId, { preferredModel: model });
+  return model;
+}
+
 class EnhancedGroqAI {
   constructor() {
     this.defaultModel = 'llama-3.3-70b-versatile';
@@ -218,7 +417,7 @@ class EnhancedGroqAI {
     ];
   }
 
-  // Enhanced rate limiting for different interaction types
+  // Fixed rate limiting logic
   checkRateLimit(userId, interactionType = 'normal') {
     const now = Date.now();
     const limits = {
@@ -231,15 +430,18 @@ class EnhancedGroqAI {
     const userLimit = this.rateLimits.get(`${userId}_${interactionType}`) || 
                      { count: 0, resetTime: now + limit.window };
     
+    // Reset if window expired
     if (now > userLimit.resetTime) {
       userLimit.count = 0;
       userLimit.resetTime = now + limit.window;
     }
     
+    // Check if limit exceeded BEFORE incrementing
     if (userLimit.count >= limit.max) {
       return false;
     }
     
+    // Only increment if we're allowing the request
     userLimit.count++;
     this.rateLimits.set(`${userId}_${interactionType}`, userLimit);
     return true;
@@ -275,7 +477,7 @@ class EnhancedGroqAI {
     return context.slice(-maxMessages);
   }
 
-  // Enhanced group context update with MongoDB persistence
+  // Enhanced group context update with fixed memory management
   async updateGroupContext(groupId, message) {
     let context = conversationContext.get(groupId) || [];
     context.push({
@@ -300,14 +502,14 @@ class EnhancedGroqAI {
       this._lastPersist = Date.now();
     }
     
-    // Auto-cleanup memory after 2 hours
-    setTimeout(() => {
+    // Fixed memory cleanup - use scheduleCleanup to prevent leaks
+    scheduleCleanup(`context_${groupId}`, () => {
       const currentContext = conversationContext.get(groupId) || [];
       const recentContext = currentContext.filter(msg => 
         Date.now() - msg.timestamp < 2 * 60 * 60 * 1000
       );
       conversationContext.set(groupId, recentContext);
-    }, 2 * 60 * 60 * 1000);
+    }, 2 * 60 * 60 * 1000); // 2 hours
   }
 
   // Enhanced contextual response detection
@@ -390,7 +592,6 @@ class EnhancedGroqAI {
     
     if (groupId) {
       const groupContext = await this.getGroupContext(groupId);
-      const groupMembers = groupMemberProfiles.get(groupId);
       
       if (contextType === 'smart' || contextType === 'active') {
         systemPrompt += ` You're participating in a WhatsApp group chat. Be conversational and natural.`;
@@ -398,7 +599,7 @@ class EnhancedGroqAI {
         if (groupContext.length > 0) {
           systemPrompt += ` Recent conversation context:\n`;
           groupContext.slice(-5).forEach(ctx => {
-            const memberName = ctx.pushName || ctx.sender.split('@')[0];
+            const memberName = ctx.pushName || ctx.sender?.split('@')[0] || 'Unknown';
             systemPrompt += `${memberName}: ${ctx.body}\n`;
           });
         }
@@ -457,7 +658,7 @@ class EnhancedGroqAI {
     }
   }
 
-  // Keep existing methods for backward compatibility
+  // Fixed conversation history with memory cleanup
   getConversationHistory(userId, maxMessages = 8) {
     const conversation = userConversations.get(userId) || [];
     return conversation.slice(-maxMessages);
@@ -476,9 +677,10 @@ class EnhancedGroqAI {
     
     userConversations.set(userId, conversation);
     
-    setTimeout(() => {
+    // Fixed memory cleanup
+    scheduleCleanup(`conversation_${userId}`, () => {
       userConversations.delete(userId);
-    }, 3 * 60 * 60 * 1000);
+    }, 3 * 60 * 60 * 1000); // 3 hours
   }
 
   getAvailableModels() {
@@ -502,185 +704,19 @@ class EnhancedGroqAI {
   }
 }
 
-// Enhanced AI mode management with MongoDB persistence
-async function getAIMode(userId) {
-  // Check memory first
-  if (aiModeUsers.has(userId)) {
-    return aiModeUsers.get(userId);
-  }
-  
-  // Get from database
-  const settings = await getUserAISettings(userId);
-  const mode = settings.aiMode || AI_MODES.MENTIONS;
-  aiModeUsers.set(userId, mode);
-  return mode;
-}
-
-async function setAIMode(userId, mode) {
-  if (!Object.values(AI_MODES).includes(mode)) {
-    mode = AI_MODES.MENTIONS;
-  }
-  
-  // Update memory
-  aiModeUsers.set(userId, mode);
-  
-  // Update database
-  await updateUserAISettings(userId, { aiMode: mode });
-  return mode;
-}
-
-async function cycleAIMode(userId) {
-  const currentMode = await getAIMode(userId);
-  const modes = Object.values(AI_MODES);
-  const currentIndex = modes.indexOf(currentMode);
-  const nextMode = modes[(currentIndex + 1) % modes.length];
-  return await setAIMode(userId, nextMode);
-}
-
-async function getUserModel(userId) {
-  // Check memory first
-  if (userModels.has(userId)) {
-    return userModels.get(userId);
-  }
-  
-  // Get from database
-  const settings = await getUserAISettings(userId);
-  const model = settings.preferredModel || 'llama-3.3-70b-versatile';
-  userModels.set(userId, model);
-  return model;
-}
-
-async function setUserModel(userId, model) {
-  // Update memory
-  userModels.set(userId, model);
-  
-  // Update database
-  await updateUserAISettings(userId, { preferredModel: model });
-  return model;
-}
-
-// MISSING UTILITY FUNCTIONS - These were causing the error
-function isMessageACommand(messageBody, config) {
-  if (!messageBody || typeof messageBody !== 'string') return false;
-  
-  // Check if message starts with command prefix
-  if (messageBody.startsWith(config.PREFIX)) {
-    return true;
-  }
-  
-  // Check for other command patterns (adapt based on your bot's command structure)
-  const commandPatterns = [
-    /^[.!\/]/,  // Commands starting with ., !, or /
-    /^@\w+/,    // Mentions that might be commands
-  ];
-  
-  return commandPatterns.some(pattern => pattern.test(messageBody));
-}
-
-function isQuotedMessageACommand(quotedMessage, config) {
-  if (!quotedMessage?.body) return false;
-  return isMessageACommand(quotedMessage.body, config);
-}
-
-function isNaturalQuestion(messageBody) {
-  if (!messageBody || typeof messageBody !== 'string') return false;
-  
-  const text = messageBody.toLowerCase().trim();
-  
-  // Direct questions
-  if (text.includes('?')) return true;
-  
-  // Question words
-  const questionWords = ['what', 'how', 'why', 'when', 'where', 'who', 'which', 'whose'];
-  const startsWithQuestion = questionWords.some(word => 
-    text.startsWith(word + ' ') || text.startsWith(word + "'")
-  );
-  
-  // Nigerian question patterns
-  const nigerianQuestions = ['wetin', 'how far', 'which kain', 'na wetin'];
-  const hasNigerianQuestion = nigerianQuestions.some(phrase => text.includes(phrase));
-  
-  // Help requests
-  const helpPatterns = ['help me', 'can you', 'please', 'i need', 'tell me'];
-  const isHelpRequest = helpPatterns.some(phrase => text.includes(phrase));
-  
-  return startsWithQuestion || hasNigerianQuestion || isHelpRequest;
-}
-
+// Main handler function
 export default async function groqHandler(m, sock, config) {
-  // Create enhanced Groq instance
-  const groqAI = new EnhancedGroqAI();
-
-  // Enhanced utility functions (keeping existing ones)
-  function getRandomResponse(responses) {
-    return responses[Math.floor(Math.random() * responses.length)];
-  }
-
-  function getBotIds(sock) {
-    const botUserId = sock.user?.id;
-    if (!botUserId) return [];
-    
-    let botNumber = botUserId;
-    if (botUserId.includes(':')) botNumber = botUserId.split(':')[0];
-    if (botUserId.includes('@')) botNumber = botUserId.split('@')[0];
-    
-    return [...new Set([
-      `${botNumber}@s.whatsapp.net`,
-      `${botNumber}@c.us`,
-      `${botNumber}@lid`,
-      botUserId,
-      botNumber,
-      '19851909324808@s.whatsapp.net',
-      '19851909324808@c.us',
-      '19851909324808@lid',
-      '19851909324808'
-    ])];
-  }
-
-  function isTextMention(messageBody, botIds) {
-    if (!messageBody || typeof messageBody !== 'string') return false;
-    
-    if (messageBody.includes('@19851909324808')) return true;
-    
-    return botIds.some(botId => {
-      const botNumber = botId.split('@')[0];
-      const mentionRegex = new RegExp(`@${botNumber}(?:\\s|$)`, 'i');
-      return mentionRegex.test(messageBody);
-    });
-  }
-
-  function isBotMentioned(mentions, botIds) {
-    if (!mentions || !Array.isArray(mentions) || mentions.length === 0) return false;
-    
-    return mentions.some(mention => {
-      return botIds.some(botId => {
-        if (mention === botId) return true;
-        const mentionNumber = mention.split('@')[0];
-        const botNumber = botId.split('@')[0];
-        return mentionNumber === botNumber || mentionNumber === '19851909324808';
-      });
-    });
-  }
-
-  function isReplyToBot(quotedMessage, botIds) {
-    if (!quotedMessage?.participant) return false;
-    
-    return botIds.some(botId => {
-      if (quotedMessage.participant === botId) return true;
-      const participantNumber = quotedMessage.participant.split('@')[0];
-      const botNumber = botId.split('@')[0];
-      return participantNumber === botNumber || participantNumber === '19851909324808';
-    });
-  }
-
   try {
+    // Create enhanced Groq instance
+    const groqAI = new EnhancedGroqAI();
+    
     const botIds = getBotIds(sock);
     const isMentioned = isBotMentioned(m.mentions, botIds) || isTextMention(m.body, botIds);
     const isReply = isReplyToBot(m.quoted, botIds);
     const aiMode = await getAIMode(m.sender);
     const isGroupChat = m.from.endsWith('@g.us');
     
-    // FIXED: Enhanced command and question detection with proper function definitions
+    // Enhanced command and question detection
     const isCurrentMessageCommand = isMessageACommand(m.body, config);
     const isQuotedMessageCommand = isQuotedMessageACommand(m.quoted, config);
     const isNaturalQuestionMessage = isNaturalQuestion(m.body);
@@ -748,13 +784,13 @@ export default async function groqHandler(m, sock, config) {
         return;
       }
       
-      // Model switching (keep existing logic)
+      // Model switching
       if (command === 'aimodel') {
         const modelName = args[1]?.toLowerCase();
         
         if (!modelName) {
           const models = groqAI.getAvailableModels();
-          const currentModel = userModels.get(m.sender) || 'llama-3.3-70b-versatile';
+          const currentModel = await getUserModel(m.sender);
           
           let modelList = '*🤖 Available AI Models:*\n\n';
           models.forEach(model => {
@@ -793,10 +829,10 @@ export default async function groqHandler(m, sock, config) {
     const shouldRespondContextually = isGroupChat && 
       groqAI.shouldRespondContextually(m, groupContext, aiMode);
     
-    // ENHANCED: Don't respond to replies if the quoted message was a non-AI command
+    // Enhanced: Don't respond to replies if the quoted message was a non-AI command
     const isValidReply = isReply && !isQuotedMessageCommand;
     
-    // ENHANCED: Allow AI commands but filter out other commands in contextual responses
+    // Enhanced: Allow AI commands but filter out other commands in contextual responses
     const shouldRespond = isCommand ||           // Our AI commands always work
                          (isMentioned && !isCurrentMessageCommand) ||  // Mentions (unless it's a non-AI command)
                          isValidReply ||         // Valid replies (not to non-AI commands)
@@ -898,6 +934,8 @@ export default async function groqHandler(m, sock, config) {
           errorMsg = "Slow down small! Too many messages ⏰";
         } else if (error.message.includes('timeout')) {
           errorMsg = "Network slow! Try again 🌐";
+        } else if (error.message.includes('API_KEY')) {
+          errorMsg = "AI service temporarily unavailable 🔧";
         }
 
         await sock.sendMessage(m.from, {
@@ -908,5 +946,27 @@ export default async function groqHandler(m, sock, config) {
 
   } catch (error) {
     console.error('Enhanced Groq Plugin Error:', error);
+    
+    // Send user-friendly error message
+    try {
+      await sock.sendMessage(m.from, {
+        text: '🚨 AI temporarily unavailable. Try again shortly!'
+      }, { quoted: m });
+    } catch (sendError) {
+      console.error('Failed to send error message:', sendError);
+    }
   }
 }
+
+// Cleanup function to prevent memory leaks on module unload
+process.on('SIGTERM', () => {
+  console.log('Cleaning up Groq plugin resources...');
+  cleanupIntervals.forEach(timeoutId => clearTimeout(timeoutId));
+  cleanupIntervals.clear();
+  aiModeUsers.clear();
+  userConversations.clear();
+  userModels.clear();
+  groupMemory.clear();
+  groupMemberProfiles.clear();
+  conversationContext.clear();
+});
