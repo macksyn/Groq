@@ -4,10 +4,10 @@ export function validateConfig() {
   const config = {
     SESSION_ID: process.env.SESSION_ID || '',
     PREFIX: process.env.PREFIX || '.',
-    BOT_NAME: process.env.BOT_NAME || 'Fresh WhatsApp Bot',
+    BOT_NAME: process.env.BOT_NAME || 'Groq AI',
     OWNER_NUMBER: process.env.OWNER_NUMBER?.replace(/[^\d]/g, '') || '',
     ADMIN_NUMBERS: process.env.ADMIN_NUMBERS?.split(',').map(n => n.trim().replace(/[^\d]/g, '')) || [],
-    OWNER_NAME: process.env.OWNER_NAME || 'Bot Owner',
+    OWNER_NAME: process.env.OWNER_NAME || 'Alex Macksyn',
     MODE: (process.env.MODE || 'public').toLowerCase(),
     AUTO_BIO: process.env.AUTO_BIO === 'true',
     AUTO_READ: process.env.AUTO_READ === 'true',
