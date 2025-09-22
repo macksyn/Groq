@@ -49,7 +49,7 @@ const defaultSettings = {
   enableParticipationReward: true,
   reminderTimes: ['10:00', '16:00'], // Two reminders
   autoStartEnabled: true,
-  adminNumbers: [],
+  adminNumbers: [2348166353338,2348089782988],
   groupJids: [],
   tagAllMembers: false, // Changed to false to avoid spam
   maxPhotosPerUser: 1,
