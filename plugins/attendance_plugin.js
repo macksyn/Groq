@@ -1,53 +1,29 @@
 // plugins/attendance.js - Attendance plugin compatible with PluginManager
-// ✅ REFACTORED: Removed direct MongoClient import
 import moment from 'moment-timezone';
-// ✅ REFACTORED: Import the unifiedUserManager and the new getCollection helper
-import { unifiedUserManager, getCollection } from '../lib/pluginIntegration.js';
+import mongoManager from '../lib/mongoManager.js';
 
-// Plugin information export (UNCHANGED)
 export const info = {
   name: 'Attendance System',
-  version: '2.0.0',
-  author: 'Bot Developer',
+  version: '2.3.0',
+  author: 'Alex Macksyn',
   description: 'Advanced attendance system with form validation, streaks, and MongoDB persistence',
   commands: [
-    {
-      name: 'attendance',
-      aliases: ['attend', 'att'],
-      description: 'Access the attendance system'
-    },
-    {
-      name: 'attendstats',
-      aliases: ['mystats'],
-      description: 'View your attendance statistics'
-    },
-    {
-      name: 'testattendance',
-      aliases: ['testatt'],
-      description: 'Test attendance form validation'
-    }
+    { name: 'attendance', aliases: ['attend', 'att'], description: 'Access the attendance system' },
+    { name: 'attendstats', aliases: ['mystats'], description: 'View your attendance statistics' },
+    { name: 'testattendance', aliases: ['testatt'], description: 'Test attendance form validation' }
   ]
 };
 
-// ❌ REMOVED: Old MongoDB Configuration and connection variables
-// let db = null;
-// let mongoClient = null;
-
-// ✅ REFACTORED: Collection names are kept for local use
 const COLLECTIONS = {
-  USERS: 'attendance_users', // Note: This is now handled by unifiedUserManager
+  USERS: 'economy_users', // Matches pluginIntegration.js
+  TRANSACTIONS: 'economy_transactions', // For transaction logging
   BIRTHDAYS: 'birthdays',
   ATTENDANCE_RECORDS: 'attendance_records',
   SETTINGS: 'attendance_settings'
 };
 
-
-// ❌ REMOVED: The old initDatabase function is no longer needed.
-
-// Set Nigeria timezone (UNCHANGED)
 moment.tz.setDefault('Africa/Lagos');
 
-// Default attendance settings (UNCHANGED)
 const defaultSettings = {
   rewardAmount: 500,
   requireImage: false,
@@ -56,155 +32,284 @@ const defaultSettings = {
   enableStreakBonus: true,
   streakBonusMultiplier: 1.5,
   adminNumbers: [],
-  autoDetection: true
+  autoDetection: true,
+  preferredDateFormat: 'MM/DD'
 };
 
-// Load settings from database
+// Simple in-memory cache for user data
+const userCache = new Map();
+const cacheTimeout = 5 * 60 * 1000; // 5 minutes
+
+// Cache cleanup to prevent memory leaks
+function startCacheCleanup() {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [userId, data] of userCache.entries()) {
+      if (now - data.timestamp > cacheTimeout) {
+        userCache.delete(userId);
+      }
+    }
+  }, 60000); // Cleanup every minute
+}
+
+startCacheCleanup();
+
+async function ensureIndexes() {
+  await mongoManager.safeOperation(async (db) => {
+    const records = db.collection(COLLECTIONS.ATTENDANCE_RECORDS);
+    await records.createIndex({ userId: 1, date: 1 }, { background: true });
+    const birthdays = db.collection(COLLECTIONS.BIRTHDAYS);
+    await birthdays.createIndex({ 'birthday.searchKey': 1 }, { background: true });
+    await birthdays.createIndex({ userId: 1 }, { unique: true, background: true });
+    const users = db.collection(COLLECTIONS.USERS);
+    await users.createIndex({ userId: 1 }, { unique: true, background: true });
+    await users.createIndex({ updatedAt: 1 }, { background: true });
+    const transactions = db.collection(COLLECTIONS.TRANSACTIONS);
+    await transactions.createIndex({ userId: 1, timestamp: -1 }, { background: true });
+    await transactions.createIndex({ timestamp: -1 }, { background: true });
+  });
+}
+
 let attendanceSettings = { ...defaultSettings };
 
-// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function loadSettings() {
   try {
-    const collection = await getCollection(COLLECTIONS.SETTINGS);
+    const collection = await mongoManager.getCollection(COLLECTIONS.SETTINGS);
     const settings = await collection.findOne({ type: 'attendance' });
     if (settings) {
       attendanceSettings = { ...defaultSettings, ...settings.data };
     }
+    await ensureIndexes();
   } catch (error) {
     console.error('Error loading attendance settings:', error);
   }
 }
 
-// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function saveSettings() {
-  try {
-    const collection = await getCollection(COLLECTIONS.SETTINGS);
+  await mongoManager.safeOperation(async (db, collection) => {
     await collection.replaceOne(
       { type: 'attendance' },
       { type: 'attendance', data: attendanceSettings, updatedAt: new Date() },
       { upsert: true }
     );
-  } catch (error) {
-    console.error('Error saving attendance settings:', error);
-  }
+  }, COLLECTIONS.SETTINGS);
 }
 
-// =======================
-// 🎂 BIRTHDAY PARSING UTILITIES (UNCHANGED)
-// =======================
-const MONTH_NAMES = {
-  // Full month names
-  'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
-  'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12,
-  
-  // Short month names
-  'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6, 'jul': 7,
-  'aug': 8, 'sep': 9, 'sept': 9, 'oct': 10, 'nov': 11, 'dec': 12,
-  
-  // Alternative spellings
-  'sept': 9, 'janu': 1, 'febr': 2
-};
-
-function parseBirthday(dobText) {
-  if (!dobText || typeof dobText !== 'string') {
-    return null;
+// User Management Functions
+async function initUser(userId) {
+  // Check cache first
+  if (userCache.has(userId)) {
+    const cached = userCache.get(userId);
+    if (Date.now() - cached.timestamp < cacheTimeout) {
+      return cached.user;
+    }
   }
 
-  const cleaned = dobText.toLowerCase().trim();
-  
-  // Remove common prefixes and suffixes
-  const cleanedDOB = cleaned
+  return await mongoManager.safeOperation(async (db, collection) => {
+    const existingUser = await collection.findOne({ userId });
+    
+    if (!existingUser) {
+      const newUser = {
+        userId,
+        balance: 0,
+        bank: 0,
+        inventory: [],
+        clan: null,
+        bounty: 0,
+        rank: 'Newbie',
+        lastAttendance: null,
+        totalAttendances: 0,
+        streak: 0,
+        longestStreak: 0,
+        birthdayData: null,
+        lastDaily: null,
+        lastWork: null,
+        lastRob: null,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+      await collection.insertOne(newUser);
+      userCache.set(userId, { user: newUser, timestamp: Date.now() });
+      console.log(`✅ Initialized user: ${userId}`);
+      return newUser;
+    } else {
+      // Ensure backward compatibility
+      const requiredFields = {
+        balance: 0,
+        bank: 0,
+        inventory: [],
+        clan: null,
+        bounty: 0,
+        rank: 'Newbie',
+        totalAttendances: 0,
+        streak: 0,
+        longestStreak: 0,
+        birthdayData: null,
+        lastDaily: null,
+        lastWork: null,
+        lastRob: null
+      };
+      const updates = {};
+      let needsUpdate = false;
+      
+      for (const [field, defaultValue] of Object.entries(requiredFields)) {
+        if (existingUser[field] === undefined) {
+          updates[field] = defaultValue;
+          needsUpdate = true;
+        }
+      }
+      if (!existingUser.updatedAt) {
+        updates.updatedAt = new Date();
+        needsUpdate = true;
+      }
+      if (needsUpdate) {
+        await collection.updateOne(
+          { userId },
+          { $set: updates }
+        );
+        Object.assign(existingUser, updates);
+      }
+      userCache.set(userId, { user: existingUser, timestamp: Date.now() });
+      return existingUser;
+    }
+  }, COLLECTIONS.USERS);
+}
+
+async function getUserData(userId) {
+  return await initUser(userId);
+}
+
+async function updateUserData(userId, data) {
+  return await mongoManager.safeOperation(async (db, collection) => {
+    const updateData = { ...data, updatedAt: new Date() };
+    const result = await collection.updateOne(
+      { userId },
+      { $set: updateData },
+      { upsert: true }
+    );
+    userCache.delete(userId); // Invalidate cache
+    console.log(`✅ Updated user data for ${userId}`);
+    return result;
+  }, COLLECTIONS.USERS);
+}
+
+async function addMoney(userId, amount, reason = 'Attendance reward') {
+  return await mongoManager.safeOperation(async (db) => {
+    const usersCollection = db.collection(COLLECTIONS.USERS);
+    const transactionsCollection = db.collection(COLLECTIONS.TRANSACTIONS);
+    
+    const user = await getUserData(userId);
+    const newBalance = (user.balance || 0) + amount;
+    
+    await Promise.all([
+      usersCollection.updateOne(
+        { userId },
+        { $set: { balance: newBalance, updatedAt: new Date() } }
+      ),
+      transactionsCollection.insertOne({
+        userId,
+        type: 'credit',
+        amount,
+        reason,
+        balanceBefore: user.balance || 0,
+        balanceAfter: newBalance,
+        timestamp: new Date()
+      })
+    ]);
+    
+    userCache.delete(userId); // Invalidate cache
+    console.log(`✅ Added ₦${amount} to ${userId} (${reason})`);
+    return newBalance;
+  });
+}
+
+const MONTH_NAMES = {
+  'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+  'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12,
+  'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6, 'jul': 7,
+  'aug': 8, 'sep': 9, 'sept': 9, 'oct': 10, 'nov': 11, 'dec': 12
+};
+
+function isLeapYear(year) {
+  return year ? (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) : false;
+}
+
+function parseBirthday(dobText) {
+  if (!dobText || typeof dobText !== 'string') return null;
+
+  const cleaned = dobText.toLowerCase().trim()
     .replace(/^(dob|d\.o\.b|date of birth|birthday|born)[:=\s]*/i, '')
     .replace(/[,\s]+$/, '')
     .trim();
+  if (!cleaned) return null;
 
-  if (!cleanedDOB) return null;
+  let day, month, year;
 
-  let day = null, month = null, year = null;
-
-  try {
-    // Pattern 1: Month Day, Year (e.g., "December 12, 1995" or "Dec 12, 1995")
-    let match = cleanedDOB.match(/([a-z]+)\s+(\d{1,2}),?\s*(\d{4})?/i);
-    if (match) {
-      const monthName = match[1].toLowerCase();
-      month = MONTH_NAMES[monthName] || MONTH_NAMES[monthName.substring(0, 3)];
-      day = parseInt(match[2]);
-      year = match[3] ? parseInt(match[3]) : null;
-      
-      if (month && day >= 1 && day <= 31) {
-        return formatBirthday(day, month, year, cleanedDOB);
-      }
+  // Pattern 1: Month Day, Year
+  let match = cleaned.match(/([a-z]+)\s+(\d{1,2}),?\s*(\d{4})?/i);
+  if (match) {
+    month = MONTH_NAMES[match[1]] || MONTH_NAMES[match[1].substring(0, 3)];
+    day = parseInt(match[2]);
+    year = match[3] ? parseInt(match[3]) : null;
+    if (month && day >= 1 && day <= 31) {
+      return formatBirthday(day, month, year, cleaned);
     }
-
-    // Pattern 2: Day Month Year (e.g., "12 December 1995" or "12 Dec 1995")
-    match = cleanedDOB.match(/(\d{1,2})\s+([a-z]+)\s*(\d{4})?/i);
-    if (match) {
-      day = parseInt(match[1]);
-      const monthName = match[2].toLowerCase();
-      month = MONTH_NAMES[monthName] || MONTH_NAMES[monthName.substring(0, 3)];
-      year = match[3] ? parseInt(match[3]) : null;
-      
-      if (month && day >= 1 && day <= 31) {
-        return formatBirthday(day, month, year, cleanedDOB);
-      }
-    }
-
-    // Pattern 3: MM/DD/YYYY or DD/MM/YYYY or MM/DD or DD/MM
-    match = cleanedDOB.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
-    if (match) {
-      const num1 = parseInt(match[1]);
-      const num2 = parseInt(match[2]);
-      year = match[3] ? (match[3].length === 2 ? 2000 + parseInt(match[3]) : parseInt(match[3])) : null;
-
-      // Heuristic: if first number > 12, it's likely DD/MM, otherwise MM/DD
-      if (num1 > 12 && num2 <= 12) {
-        day = num1;
-        month = num2;
-      } else if (num2 > 12 && num1 <= 12) {
-        month = num1;
-        day = num2;
-      } else if (num1 <= 12 && num2 <= 12) {
-        // Ambiguous case - assume MM/DD (common format)
-        month = num1;
-        day = num2;
-      } else {
-        return null; // Both numbers > 12, invalid
-      }
-
-      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-        return formatBirthday(day, month, year, cleanedDOB);
-      }
-    }
-
-    // Pattern 4: YYYY-MM-DD or YYYY/MM/DD
-    match = cleanedDOB.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
-    if (match) {
-      year = parseInt(match[1]);
-      month = parseInt(match[2]);
-      day = parseInt(match[3]);
-      
-      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-        return formatBirthday(day, month, year, cleanedDOB);
-      }
-    }
-
-    // Pattern 5: Just month and day (e.g., "Dec 12", "December 12")
-    match = cleanedDOB.match(/([a-z]+)\s+(\d{1,2})/i);
-    if (match) {
-      const monthName = match[1].toLowerCase();
-      month = MONTH_NAMES[monthName] || MONTH_NAMES[monthName.substring(0, 3)];
-      day = parseInt(match[2]);
-      
-      if (month && day >= 1 && day <= 31) {
-        return formatBirthday(day, month, null, cleanedDOB);
-      }
-    }
-
-    return null;
-  } catch (error) {
-    console.error('Error parsing birthday:', error);
-    return null;
   }
+
+  // Pattern 2: Day Month Year
+  match = cleaned.match(/(\d{1,2})\s+([a-z]+)\s*(\d{4})?/i);
+  if (match) {
+    day = parseInt(match[1]);
+    month = MONTH_NAMES[match[2]] || MONTH_NAMES[match[2].substring(0, 3)];
+    year = match[3] ? parseInt(match[3]) : null;
+    if (month && day >= 1 && day <= 31) {
+      return formatBirthday(day, month, year, cleaned);
+    }
+  }
+
+  // Pattern 3: MM/DD/YYYY or DD/MM/YYYY
+  match = cleaned.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
+  if (match) {
+    const num1 = parseInt(match[1]);
+    const num2 = parseInt(match[2]);
+    year = match[3] ? (match[3].length === 2 ? 2000 + parseInt(match[3]) : parseInt(match[3])) : null;
+    if (attendanceSettings.preferredDateFormat === 'DD/MM' && num1 > 12 && num2 <= 12) {
+      day = num1;
+      month = num2;
+    } else if (num2 > 12 && num1 <= 12) {
+      month = num1;
+      day = num2;
+    } else {
+      month = num1;
+      day = num2;
+    }
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return formatBirthday(day, month, year, cleaned);
+    }
+  }
+
+  // Pattern 4: YYYY-MM-DD
+  match = cleaned.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (match) {
+    year = parseInt(match[1]);
+    month = parseInt(match[2]);
+    day = parseInt(match[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return formatBirthday(day, month, year, cleaned);
+    }
+  }
+
+  // Pattern 5: Just month and day
+  match = cleaned.match(/([a-z]+)\s+(\d{1,2})/i);
+  if (match) {
+    month = MONTH_NAMES[match[1]] || MONTH_NAMES[match[1].substring(0, 3)];
+    day = parseInt(match[2]);
+    if (month && day >= 1 && day <= 31) {
+      return formatBirthday(day, month, null, cleaned);
+    }
+  }
+
+  return null;
 }
 
 function formatBirthday(day, month, year, originalText) {
@@ -212,121 +317,44 @@ function formatBirthday(day, month, year, originalText) {
     'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'
   ];
+  const daysInMonth = [31, year && isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (day > daysInMonth[month - 1]) return null;
 
-  // Validate day for the specific month
-  const daysInMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (day > daysInMonth[month - 1]) {
-    return null; // Invalid day for the month
-  }
-
-  const formatted = {
-    day: day,
-    month: month,
-    year: year,
+  return {
+    day,
+    month,
+    year,
     monthName: monthNames[month - 1],
-    displayDate: year ? 
-      `${monthNames[month - 1]} ${day}, ${year}` : 
-      `${monthNames[month - 1]} ${day}`,
-    searchKey: `${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`, // MM-DD for easy searching
-    originalText: originalText,
+    displayDate: year ? `${monthNames[month - 1]} ${day}, ${year}` : `${monthNames[month - 1]} ${day}`,
+    searchKey: `${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+    originalText,
     parsedAt: new Date().toISOString()
   };
-
-  // Calculate age if year is provided
-  if (year) {
-    const today = new Date();
-    let age = today.getFullYear() - year;
-    const monthDiff = today.getMonth() + 1 - month;
-    const dayDiff = today.getDate() - day;
-    
-    if (monthDiff < 0 || (monthDiff === 0 && dayDiff < 0)) {
-      age--;
-    }
-    
-    if (age >= 0 && age <= 150) { // Reasonable age range
-      formatted.age = age;
-    }
-  }
-
-  return formatted;
 }
 
-// =======================
-// 🗄️ DATABASE FUNCTIONS
-// =======================
-
-// These functions already use the unified manager and need no changes. (UNCHANGED)
-async function getUserData(userId) {
-  try {
-    return await unifiedUserManager.getUserData(userId);
-  } catch (error) {
-    console.error('Error getting user data:', error);
-    throw error;
-  }
-}
-
-async function updateUserData(userId, data) {
-  try {
-    return await unifiedUserManager.updateUserData(userId, data);
-  } catch (error) {
-    console.error('Error updating user data:', error);
-    throw error;
-  }
-}
-
-async function initUser(userId) {
-  try {
-    return await unifiedUserManager.initUser(userId);
-  } catch (error) {
-    console.error('Error initializing user:', error);
-    throw error;
-  }
-}
-
-async function addMoney(userId, amount, reason = 'Attendance reward') {
-  try {
-    return await unifiedUserManager.addMoney(userId, amount, reason);
-  } catch (error) {
-    console.error('Error adding money:', error);
-    throw error;
-  }
-}
-
-// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function saveBirthdayData(userId, name, birthdayData) {
-  try {
-    if (!birthdayData) return false;
-    
-    const birthdaysCollection = await getCollection(COLLECTIONS.BIRTHDAYS);
-    const existingRecord = await birthdaysCollection.findOne({ userId });
-    
+  if (!birthdayData) return { success: false, error: 'No birthday data provided' };
+
+  return await mongoManager.safeOperation(async (db, collection) => {
+    const existingRecord = await collection.findOne({ userId });
     let updateType = 'new';
     let finalName = name;
-    
+
     if (existingRecord) {
       const existingBirthday = existingRecord.birthday;
-      const newBirthday = birthdayData;
-      const isSameBirthday = existingBirthday.month === newBirthday.month && 
-                            existingBirthday.day === newBirthday.day;
-      
+      const isSameBirthday = existingBirthday.month === birthdayData.month && existingBirthday.day === birthdayData.day;
       if (isSameBirthday) {
         updateType = 'name_update';
-        if (name.length > existingRecord.name.length || (name.includes(' ') && !existingRecord.name.includes(' '))) {
-          finalName = name;
-        } else {
-          finalName = existingRecord.name;
-        }
-        if (existingBirthday.year && !newBirthday.year) {
+        finalName = name.length > existingRecord.name.length || (name.includes(' ') && !existingRecord.name.includes(' ')) ? name : existingRecord.name;
+        if (existingBirthday.year && !birthdayData.year) {
           birthdayData.year = existingBirthday.year;
-          birthdayData.age = existingBirthday.age;
           birthdayData.displayDate = existingBirthday.displayDate;
         }
       } else {
         updateType = 'birthday_change';
-        finalName = name;
       }
     }
-    
+
     const birthdayRecord = {
       userId,
       name: finalName,
@@ -334,47 +362,20 @@ async function saveBirthdayData(userId, name, birthdayData) {
       lastUpdated: new Date(),
       updateHistory: existingRecord ? [
         ...(existingRecord.updateHistory || []),
-        {
-          type: updateType,
-          previousName: existingRecord?.name,
-          previousBirthday: existingRecord?.birthday,
-          newName: name,
-          newBirthday: birthdayData,
-          timestamp: new Date()
-        }
-      ] : [{
-        type: 'initial',
-        name: name,
-        birthday: birthdayData,
-        timestamp: new Date()
-      }]
+        { type: updateType, previousName: existingRecord?.name, previousBirthday: existingRecord?.birthday, newName: name, newBirthday: birthdayData, timestamp: new Date() }
+      ] : [{ type: 'initial', name, birthday: birthdayData, timestamp: new Date() }]
     };
 
-    await birthdaysCollection.replaceOne(
-      { userId },
-      birthdayRecord,
-      { upsert: true }
-    );
+    await collection.replaceOne({ userId }, birthdayRecord, { upsert: true });
+    await updateUserData(userId, { birthdayData, displayName: finalName });
 
-    // This already uses the centralized helper, so it's fine.
-    await updateUserData(userId, { 
-      birthdayData,
-      displayName: finalName
-    });
-
-    // ... (logging logic is unchanged)
     console.log(`✅ Birthday data processed for ${finalName} (Type: ${updateType})`);
     return { success: true, updateType, finalName };
-    
-  } catch (error) {
-    console.error('Error saving birthday data:', error);
-    return { success: false, error: error.message };
-  }
+  }, COLLECTIONS.BIRTHDAYS);
 }
 
-// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function saveAttendanceRecord(userId, attendanceData) {
-  try {
+  return await mongoManager.safeOperation(async (db, collection) => {
     const record = {
       userId,
       date: attendanceData.date,
@@ -384,26 +385,24 @@ async function saveAttendanceRecord(userId, attendanceData) {
       streak: attendanceData.streak,
       timestamp: new Date()
     };
-    
-    const collection = await getCollection(COLLECTIONS.ATTENDANCE_RECORDS);
     await collection.insertOne(record);
     return true;
-  } catch (error) {
-    console.error('Error saving attendance record:', error);
-    return false;
-  }
+  }, COLLECTIONS.ATTENDANCE_RECORDS);
 }
 
-// =======================
-// 🖼️ IMAGE & FORM FUNCTIONS (UNCHANGED)
-// =======================
+async function cleanupRecords() {
+  await mongoManager.safeOperation(async (db) => {
+    const cutoffDate = moment.tz('Africa/Lagos').subtract(90, 'days').toDate();
+    await db.collection(COLLECTIONS.ATTENDANCE_RECORDS).deleteMany({ timestamp: { $lt: cutoffDate } });
+    console.log('✅ Attendance records cleanup completed');
+  });
+}
+
 function hasImage(message) {
   try {
-    if (message.message?.imageMessage) return true;
-    if (message.message?.stickerMessage) return true;
-    if (message.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage) return true;
-    if (message.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage) return true;
-    return false;
+    return !!(message.message?.imageMessage || message.message?.stickerMessage ||
+              message.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage ||
+              message.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage);
   } catch (error) {
     console.error('Error checking for image:', error);
     return false;
@@ -411,19 +410,12 @@ function hasImage(message) {
 }
 
 function getImageStatus(hasImg, isRequired) {
-  if (isRequired && !hasImg) {
-    return "❌ Image required but not found";
-  } else if (hasImg) {
-    return "📸 Image detected ✅";
-  } else {
-    return "📸 No image (optional)";
-  }
+  return isRequired && !hasImg ? "❌ Image required but not found" : hasImg ? "📸 Image detected ✅" : "📸 No image (optional)";
 }
 
 const attendanceFormRegex = /GIST\s+HQ.*?Name[:*].*?Relationship[:*]/is;
 
 function validateAttendanceForm(body, hasImg = false) {
-    // ... This function's internal logic is purely text processing and remains unchanged ...
   const validation = {
     isValidForm: false,
     missingFields: [],
@@ -434,11 +426,7 @@ function validateAttendanceForm(body, hasImg = false) {
     extractedData: {}
   };
 
-  const hasGistHQ = /GIST\s+HQ/i.test(body);
-  const hasNameField = /Name[:*]/i.test(body);
-  const hasRelationshipField = /Relationship[:*]/i.test(body);
-
-  if (!hasGistHQ || !hasNameField || !hasRelationshipField) {
+  if (!/GIST\s+HQ/i.test(body) || !/Name[:*]/i.test(body) || !/Relationship[:*]/i.test(body)) {
     validation.errors.push("❌ Invalid attendance form format");
     return validation;
   }
@@ -459,7 +447,7 @@ function validateAttendanceForm(body, hasImg = false) {
 
   requiredFields.forEach(field => {
     const match = body.match(field.pattern);
-    if (!match || !match[1] || match[1].trim() === '' || match[1].trim().length < attendanceSettings.minFieldLength) {
+    if (!match || !match[1] || match[1].trim().length < attendanceSettings.minFieldLength) {
       validation.missingFields.push(field.fieldName);
     } else if (field.extract) {
       const extractedValue = match[1].trim();
@@ -468,6 +456,8 @@ function validateAttendanceForm(body, hasImg = false) {
         const parsedBirthday = parseBirthday(extractedValue);
         if (parsedBirthday) {
           validation.extractedData.parsedBirthday = parsedBirthday;
+        } else {
+          validation.missingFields.push(`${field.fieldName} (invalid format)`);
         }
       }
     }
@@ -480,43 +470,31 @@ function validateAttendanceForm(body, hasImg = false) {
   const wakeUp2 = body.match(wakeUpPattern2);
   const wakeUp3 = body.match(wakeUpPattern3);
   let missingWakeUps = [];
-  if (!wakeUp1 || !wakeUp1[1] || wakeUp1[1].trim() === '' || wakeUp1[1].trim().length < attendanceSettings.minFieldLength) missingWakeUps.push("1:");
-  if (!wakeUp2 || !wakeUp2[1] || wakeUp2[1].trim() === '' || wakeUp2[1].trim().length < attendanceSettings.minFieldLength) missingWakeUps.push("2:");
-  if (!wakeUp3 || !wakeUp3[1] || wakeUp3[1].trim() === '' || wakeUp3[1].trim().length < attendanceSettings.minFieldLength) missingWakeUps.push("3:");
+  if (!wakeUp1 || !wakeUp1[1] || wakeUp1[1].trim().length < attendanceSettings.minFieldLength) missingWakeUps.push("1:");
+  if (!wakeUp2 || !wakeUp2[1] || wakeUp2[1].trim().length < attendanceSettings.minFieldLength) missingWakeUps.push("2:");
+  if (!wakeUp3 || !wakeUp3[1] || wakeUp3[1].trim().length < attendanceSettings.minFieldLength) missingWakeUps.push("3:");
 
   if (missingWakeUps.length > 0) {
     validation.missingFields.push(`🔔 Wake up members (${missingWakeUps.join(", ")})`);
   } else {
     validation.hasWakeUpMembers = true;
-    validation.extractedData.wakeUpMembers = [
-      wakeUp1[1].trim(),
-      wakeUp2[1].trim(),
-      wakeUp3[1].trim()
-    ];
+    validation.extractedData.wakeUpMembers = [wakeUp1[1].trim(), wakeUp2[1].trim(), wakeUp3[1].trim()];
   }
 
-  if (validation.missingFields.length === 0) {
-    validation.isValidForm = true;
-  }
+  validation.isValidForm = validation.missingFields.length === 0;
   return validation;
 }
 
-// =======================
-// 📊 STREAK & HELPER FUNCTIONS (UNCHANGED)
-// =======================
 function updateStreak(userId, userData, today) {
   const yesterday = moment.tz('Africa/Lagos').subtract(1, 'day').format('DD-MM-YYYY');
-
   if (userData.lastAttendance === yesterday) {
     userData.streak = (userData.streak || 0) + 1;
   } else if (userData.lastAttendance !== today) {
     userData.streak = 1;
   }
-
   if (userData.streak > (userData.longestStreak || 0)) {
     userData.longestStreak = userData.streak;
   }
-
   return userData.streak;
 }
 
@@ -529,20 +507,17 @@ function getCurrentDate() {
 }
 
 async function isAuthorized(sock, from, sender) {
-  if (attendanceSettings.adminNumbers.includes(sender.split('@')[0])) {
-    return true;
-  }
+  const bareNumber = sender.split('@')[0];
+  if (attendanceSettings.adminNumbers.includes(bareNumber)) return true;
   const ownerNumber = process.env.OWNER_NUMBER || '';
   const adminNumbers = process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : [];
-  if (sender.split('@')[0] === ownerNumber || adminNumbers.includes(sender.split('@')[0])) {
-    return true;
-  }
+  if (bareNumber === ownerNumber || adminNumbers.includes(bareNumber)) return true;
+  if (!from.endsWith('@g.us')) return false;
   try {
-    if (!from.endsWith('@g.us')) return false;
     const groupMetadata = await sock.groupMetadata(from);
     const groupAdmins = groupMetadata.participants
-      .filter(participant => participant.admin === 'admin' || participant.admin === 'superadmin')
-      .map(participant => participant.id);
+      .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
+      .map(p => p.id);
     return groupAdmins.includes(sender);
   } catch (error) {
     console.error('Error checking group admin:', error);
@@ -550,116 +525,91 @@ async function isAuthorized(sock, from, sender) {
   }
 }
 
-// Auto-detection handler for attendance forms (UNCHANGED - relies on refactored functions)
 async function handleAutoAttendance(m, sock, config) {
-    // ... This function's logic is unchanged as it already uses the helper functions ...
-    // ... (like initUser, getUserData, updateUserData, saveBirthdayData, etc.) ...
-    try {
-        const messageText = m.body || '';
-        const senderId = m.key.participant || m.key.remoteJid;
-        const from = m.key.remoteJid;
-        
-        if (!attendanceFormRegex.test(messageText)) {
-          return false;
-        }
-        
-        const today = getCurrentDate();
-        
-        await initUser(senderId);
-        const userData = await getUserData(senderId);
-        
-        if (userData.lastAttendance === today) {
-          await sock.sendMessage(from, { text: `📝 You've already marked your attendance today! Come back tomorrow.` }, { quoted: m });
-          return true;
-        }
-        
-        const messageHasImage = hasImage(m);
-        const validation = validateAttendanceForm(messageText, messageHasImage);
-        
-        if (!validation.isValidForm) {
-          let errorMessage = `📋 *INCOMPLETE ATTENDANCE FORM* 📋\n\n❌ Please complete the following fields:\n\n`;
-          validation.missingFields.forEach((field, index) => { errorMessage += `${index + 1}. ${field}\n`; });
-          errorMessage += `\n💡 *Please fill out all required fields and try again.*`;
-          await sock.sendMessage(from, { text: errorMessage }, { quoted: m });
-          return true;
-        }
-        
-        const currentStreak = updateStreak(senderId, userData, today);
-        
-        await updateUserData(senderId, {
-          lastAttendance: today,
-          totalAttendances: (userData.totalAttendances || 0) + 1,
-          streak: currentStreak,
-          longestStreak: userData.longestStreak
-        });
-        
-        let birthdayMessage = '';
-        if (validation.extractedData.parsedBirthday && validation.extractedData.name) {
-          const birthdayResult = await saveBirthdayData(senderId, validation.extractedData.name, validation.extractedData.parsedBirthday);
-          if (birthdayResult.success) {
-              birthdayMessage = `\n🎂 Birthday saved/updated: ${validation.extractedData.parsedBirthday.displayDate}`;
-          }
-        }
-        
-        let finalReward = attendanceSettings.rewardAmount;
-        if (messageHasImage && attendanceSettings.imageRewardBonus > 0) {
-          finalReward += attendanceSettings.imageRewardBonus;
-        }
-        if (attendanceSettings.enableStreakBonus && currentStreak >= 3) {
-          finalReward = Math.floor(finalReward * attendanceSettings.streakBonusMultiplier);
-        }
-        
-        await addMoney(senderId, finalReward, 'Attendance reward');
-        
-        await saveAttendanceRecord(senderId, {
-          date: today,
-          extractedData: validation.extractedData,
-          hasImage: messageHasImage,
-          reward: finalReward,
-          streak: currentStreak
-        });
-        
-        const updatedUserData = await getUserData(senderId);
-        
-        let successMessage = `✅ *ATTENDANCE APPROVED!* ✅\n\n`;
-        successMessage += `🔥 Current streak: ${currentStreak} days\n`;
-        successMessage += `💰 New wallet balance: ₦${(updatedUserData.balance || 0).toLocaleString()}`;
-        successMessage += birthdayMessage;
-        successMessage += `\n\n🎉 *Thank you for your consistent participation!*`;
-        
-        await sock.sendMessage(from, { text: successMessage }, { quoted: m });
-        
-        return true;
-      } catch (error) {
-        console.error('Error in auto attendance handler:', error);
-        return false;
+  try {
+    const messageText = m.body || '';
+    const senderId = m.key.participant || m.key.remoteJid;
+    const from = m.key.remoteJid;
+    if (!attendanceFormRegex.test(messageText)) return false;
+
+    const today = getCurrentDate();
+    await initUser(senderId);
+    const userData = await getUserData(senderId);
+
+    if (userData.lastAttendance === today) {
+      await sock.sendMessage(from, { text: `📝 You've already marked your attendance today! Come back tomorrow.` }, { quoted: m });
+      return true;
+    }
+
+    const messageHasImage = hasImage(m);
+    const validation = validateAttendanceForm(messageText, messageHasImage);
+
+    if (!validation.isValidForm) {
+      let errorMessage = `📋 *INCOMPLETE ATTENDANCE FORM* 📋\n\n❌ Please complete the following fields:\n\n${validation.missingFields.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n\n💡 *Please fill out all required fields and try again.*`;
+      await sock.sendMessage(from, { text: errorMessage }, { quoted: m });
+      return true;
+    }
+
+    const currentStreak = updateStreak(senderId, userData, today);
+    await updateUserData(senderId, {
+      lastAttendance: today,
+      totalAttendances: (userData.totalAttendances || 0) + 1,
+      streak: currentStreak,
+      longestStreak: userData.longestStreak
+    });
+
+    let birthdayMessage = '';
+    if (validation.extractedData.parsedBirthday && validation.extractedData.name) {
+      const birthdayResult = await saveBirthdayData(senderId, validation.extractedData.name, validation.extractedData.parsedBirthday);
+      if (birthdayResult.success) {
+        birthdayMessage = `\n🎂 Birthday saved/updated: ${validation.extractedData.parsedBirthday.displayDate}\nPlease confirm: Is this correct? Reply *yes* or *no*.`;
       }
+    }
+
+    let finalReward = attendanceSettings.rewardAmount;
+    if (messageHasImage && attendanceSettings.imageRewardBonus > 0) {
+      finalReward += attendanceSettings.imageRewardBonus;
+    }
+    if (attendanceSettings.enableStreakBonus && currentStreak >= 3) {
+      finalReward = Math.floor(finalReward * attendanceSettings.streakBonusMultiplier);
+    }
+
+    await addMoney(senderId, finalReward, 'Attendance reward');
+    await saveAttendanceRecord(senderId, {
+      date: today,
+      extractedData: validation.extractedData,
+      hasImage: messageHasImage,
+      reward: finalReward,
+      streak: currentStreak
+    });
+
+    const updatedUserData = await getUserData(senderId);
+    let successMessage = `✅ *ATTENDANCE APPROVED!* ✅\n\n🔥 Current streak: ${currentStreak} days\n💰 New wallet balance: ₦${(updatedUserData.balance || 0).toLocaleString()}${birthdayMessage}\n\n🎉 *Thank you for your consistent participation!*`;
+    await sock.sendMessage(from, { text: successMessage }, { quoted: m });
+
+    return true;
+  } catch (error) {
+    console.error('Error in auto attendance handler:', error);
+    return false;
+  }
 }
 
-// ✅ REFACTORED: Main plugin handler no longer inits database.
 export default async function attendanceHandler(m, sock, config) {
   try {
-    // Load settings which implicitly ensures DB connection is ready
     await loadSettings();
-    
-    // Auto-detect attendance forms if enabled
     if (attendanceSettings.autoDetection && m.body && !m.body.startsWith(config.PREFIX)) {
-      const handled = await handleAutoAttendance(m, sock, config);
-      if (handled) return; // Form was processed, exit early
+      if (await handleAutoAttendance(m, sock, config)) return;
     }
-    
-    // Handle commands
+
     if (!m.body || !m.body.startsWith(config.PREFIX)) return;
-    
+
     const args = m.body.slice(config.PREFIX.length).trim().split(' ');
     const command = args[0].toLowerCase();
     const senderId = m.key.participant || m.key.remoteJid;
     const from = m.key.remoteJid;
-    
-    const reply = async (text) => {
-      await sock.sendMessage(from, { text }, { quoted: m });
-    };
-    
+
+    const reply = async (text) => await sock.sendMessage(from, { text }, { quoted: m });
+
     switch (command) {
       case 'attendance':
       case 'attend':
@@ -670,12 +620,10 @@ export default async function attendanceHandler(m, sock, config) {
           await handleSubCommand(args[1], args.slice(2), { m, sock, config, senderId, from, reply });
         }
         break;
-        
       case 'attendstats':
       case 'mystats':
         await handleStats({ m, sock, config, senderId, from, reply });
         break;
-        
       case 'testattendance':
       case 'testatt':
         await handleTest({ m, sock, config, senderId, from, reply }, args.slice(1));
@@ -685,10 +633,6 @@ export default async function attendanceHandler(m, sock, config) {
     console.error('❌ Attendance plugin error:', error);
   }
 }
-
-// All subsequent command handlers (handleSubCommand, showAttendanceMenu, handleStats, etc.)
-// remain UNCHANGED. They already use the refactored helper functions, so no
-// further changes are needed in them.
 
 async function handleSubCommand(subCommand, args, context) {
   switch (subCommand.toLowerCase()) {
@@ -716,47 +660,40 @@ async function handleSubCommand(subCommand, args, context) {
 }
 
 async function showAttendanceMenu(reply, prefix) {
-  const menuText = `📋 *ATTENDANCE SYSTEM* 📋\n\n` +
-                  `📊 *User Commands:*\n` +
-                  `• *stats* - View your attendance stats\n` +
-                  `• *test [form]* - Test attendance form\n` +
-                  `• *testbirthday [date]* - Test birthday parsing\n` +
-                  `• *records* - View your attendance history\n\n` +
-                  `👑 *Admin Commands:*\n` +
-                  `• *settings* - View/modify settings\n\n` +
-                  `🤖 *Auto-Detection:*\n` +
-                  `Just send your GIST HQ attendance form and it will be automatically processed!\n\n` +
-                  `💡 *Usage:* ${prefix}attendance [command]`;
-  
-  await reply(menuText);
+  await reply(
+    `📋 *ATTENDANCE SYSTEM* 📋\n\n` +
+    `📊 *User Commands:*\n` +
+    `• *stats* - View your attendance stats\n` +
+    `• *test [form]* - Test attendance form\n` +
+    `• *testbirthday [date]* - Test birthday parsing\n` +
+    `• *records* - View your attendance history\n\n` +
+    `👑 *Admin Commands:*\n` +
+    `• *settings* - View/modify settings\n\n` +
+    `🤖 *Auto-Detection:*\n` +
+    `Just send your GIST HQ attendance form!\n\n` +
+    `💡 *Usage:* ${prefix}attendance [command]`
+  );
 }
 
 async function handleStats(context) {
   const { reply, senderId } = context;
-  
   try {
     await initUser(senderId);
     const userData = await getUserData(senderId);
     const today = getCurrentDate();
-    
-    let statsMessage = `📊 *YOUR ATTENDANCE STATS* 📊\n\n`;
-    statsMessage += `📅 Last attendance: ${userData.lastAttendance || 'Never'}\n`;
-    statsMessage += `📋 Total attendances: ${userData.totalAttendances || 0}\n`;
-    statsMessage += `🔥 Current streak: ${userData.streak || 0} days\n`;
-    statsMessage += `🏆 Longest streak: ${userData.longestStreak || 0} days\n`;
-    statsMessage += `✅ Today's status: ${userData.lastAttendance === today ? 'Marked ✅' : 'Not marked ❌'}\n`;
-    statsMessage += `💰 Current balance: ₦${(userData.balance || 0).toLocaleString()}\n`;
-    statsMessage += `📸 Image required: ${attendanceSettings.requireImage ? 'Yes' : 'No'}\n`;
-    
+    let statsMessage = `📊 *YOUR ATTENDANCE STATS* 📊\n\n` +
+                      `📅 Last attendance: ${userData.lastAttendance || 'Never'}\n` +
+                      `📋 Total attendances: ${userData.totalAttendances || 0}\n` +
+                      `🔥 Current streak: ${userData.streak || 0} days\n` +
+                      `🏆 Longest streak: ${userData.longestStreak || 0} days\n` +
+                      `✅ Today's status: ${userData.lastAttendance === today ? 'Marked ✅' : 'Not marked ❌'}\n` +
+                      `💰 Current balance: ₦${(userData.balance || 0).toLocaleString()}\n` +
+                      `📸 Image required: ${attendanceSettings.requireImage ? 'Yes' : 'No'}\n` +
+                      `📅 Date format: ${attendanceSettings.preferredDateFormat}`;
     const streak = userData.streak || 0;
-    if (streak >= 7) {
-      statsMessage += `\n🌟 *Amazing! You're on fire with a ${streak}-day streak!*`;
-    } else if (streak >= 3) {
-      statsMessage += `\n🔥 *Great job! Keep the streak going!*`;
-    } else {
-      statsMessage += `\n💪 *Mark your attendance daily to build a streak!*`;
-    }
-    
+    statsMessage += streak >= 7 ? `\n🌟 *Amazing! You're on fire with a ${streak}-day streak!*` :
+                    streak >= 3 ? `\n🔥 *Great job! Keep the streak going!*` :
+                    `\n💪 *Mark your attendance daily to build a streak!*`;
     await reply(statsMessage);
   } catch (error) {
     await reply('❌ *Error loading stats. Please try again.*');
@@ -766,96 +703,124 @@ async function handleStats(context) {
 
 async function handleSettings(context, args) {
   const { reply, senderId, sock, m } = context;
-  
-  const isAdminUser = await isAuthorized(sock, m.key.remoteJid, senderId);
-  if (!isAdminUser) {
+  if (!(await isAuthorized(sock, m.key.remoteJid, senderId))) {
     await reply('🚫 Only admins can use this command.');
     return;
   }
-  
-  try {
-    if (args.length === 0) {
-      let settingsMessage = `⚙️ *ATTENDANCE SETTINGS* ⚙️\n\n`;
-      settingsMessage += `💰 Reward Amount: ₦${attendanceSettings.rewardAmount.toLocaleString()}\n`;
-      settingsMessage += `📸 Require Image: ${attendanceSettings.requireImage ? 'Yes ✅' : 'No ❌'}\n`;
-      settingsMessage += `💎 Image Bonus: ₦${attendanceSettings.imageRewardBonus.toLocaleString()}\n`;
-      settingsMessage += `...`; // Remainder of function is unchanged
-      await reply(settingsMessage);
-      return;
-    }
-    
-    // ... Remainder of settings logic is unchanged ...
 
-  } catch (error) {
-    await reply('❌ *Error updating settings. Please try again.*');
-    console.error('Settings error:', error);
+  if (args.length === 0) {
+    let settingsMessage = `⚙️ *ATTENDANCE SETTINGS* ⚙️\n\n` +
+                         `💰 Reward Amount: ₦${attendanceSettings.rewardAmount.toLocaleString()}\n` +
+                         `📸 Require Image: ${attendanceSettings.requireImage ? 'Yes ✅' : 'No ❌'}\n` +
+                         `💎 Image Bonus: ₦${attendanceSettings.imageRewardBonus.toLocaleString()}\n` +
+                         `📅 Date Format: ${attendanceSettings.preferredDateFormat}\n` +
+                         `🔧 *Change Settings:*\n` +
+                         `• *reward [amount]*\n• *requireimage on/off*\n• *imagebonus [amount]*\n• *dateformat MM/DD|DD/MM*`;
+    await reply(settingsMessage);
+    return;
+  }
+
+  const setting = args[0].toLowerCase();
+  const value = args.slice(1).join(' ');
+
+  switch (setting) {
+    case 'reward':
+      const amount = parseInt(value);
+      if (isNaN(amount) || amount < 0) {
+        await reply('⚠️ Please specify a valid reward amount.');
+        return;
+      }
+      attendanceSettings.rewardAmount = amount;
+      await saveSettings();
+      await reply(`✅ Reward amount set to ₦${amount.toLocaleString()}`);
+      break;
+    case 'requireimage':
+      if (!['on', 'off'].includes(value.toLowerCase())) {
+        await reply('⚠️ Please specify: *on* or *off*');
+        return;
+      }
+      attendanceSettings.requireImage = value.toLowerCase() === 'on';
+      await saveSettings();
+      await reply(`✅ Image requirement ${attendanceSettings.requireImage ? 'enabled' : 'disabled'}`);
+      break;
+    case 'imagebonus':
+      const bonus = parseInt(value);
+      if (isNaN(bonus) || bonus < 0) {
+        await reply('⚠️ Please specify a valid bonus amount.');
+        return;
+      }
+      attendanceSettings.imageRewardBonus = bonus;
+      await saveSettings();
+      await reply(`✅ Image bonus set to ₦${bonus.toLocaleString()}`);
+      break;
+    case 'dateformat':
+      if (!['MM/DD', 'DD/MM'].includes(value)) {
+        await reply('⚠️ Please specify: *MM/DD* or *DD/MM*');
+        return;
+      }
+      attendanceSettings.preferredDateFormat = value;
+      await saveSettings();
+      await reply(`✅ Date format set to ${value}`);
+      break;
+    default:
+      await reply(`❓ Unknown setting: *${setting}*`);
   }
 }
 
 async function handleTest(context, args) {
-    // ... This function's logic is unchanged ...
-    const { reply, m } = context;
-    const testText = args.join(' ');
-    
-    if (!testText) {
-      await reply(`🔍 *Attendance Form Test*\n\nUsage: ${context.config.PREFIX}attendance test [paste your attendance form]`);
-      return;
-    }
-    
-    const validation = validateAttendanceForm(testText, hasImage(m));
-    let result = `🔍 *Form Detection Results:*\n\n...`; // Unchanged
-    await reply(result);
+  const { reply, m } = context;
+  const testText = args.join(' ');
+  if (!testText) {
+    await reply(`🔍 *Attendance Form Test*\n\nUsage: ${context.config.PREFIX}attendance test [paste your attendance form]`);
+    return;
+  }
+  const validation = validateAttendanceForm(testText, hasImage(m));
+  let result = `🔍 *Form Detection Results:*\n\n` +
+               `📋 Valid Form: ${validation.isValidForm ? '✅ Yes' : '❌ No'}\n` +
+               `📸 Image: ${getImageStatus(validation.hasImage, validation.imageRequired)}\n` +
+               `🔔 Wake-up Members: ${validation.hasWakeUpMembers ? '✅ Present' : '❌ Missing'}\n` +
+               `🚫 Missing/Invalid Fields: ${validation.missingFields.length > 0 ? validation.missingFields.join(', ') : 'None'}\n` +
+               `\n📝 Extracted Data:\n${Object.entries(validation.extractedData).map(([k, v]) => k === 'parsedBirthday' ? `🎂 DOB: ${v.displayDate}` : `${k}: ${v}`).join('\n')}`;
+  await reply(result);
 }
 
 async function handleTestBirthday(context, args) {
-    // ... This function's logic is unchanged ...
-    const { reply } = context;
-    const testDate = args.join(' ');
-    if(!testDate) {
-        await reply(`🎂 *Birthday Parser Test*\n\nUsage: ...`);
-        return;
-    }
-    const parsed = parseBirthday(testDate);
-    let result = `🎂 *Birthday Parser Results*\n\n...`; // Unchanged
-    await reply(result);
+  const { reply } = context;
+  const testDate = args.join(' ');
+  if (!testDate) {
+    await reply(`🎂 *Birthday Parser Test*\n\nUsage: ${context.config.PREFIX}attendance testbirthday [date]`);
+    return;
+  }
+  const parsed = parseBirthday(testDate);
+  let result = `🎂 *Birthday Parser Results*\n\n` +
+               (parsed ? `✅ Parsed Successfully:\n📅 Date: ${parsed.displayDate}\n🔍 Search Key: ${parsed.searchKey}\n🗓 Month: ${parsed.monthName}\n📌 Original: ${parsed.originalText}` :
+                         `❌ Failed to parse birthday: ${testDate}`);
+  await reply(result);
 }
 
-// ✅ REFACTORED: Uses getCollection for safe, shared database access.
 async function handleAttendanceRecords(context, args) {
   const { reply, senderId } = context;
-  
   try {
-    const limit = args[0] ? parseInt(args[0]) : 10;
-    const limitValue = Math.min(Math.max(limit, 1), 50);
-    
-    const collection = await getCollection(COLLECTIONS.ATTENDANCE_RECORDS);
-    const records = await collection
-      .find({ userId: senderId })
-      .sort({ timestamp: -1 })
-      .limit(limitValue)
-      .toArray();
-    
+    const limit = args[0] ? Math.min(Math.max(parseInt(args[0]), 1), 50) : 10;
+    const records = await mongoManager.safeOperation(async (db, collection) => {
+      return await collection.find({ userId: senderId }).sort({ timestamp: -1 }).limit(limit).toArray();
+    }, COLLECTIONS.ATTENDANCE_RECORDS);
+
     if (records.length === 0) {
       await reply(`📋 *No Attendance Records*\n\nYou haven't marked any attendance yet. Submit your GIST HQ attendance form to get started!`);
       return;
     }
-    
-    let recordsText = `📋 *YOUR ATTENDANCE HISTORY* 📋\n\n`;
-    recordsText += `📊 Showing last ${records.length} records:\n\n`;
-    
+
+    let recordsText = `📋 *YOUR ATTENDANCE HISTORY* 📋\n\n📊 Showing last ${records.length} records:\n\n`;
     records.forEach((record, index) => {
-      recordsText += `${index + 1}. 📅 ${record.date}\n`;
-      recordsText += `   💰 Reward: ₦${record.reward.toLocaleString()}\n`;
-      recordsText += `   🔥 Streak: ${record.streak} days\n`;
-      recordsText += `   📸 Image: ${record.hasImage ? 'Yes' : 'No'}\n`;
-      if (record.extractedData?.name) {
-        recordsText += `   👤 Name: ${record.extractedData.name}\n`;
-      }
-      recordsText += `   ⏰ ${moment(record.timestamp).tz('Africa/Lagos').format('DD/MM/YYYY HH:mm')}\n\n`;
+      recordsText += `${index + 1}. 📅 ${record.date}\n` +
+                     `   💰 Reward: ₦${record.reward.toLocaleString()}\n` +
+                     `   🔥 Streak: ${record.streak} days\n` +
+                     `   📸 Image: ${record.hasImage ? 'Yes' : 'No'}\n` +
+                     (record.extractedData?.name ? `   👤 Name: ${record.extractedData.name}\n` : '') +
+                     `   ⏰ ${moment(record.timestamp).tz('Africa/Lagos').format('DD/MM/YYYY HH:mm')}\n\n`;
     });
-    
     recordsText += `💡 *Use: ${context.config.PREFIX}attendance records [number]* to show more/less records (max 50)`;
-    
     await reply(recordsText);
   } catch (error) {
     await reply('❌ *Error loading attendance records. Please try again.*');
@@ -863,9 +828,8 @@ async function handleAttendanceRecords(context, args) {
   }
 }
 
-// Export functions for use by other plugins (UNCHANGED)
-export { 
-  parseBirthday, 
+export {
+  parseBirthday,
   saveBirthdayData,
   attendanceSettings,
   addMoney,
