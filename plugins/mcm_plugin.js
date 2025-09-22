@@ -1,14 +1,14 @@
-// plugins/mcm.js - Man Crush Monday Plugin
-import { PluginHelpers } from '../lib/pluginIntegration.js';
+// plugins/mcm.js - Man Crush Monday Plugin (Unified Database)
+import { getDatabase, safeOperation, unifiedUserManager } from '../lib/pluginIntegration.js';
 import moment from 'moment-timezone';
 import cron from 'node-cron';
 
 // Plugin information export
 export const info = {
   name: 'Man Crush Monday (MCM)',
-  version: '1.0.0',
-  author: 'Alex Macksyn',
-  description: 'Weekly Man Crush Monday contest where gentlemen post pictures and ladies rate them from 1-10. Automatic scheduling with node-cron, winner declaration based on total points, and rewards system.',
+  version: '1.3.0', // Version updated for unified DB
+  author: 'Alex Macksyn (Adapted)',
+  description: 'Weekly Man Crush Monday contest where guys post pictures and ladies rate them from 1-10. Now with unified database and economy.',
   commands: [
     {
       name: 'mcm',
@@ -34,12 +34,8 @@ const COLLECTIONS = {
   MCM_SETTINGS: 'mcm_settings',
   MCM_SESSIONS: 'mcm_sessions',
   MCM_PARTICIPANTS: 'mcm_participants',
-  MCM_RATINGS: 'mcm_ratings',
-  USERS: 'users'
+  MCM_RATINGS: 'mcm_ratings'
 };
-
-// Database reference
-let db = null;
 
 // Set Nigeria timezone
 moment.tz.setDefault('Africa/Lagos');
@@ -55,7 +51,7 @@ const defaultSettings = {
   autoStartEnabled: true,
   adminNumbers: [],
   groupJids: [],
-  tagAllMembers: false,
+  tagAllMembers: false, // Changed to false to avoid spam
   maxPhotosPerUser: 1,
   validRatingRange: { min: 1, max: 10 },
   allowSelfRating: false
@@ -70,28 +66,12 @@ let cronJobs = {
   endSession: null
 };
 
-// Initialize database and settings
-async function initDatabase() {
-  try {
-    db = await PluginHelpers.getDatabase();
-    await PluginHelpers.safeDBOperation(async (db) => {
-      await db.collection(COLLECTIONS.MCM_SESSIONS).createIndex({ date: 1, groupJid: 1 }, { unique: true });
-      await db.collection(COLLECTIONS.MCM_PARTICIPANTS).createIndex({ sessionId: 1, userId: 1 });
-      await db.collection(COLLECTIONS.MCM_RATINGS).createIndex({ sessionId: 1, raterId: 1, participantId: 1 });
-      await db.collection(COLLECTIONS.MCM_RECORDS).createIndex({ date: -1 });
-      await db.collection(COLLECTIONS.USERS).createIndex({ userId: 1 }, { unique: true });
-    });
-    console.log('✅ MongoDB initialized for MCM');
-  } catch (error) {
-    console.error('❌ MongoDB init failed for MCM:', error);
-    throw error;
-  }
-}
-
+// Initialize settings
 async function loadSettings() {
   try {
-    const collection = await PluginHelpers.getCollection(COLLECTIONS.MCM_SETTINGS);
-    const settings = await collection.findOne({ type: 'mcm_config' });
+    const settings = await safeOperation(async (db) => 
+      await db.collection(COLLECTIONS.MCM_SETTINGS).findOne({ type: 'mcm_config' })
+    );
     if (settings) {
       mcmSettings = { ...defaultSettings, ...settings.data };
     }
@@ -102,13 +82,13 @@ async function loadSettings() {
 
 async function saveSettings() {
   try {
-    await PluginHelpers.safeDBOperation(async (db, collection) => {
-      await collection.replaceOne(
+    await safeOperation(async (db) => {
+      await db.collection(COLLECTIONS.MCM_SETTINGS).replaceOne(
         { type: 'mcm_config' },
         { type: 'mcm_config', data: mcmSettings, updatedAt: new Date() },
         { upsert: true }
       );
-    }, COLLECTIONS.MCM_SETTINGS);
+    });
   } catch (error) {
     console.error('Error saving MCM settings:', error);
   }
@@ -119,7 +99,7 @@ function getNigeriaTime() {
 }
 
 function getCurrentDate() {
-  return getNigeriaTime().format('YYYY-MM-DD');
+  return getNigeriaTime().format('YYYY-MM-DD'); // Fixed to ISO format
 }
 
 function isMonday() {
@@ -156,33 +136,10 @@ async function isAuthorized(sock, from, sender) {
   }
 }
 
-// Economy functions
-async function initUser(userId) {
-  try {
-  await PluginHelpers.initUser(userId);
-  } catch (error) {
-    console.error('Error initializing user:', error);
-  }
-}
-
-async function addMoney(userId, amount, reason) {
-  try {
-  await PluginHelpers.addMoney(userId, amount, reason);
-  } catch (error) {
-    console.error('Error adding money:', error);
-  }
-}
-
-async function getUserData(userId) {
-  try {
-  return await PluginHelpers.getUserData(userId);
-  } catch (error) {
-    console.error('Error getting user data:', error);
-    return { balance: 0 };
-  }
-}
-
+// =======================================================================
 // MCM SESSION MANAGEMENT
+// =======================================================================
+
 async function createMCMSession(groupJid) {
   try {
     const today = getCurrentDate();
@@ -201,7 +158,7 @@ async function createMCMSession(groupJid) {
       sessionId,
       date: today,
       groupJid,
-      status: 'active',
+      status: 'active', // active, ended, cancelled
       startedAt: new Date(),
       endedAt: null,
       participants: [],
@@ -251,58 +208,50 @@ async function cancelMCMSession(groupJid) {
   }
 }
 
+// =======================================================================
 // MCM ANNOUNCEMENTS AND REMINDERS
+// =======================================================================
+
 function formatReminderMessage(timeUntil) {
   const messages = [
-    `🔥 *MCM COUNTDOWN IS ON!* 🔥\n\nLadies and gentlemen, welcome to the ultimate charm showdown! 🕺✨\n\nIn just ${timeUntil}, the spotlight turns on for MAN CRUSH MONDAY!\n\n👑 *Gentlemen:* Prepare to impress with your sharp photos – the ladies are waiting to crown the king!\n👀 *Ladies:* Get your ratings ready – 1 to 10, make it count!\n\n💥 Epic prizes: Winner grabs ₦${mcmSettings.winnerReward.toLocaleString()} + bragging rights!\n🎉 Participation vibe: ₦${mcmSettings.participationReward.toLocaleString()} just for joining the fun!\n\nTune in at 8:00 PM sharp – this is YOUR stage! 📺\n#MCMSpotlight #CharmNight #RateTheKings`,
+    `🔥 *MCM COUNTDOWN IS ON!* 🔥\n\nLadies and gentlemen, welcome to the ultimate style showdown! 🕺✨\n\nIn just ${timeUntil}, the spotlight turns on for MAN CRUSH MONDAY!\n\n👑 *Guys:* Prepare to impress with your sharpest photos – the ladies are waiting to crown the king!\n👀 *Ladies:* Get your ratings ready – 1 to 10, make it count!\n\n💥 Epic prizes: Winner grabs ₦${mcmSettings.winnerReward.toLocaleString()} + bragging rights!\n🎉 Participation vibe: ₦${mcmSettings.participationReward.toLocaleString()} just for joining the fun!\n\nTune in at 8:00 PM sharp – this is YOUR stage! 📺\n#MCMSpotlight #StyleNight #RateTheKings`,
 
-    `🎤 *LIVE FROM GIST HQ: MCM PRE-SHOW HYPE!* 🎤\n\nThe clock is ticking... ${timeUntil} until the red carpet rolls out for MAN CRUSH MONDAY! 🌟\n\n💪 *Gentlemen, it's showtime:* Strike a pose, upload your dapper pic, and let the ratings pour in!\n👩‍⚖️ *Ladies, you're the judges:* From 1-10, vote for the ultimate crush!\n\n🏆 Grand prize alert: ₦${mcmSettings.winnerReward.toLocaleString()} for the top gent!\n🎁 Everyone wins: ₦${mcmSettings.participationReward.toLocaleString()} for stepping into the arena!\n\nDon't miss the charisma, the charm, and the declarations at 8:00 PM! 📣\n#MCMLiveEvent #CharmBattle #TuneInNow`
+    `🎤 *MCM IS STARTING SOON!* 🎤\n\nThe clock is ticking... ${timeUntil} until the red carpet rolls out for MAN CRUSH MONDAY! 🌟\n\n👔 *Guys, it's showtime:* Strike a pose, upload your killer pic, and let the ratings pour in!\n💃 *Ladies, you're the judges:* From 1-10, vote for the ultimate crush!\n\n🏆 Grand prize alert: ₦${mcmSettings.winnerReward.toLocaleString()} for the top gentleman!\n🎁 Everyone wins: ₦${mcmSettings.participationReward.toLocaleString()} for stepping into the arena!\n\nDon't miss the style, the charm, and the declarations at 8:00 PM! 📣\n#MCMLiveEvent #StyleShowdown #TuneInNow`
   ];
   
   return messages[Math.floor(Math.random() * messages.length)];
 }
 
 function formatMCMStartMessage() {
-  return `🚨 *BREAKING: MCM IS LIVE ON AIR!* 🚨\n\nWelcome to the most electrifying night of the week – MAN CRUSH MONDAY! 📺💥\n\n🕺 *Gentlemen, take center stage:* Drop your jaw-dropping photo NOW and steal the show!\n👩‍⚖️ *Ladies, the power is yours:* Rate from 1-10 – who will you crown?\n\n⏳ The clock is ticking until 10:00 PM – make every second count!\n💰 Jackpot: Winner scores ₦${mcmSettings.winnerReward.toLocaleString()}!\n🎉 Bonus: ₦${mcmSettings.participationReward.toLocaleString()} for all stars who shine!\n\n📜 *Rules of the Game:*\n• One photo per gent (duplicates? No spotlight!)\n• Ratings 1-10 only – keep it real!\n• Self-rating: ${mcmSettings.allowSelfRating ? 'Go for it!' : 'Hands off your own!'}\n\n💡 *Pro Tip:* Use "8", "He's a 10", or emojis like 🔟 for ratings!\n\nLet the charisma, charm, and votes explode! 🌟\n#MCMLive #GistHQShowdown #CrushHour`;
+  return `🚨 *BREAKING: MCM IS LIVE ON AIR!* 🚨\n\nWelcome to the most stylish night of the week – MAN CRUSH MONDAY! 📺💥\n\n🤵 *Gentlemen, take center stage:* Drop your best photo NOW and own the show!\n👩‍⚖️ *Ladies, the power is yours:* Rate from 1-10 – who will you crown?\n\n⏳ The clock is ticking until 10:00 PM – make every second count!\n💰 Jackpot: Winner scores ₦${mcmSettings.winnerReward.toLocaleString()}!\n🎉 Bonus: ₦${mcmSettings.participationReward.toLocaleString()} for all stars who shine!\n\n📜 *Rules of the Game:*\n• One photo per gent (duplicates? No spotlight!)\n• Ratings 1-10 only – keep it real!\n• Self-rating: ${mcmSettings.allowSelfRating ? 'Go for it!' : 'Hands off your own!'}\n\n💡 *Pro Tip:* Use "8", "He's a 10", or emojis like 🔟 for ratings!\n\nLet the style, charm, and votes explode! 🌟\n#MCMLive #GistHQShowdown #CrushHour`;
 }
 
+// =======================================================================
 // ENHANCED RATING SYSTEM WITH EMOJI SUPPORT
+// =======================================================================
+
 function extractRating(text) {
-  if (text.includes('1️⃣0️⃣')) {
-    return 10;
-  }
+  if (text.includes('1️⃣0️⃣')) return 10;
   
-  const emojiToNumber = {
-    '🔟': 10,
-    '9️⃣': 9,
-    '8️⃣': 8,
-    '7️⃣': 7,
-    '6️⃣': 6,
-    '5️⃣': 5,
-    '4️⃣': 4,
-    '3️⃣': 3,
-    '2️⃣': 2,
-    '1️⃣': 1
-  };
+  const emojiToNumber = { '🔟': 10, '9️⃣': 9, '8️⃣': 8, '7️⃣': 7, '6️⃣': 6, '5️⃣': 5, '4️⃣': 4, '3️⃣': 3, '2️⃣': 2, '1️⃣': 1 };
   
   for (const [emoji, number] of Object.entries(emojiToNumber).reverse()) {
-    if (text.includes(emoji)) {
-      return number;
-    }
+    if (text.includes(emoji)) return number;
   }
   
   const numbers = text.match(/\b([1-9]|10)\b/g);
   if (!numbers) return null;
   
   const rating = parseInt(numbers[numbers.length - 1]);
-  if (rating >= mcmSettings.validRatingRange.min && rating <= mcmSettings.validRatingRange.max) {
-    return rating;
-  }
+  if (rating >= mcmSettings.validRatingRange.min && rating <= mcmSettings.validRatingRange.max) return rating;
   
   return null;
 }
 
+// =======================================================================
 // NODE-CRON SCHEDULING SYSTEM
+// =======================================================================
+
 async function setupMCMCronJobs(sock) {
   try {
     stopAllCronJobs();
@@ -314,10 +263,7 @@ async function setupMCMCronJobs(sock) {
       const cronJob = cron.schedule(cronPattern, async () => {
         console.log(`⏰ MCM Reminder ${index + 1} triggered at ${reminderTime}`);
         await sendMCMReminders(sock);
-      }, {
-        scheduled: false,
-        timezone: 'Africa/Lagos'
-      });
+      }, { scheduled: false, timezone: 'Africa/Lagos' });
       
       cronJobs.reminders.push(cronJob);
       cronJob.start();
@@ -339,10 +285,7 @@ async function setupMCMCronJobs(sock) {
             console.error(`Error auto-starting for ${groupJid}:`, error);
           }
         }
-      }, {
-        scheduled: false,
-        timezone: 'Africa/Lagos'
-      });
+      }, { scheduled: false, timezone: 'Africa/Lagos' });
       
       cronJobs.startSession.start();
       console.log(`✅ MCM Auto-start scheduled`);
@@ -360,14 +303,10 @@ async function setupMCMCronJobs(sock) {
           console.error(`Error auto-ending for ${groupJid}:`, error);
         }
       }
-    }, {
-      scheduled: false,
-      timezone: 'Africa/Lagos'
-    });
+    }, { scheduled: false, timezone: 'Africa/Lagos' });
     
     cronJobs.endSession.start();
     console.log(`✅ MCM Auto-end scheduled`);
-    
     console.log('🎯 All MCM cron jobs setup');
     
   } catch (error) {
@@ -378,17 +317,8 @@ async function setupMCMCronJobs(sock) {
 function stopAllCronJobs() {
   cronJobs.reminders.forEach(job => job && job.stop());
   cronJobs.reminders = [];
-  
-  if (cronJobs.startSession) {
-    cronJobs.startSession.stop();
-    cronJobs.startSession = null;
-  }
-  
-  if (cronJobs.endSession) {
-    cronJobs.endSession.stop();
-    cronJobs.endSession = null;
-  }
-  
+  if (cronJobs.startSession) { cronJobs.startSession.stop(); cronJobs.startSession = null; }
+  if (cronJobs.endSession) { cronJobs.endSession.stop(); cronJobs.endSession = null; }
   console.log('🔄 All MCM cron jobs stopped');
 }
 
@@ -409,10 +339,7 @@ async function sendMCMReminders(sock) {
         const members = await getGroupMembers(sock, groupJid);
         const mentions = mcmSettings.tagAllMembers ? members.map(m => m.id) : [];
         
-        await sock.sendMessage(groupJid, {
-          text: reminderMessage,
-          mentions
-        });
+        await sock.sendMessage(groupJid, { text: reminderMessage, mentions });
         console.log(`✅ MCM reminder sent to ${groupJid}`);
       } catch (error) {
         console.error(`Error sending reminder to ${groupJid}:`, error);
@@ -431,10 +358,7 @@ async function startMCMSession(sock, groupJid) {
     const members = await getGroupMembers(sock, groupJid);
     const mentions = mcmSettings.tagAllMembers ? members.map(m => m.id) : [];
     
-    const sentMessage = await sock.sendMessage(groupJid, {
-      text: startMessage,
-      mentions
-    });
+    const sentMessage = await sock.sendMessage(groupJid, { text: startMessage, mentions });
     
     await safeOperation(async (db) => 
       await db.collection(COLLECTIONS.MCM_SESSIONS).updateOne(
@@ -451,7 +375,10 @@ async function startMCMSession(sock, groupJid) {
   }
 }
 
+// =======================================================================
 // PHOTO SUBMISSION HANDLING
+// =======================================================================
+
 async function handlePhotoSubmission(m, sock) {
   try {
     if (!isMonday()) return false;
@@ -465,9 +392,7 @@ async function handlePhotoSubmission(m, sock) {
     const senderId = m.key.participant || m.key.remoteJid;
     const groupJid = m.key.remoteJid;
     
-    if (!groupJid.endsWith('@g.us')) return false;
-    
-    if (!m.message.imageMessage) return false;
+    if (!groupJid.endsWith('@g.us') || !m.message.imageMessage) return false;
     
     const session = await getCurrentSession(groupJid);
     if (!session) return false;
@@ -509,8 +434,7 @@ async function handlePhotoSubmission(m, sock) {
     );
     
     await sock.sendMessage(groupJid, { react: { text: '✅', key: m.key } });
-    
-    await initUser(senderId);
+    await unifiedUserManager.initUser(senderId); // Use unified user manager
     
     console.log(`📸 MCM photo submitted by ${senderId.split('@')[0]}`);
     return true;
@@ -521,7 +445,10 @@ async function handlePhotoSubmission(m, sock) {
   }
 }
 
+// =======================================================================
 // RATING SUBMISSION HANDLING
+// =======================================================================
+
 async function handleRatingSubmission(m, sock) {
   try {
     if (!isMonday()) return false;
@@ -535,13 +462,9 @@ async function handleRatingSubmission(m, sock) {
     const senderId = m.key.participant || m.key.remoteJid;
     const groupJid = m.key.remoteJid;
     
-    if (!groupJid.endsWith('@g.us')) return false;
-    if (!m.message.extendedTextMessage?.contextInfo?.quotedMessage) return false;
-    
-    if (!m.message.extendedTextMessage.contextInfo.quotedMessage.imageMessage) return false;
+    if (!groupJid.endsWith('@g.us') || !m.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage) return false;
     
     const participantId = m.message.extendedTextMessage.contextInfo.participant;
-    
     if (!participantId) return false;
     
     const session = await getCurrentSession(groupJid);
@@ -563,15 +486,10 @@ async function handleRatingSubmission(m, sock) {
     }
     
     const ratingText = m.body || '';
+    const emojiToNumber = { '🔟': 10, '9️⃣': 9, '8️⃣': 8, '7️⃣': 7, '6️⃣': 6, '5️⃣': 5, '4️⃣': 4, '3️⃣': 3, '2️⃣': 2, '1️⃣': 1 };
+    const hasRatingAttempt = ratingText.match(/\b([1-9]|10)\b/) || Object.keys(emojiToNumber).some(emoji => ratingText.includes(emoji)) || ratingText.includes('1️⃣0️⃣');
     
-    // Check if the message contains a potential rating (numbers or emojis)
-    const hasRatingAttempt = ratingText.match(/\b([1-9]|10)\b/) || 
-                            Object.keys(emojiToNumber).some(emoji => ratingText.includes(emoji)) || 
-                            ratingText.includes('1️⃣0️⃣');
-    
-    if (!hasRatingAttempt) {
-      return false;
-    }
+    if (!hasRatingAttempt) return false;
     
     const rating = extractRating(ratingText);
     
@@ -585,38 +503,19 @@ async function handleRatingSubmission(m, sock) {
     }
     
     const existingRating = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.MCM_RATINGS).findOne({
-        sessionId: session.sessionId,
-        raterId: senderId,
-        participantId: participantId
-      })
+      await db.collection(COLLECTIONS.MCM_RATINGS).findOne({ sessionId: session.sessionId, raterId: senderId, participantId: participantId })
     );
     
     if (existingRating) {
       await safeOperation(async (db) => 
-        await db.collection(COLLECTIONS.MCM_RATINGS).updateOne(
-          { _id: existingRating._id },
-          { $set: { rating, updatedAt: new Date() } }
-        )
+        await db.collection(COLLECTIONS.MCM_RATINGS).updateOne({ _id: existingRating._id }, { $set: { rating, updatedAt: new Date() } })
       );
     } else {
-      const ratingData = {
-        sessionId: session.sessionId,
-        raterId: senderId,
-        raterPhone: senderId.split('@')[0],
-        participantId: participantId,
-        participantPhone: participantId.split('@')[0],
-        rating,
-        createdAt: new Date()
-      };
-      
-      await safeOperation(async (db) => 
-        await db.collection(COLLECTIONS.MCM_RATINGS).insertOne(ratingData)
-      );
+      const ratingData = { sessionId: session.sessionId, raterId: senderId, raterPhone: senderId.split('@')[0], participantId: participantId, participantPhone: participantId.split('@')[0], rating, createdAt: new Date() };
+      await safeOperation(async (db) => await db.collection(COLLECTIONS.MCM_RATINGS).insertOne(ratingData));
     }
     
     await updateParticipantRatings(session.sessionId, participantId);
-    
     await sock.sendMessage(groupJid, { react: { text: '✅', key: m.key } });
     
     console.log(`⭐ MCM rating ${rating} by ${senderId.split('@')[0]} to ${participantId.split('@')[0]}`);
@@ -641,28 +540,22 @@ async function updateParticipantRatings(sessionId, participantId) {
     await safeOperation(async (db) => 
       await db.collection(COLLECTIONS.MCM_PARTICIPANTS).updateOne(
         { sessionId, userId: participantId },
-        {
-          $set: {
-            totalRating,
-            averageRating: Math.round(averageRating * 100) / 100,
-            ratingCount,
-            updatedAt: new Date()
-          }
-        }
+        { $set: { totalRating, averageRating: Math.round(averageRating * 100) / 100, ratingCount, updatedAt: new Date() } }
       )
     );
-    
   } catch (error) {
     console.error('Error updating ratings:', error);
   }
 }
 
-// Utility for delays
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// =======================================================================
 // END MCM SESSION AND DECLARE WINNER
+// =======================================================================
+
 async function endMCMSession(sock, groupJid) {
   try {
     const session = await getCurrentSession(groupJid);
@@ -675,92 +568,60 @@ async function endMCMSession(sock, groupJid) {
     
     if (participants.length === 0) {
       await sock.sendMessage(groupJid, { text: `🕺 *MCM SESSION ENDED* 🕺\n\n❌ No participants today!\n\nBetter luck next Monday! 💪` });
-      
       await safeOperation(async (db) => 
-        await db.collection(COLLECTIONS.MCM_SESSIONS).updateOne(
-          { sessionId: session.sessionId },
-          { $set: { status: 'ended', endedAt: new Date(), winnerDeclared: true } }
-        )
+        await db.collection(COLLECTIONS.MCM_SESSIONS).updateOne({ sessionId: session.sessionId }, { $set: { status: 'ended', endedAt: new Date(), winnerDeclared: true } })
       );
-      
       return true;
     }
     
     if (mcmSettings.enableParticipationReward) {
       for (const participant of participants) {
-        await addMoney(participant.userId, mcmSettings.participationReward, 'MCM participation');
+        await unifiedUserManager.addMoney(participant.userId, mcmSettings.participationReward, 'MCM participation');
       }
     }
     
     const maxTotal = participants[0].totalRating;
     const winners = participants.filter(p => p.totalRating === maxTotal);
-    
-    const hasValidRatings = winners[0].ratingCount > 0;
+    const hasValidRatings = winners.length > 0 && winners[0].ratingCount > 0;
     
     const members = await getGroupMembers(sock, groupJid);
     const mentions = mcmSettings.tagAllMembers ? members.map(m => m.id) : [];
     const participantMentions = participants.map(p => p.userId);
     
     await sock.sendMessage(groupJid, {
-      text: `🎬 *AND THAT'S A WRAP ON TONIGHT'S MCM!* 🎬\n\nLadies and gentlemen, what a thrilling episode! The votes are in, the charisma has peaked... now sit back, grab some popcorn 🍿, as our judges tally the ratings in the control room!\n\nStay tuned – results dropping in just a moment! 📊🔥\n#MCMFinale #GistHQAfterShow`,
+      text: `🎬 *AND THAT'S A WRAP ON TONIGHT'S MCM!* 🎬\n\nLadies and gentlemen, what a thrilling show! The votes are in... now sit back as our judges tally the ratings!\n\nStay tuned – results dropping in a moment! 📊🔥\n#MCMFinale #GistHQAfterShow`,
       mentions
     });
     
     await delay(60000);
     
-    let resultsMessage = `📣 *OFFICIAL MCM SCOREBOARD – ${getCurrentDate()}* 📣\n\nFrom the Gist HQ studios, here are the final tallies for tonight's charm extravaganza! 🌟\n\n📊 *COMPLETE STANDINGS (Total Points):*\n\n`;
-    
-    participants.forEach((participant, index) => {
-      const position = index + 1;
-      const emoji = position === 1 ? '👑' : position === 2 ? '🥈' : position === 3 ? '🥉' : '🏅';
-      const avgRating = participant.averageRating > 0 ? participant.averageRating.toFixed(1) : '0.0';
-      
-      resultsMessage += `${emoji} #${position} @${participant.userPhone}\n`;
-      resultsMessage += `   ⭐ Total Points: ${participant.totalRating} (${participant.ratingCount} votes, avg ${avgRating}/10)\n\n`;
+    let resultsMessage = `📣 *OFFICIAL MCM SCOREBOARD – ${getCurrentDate()}* 📣\n\nFrom the Gist HQ studios, here are the final tallies for tonight's style showdown! 🌟\n\n📊 *COMPLETE STANDINGS (Total Points):*\n\n`;
+    participants.forEach((p, i) => {
+      const pos = i + 1;
+      const emoji = pos === 1 ? '👑' : pos === 2 ? '🥈' : pos === 3 ? '🥉' : '🏅';
+      const avg = p.averageRating > 0 ? p.averageRating.toFixed(1) : '0.0';
+      resultsMessage += `${emoji} #${pos} @${p.userPhone}\n   ⭐ Total Points: ${p.totalRating} (${p.ratingCount} votes, avg ${avg}/10)\n\n`;
     });
-    
-    await sock.sendMessage(groupJid, {
-      text: resultsMessage,
-      mentions: participantMentions
-    });
+    await sock.sendMessage(groupJid, { text: resultsMessage, mentions: participantMentions });
     
     await delay(5000);
     
     if (hasValidRatings) {
-      let winnerMessage = `🥁 *DRUMROLL PLEASE... THE MOMENT YOU'VE BEEN WAITING FOR!* 🥁\n\nFrom the edge-of-your-seat ratings, emerging victorious in tonight's MCM showdown...\n\n`;
-      
+      let winnerMessage = `🥁 *DRUMROLL PLEASE... THE MOMENT YOU'VE BEEN WAITING FOR!* 🥁\n\nFrom the ratings, emerging victorious in tonight's MCM showdown...\n\n`;
       if (winners.length > 1) {
         winnerMessage += `🎉 *IT'S A TIE FOR THE CROWN!* 👑\n\nOur co-kings of the night:\n`;
+        winners.forEach(w => { winnerMessage += `• @${w.userPhone} with an epic ${w.totalRating} points! 🌟\n`; });
+        winnerMessage += `\nCongrats to our tied champions – you rocked the stage! 🕺🔥\n\n`;
+        await sock.sendMessage(groupJid, { text: winnerMessage, mentions: winners.map(w => w.userId) });
         for (const winner of winners) {
-          winnerMessage += `• @${winner.userPhone} with an epic ${winner.totalRating} points! 🌟\n`;
-        }
-        winnerMessage += `\nWhat a nail-biter! Congrats to our tied champions – you owned the stage! 🕺🔥\n\n`;
-        
-        await sock.sendMessage(groupJid, {
-          text: winnerMessage,
-          mentions: winners.map(w => w.userId)
-        });
-        
-        for (const winner of winners) {
-          await sock.sendMessage(groupJid, {
-            text: `👏 Spotlight on our winner @${winner.userPhone}! Here's the photo that stole the show: 📸`,
-            mentions: [winner.userId]
-          }, { quoted: { key: winner.messageKey, message: { imageMessage: {} } } });
+          await sock.sendMessage(groupJid, { text: `👏 Spotlight on our winner @${winner.userPhone}! Here's the photo that stole the show: 📸`, mentions: [winner.userId] }, { quoted: { key: winner.messageKey, message: { imageMessage: {} } } });
           await delay(2000);
         }
       } else {
         const winner = winners[0];
-        winnerMessage += `👑 *THE UNDISPUTED MCM CHAMPION: @${winner.userPhone} with ${winner.totalRating} points!* 👑\n\nWhat a performance! You owned the night – congrats on your well-deserved victory! 🎊💥\n\n`;
-        
-        await sock.sendMessage(groupJid, {
-          text: winnerMessage,
-          mentions: [winner.userId]
-        });
-        
-        await sock.sendMessage(groupJid, {
-          text: `📸 Relive the winning glow! Here's @${winner.userPhone}'s stunning entry that captured hearts: ✨`,
-          mentions: [winner.userId]
-        }, { quoted: { key: winner.messageKey, message: { imageMessage: {} } } });
+        winnerMessage += `👑 *THE UNDISPUTED MCM CHAMPION: @${winner.userPhone} with ${winner.totalRating} points!* 👑\n\nWhat a performance! Congrats on your victory! 🎊💥\n\n`;
+        await sock.sendMessage(groupJid, { text: winnerMessage, mentions: [winner.userId] });
+        await sock.sendMessage(groupJid, { text: `📸 Relive the winning moment! Here's @${winner.userPhone}'s awesome entry: ✨`, mentions: [winner.userId] }, { quoted: { key: winner.messageKey, message: { imageMessage: {} } } });
       }
       
       await delay(5000);
@@ -768,56 +629,31 @@ async function endMCMSession(sock, groupJid) {
       const prizePerWinner = mcmSettings.winnerReward / winners.length;
       let rewardMessage = `💰 *PRIZE TIME FROM GIST HQ!* 💰\n\n`;
       if (winners.length > 1) {
-        rewardMessage += `Our tied winners each take home ₦${prizePerWinner.toLocaleString()} – split the glory and the gold! 🏆\n\n`;
+        rewardMessage += `Our tied winners each take home ₦${prizePerWinner.toLocaleString()}! 🏆\n\n`;
       } else {
-        rewardMessage += `Our champion @${winners[0].userPhone} pockets ₦${mcmSettings.winnerReward.toLocaleString()} – treat yourself, king! 👑\n\n`;
+        rewardMessage += `Our champion @${winners[0].userPhone} pockets ₦${mcmSettings.winnerReward.toLocaleString()} – enjoy it, king! 🤴\n\n`;
       }
-      rewardMessage += `Plus, shoutout to all participants for the ₦${mcmSettings.participationReward.toLocaleString()} vibe check! 🎁\n\nWhat a payout!`;
-      
-      await sock.sendMessage(groupJid, {
-        text: rewardMessage,
-        mentions: winners.map(w => w.userId)
-      });
+      rewardMessage += `Plus, shoutout to all participants for the ₦${mcmSettings.participationReward.toLocaleString()} reward! 🎁`;
+      await sock.sendMessage(groupJid, { text: rewardMessage, mentions: winners.map(w => w.userId) });
     } else {
-      await sock.sendMessage(groupJid, {
-        text: `😔 *NO RATINGS TONIGHT – THE CROWN STAYS VACANT!* 😔\n\nWhat a twist! Better luck next time, stars. No winner declared, but thanks for the energy! 🌟`
-      });
+      await sock.sendMessage(groupJid, { text: `😔 *NO RATINGS TONIGHT – THE CROWN STAYS VACANT!* 😔\n\nBetter luck next time, stars! No winner declared. 🌟` });
     }
     
     await delay(60000);
     
     await sock.sendMessage(groupJid, {
-      text: `🙌 *THAT'S ALL FROM MCM TONIGHT!* 🙌\n\nFrom the Gist HQ team: A massive thank you to all our dashing participants, sharp-eyed raters, and everyone who tuned in! You made this episode legendary! 🎉\n\nSame time next Monday at 8:00 PM – get ready for more charisma, more charm, more crushes! Until then, keep shining! ✨\n#MCMSignOff #SeeYouNextWeek #GistHQForever`,
+      text: `🙌 *THAT'S ALL FROM MCM TONIGHT!* 🙌\n\nA massive thank you to all participants, raters, and everyone who tuned in! 🎉\n\nSame time next Monday at 8:00 PM – get ready for more style and more crushes! Until then, keep shining! ✨\n#MCMSignOff #SeeYouNextWeek #GistHQForever`,
       mentions
     });
     
     const recordData = {
-      date: getCurrentDate(),
-      groupJid,
-      sessionId: session.sessionId,
-      totalParticipants: participants.length,
-      winners: hasValidRatings ? winners.map(w => ({
-        userId: w.userId,
-        userPhone: w.userPhone,
-        totalRating: w.totalRating,
-        averageRating: w.averageRating,
-        ratingCount: w.ratingCount,
-        prizeAwarded: mcmSettings.winnerReward / winners.length
-      })) : [],
-      participants,
-      createdAt: new Date()
+      date: getCurrentDate(), groupJid, sessionId: session.sessionId, totalParticipants: participants.length,
+      winners: hasValidRatings ? winners.map(w => ({ userId: w.userId, userPhone: w.userPhone, totalRating: w.totalRating, averageRating: w.averageRating, ratingCount: w.ratingCount, prizeAwarded: mcmSettings.winnerReward / winners.length })) : [],
+      participants, createdAt: new Date()
     };
     
-    await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.MCM_RECORDS).insertOne(recordData)
-    );
-    
-    await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.MCM_SESSIONS).updateOne(
-        { sessionId: session.sessionId },
-        { $set: { status: 'ended', endedAt: new Date(), winnerDeclared: true } }
-      )
-    );
+    await safeOperation(async (db) => await db.collection(COLLECTIONS.MCM_RECORDS).insertOne(recordData));
+    await safeOperation(async (db) => await db.collection(COLLECTIONS.MCM_SESSIONS).updateOne({ sessionId: session.sessionId }, { $set: { status: 'ended', endedAt: new Date(), winnerDeclared: true } }));
     
     console.log(`✅ MCM session ended for ${groupJid}`);
     return true;
@@ -828,9 +664,12 @@ async function endMCMSession(sock, groupJid) {
   }
 }
 
+// =======================================================================
 // COMMAND HANDLERS
+// =======================================================================
+
 async function showMCMMenu(reply, prefix) {
-  const nextMCM = moment().startOf('week').add(1, 'days').format('dddd, MMMM DD, YYYY');
+  const nextMCM = moment().day(1).isBefore(moment()) ? moment().day(1).add(1, 'week').format('dddd, MMMM DD, YYYY') : moment().day(1).format('dddd, MMMM DD, YYYY');
   
   const menuText = `🕺 *MAN CRUSH MONDAY (MCM)* 🕺\n\n` +
                   `📊 *User Commands:*\n` +
@@ -843,7 +682,7 @@ async function showMCMMenu(reply, prefix) {
                   `• *end* - End current MCM\n` +
                   `• *cancel* - Cancel current MCM\n` +
                   `• *addgroup* - Add current group to MCM\n` +
-                  `• *removegroup* - Remove current group from MCM\n` +
+                  `• *removegroup* - Remove current group\n` +
                   `• *addadmin <number>* - Add admin\n` +
                   `• *removeadmin <number>* - Remove admin\n` +
                   `• *settings* - System settings\n` +
@@ -862,14 +701,10 @@ async function showMCMMenu(reply, prefix) {
 
 async function handleMCMStart(context) {
   const { reply, senderId, sock, from } = context;
-  
   if (!await isAuthorized(sock, from, senderId)) return reply('🚫 Only admins can start MCM.');
-  
   if (!from.endsWith('@g.us')) return reply('❌ MCM in groups only.');
-  
   try {
     if (await getCurrentSession(from)) return reply('🕺 MCM already active!');
-    
     await startMCMSession(sock, from);
     await reply('✅ MCM started manually!');
   } catch (error) {
@@ -880,11 +715,8 @@ async function handleMCMStart(context) {
 
 async function handleMCMEnd(context) {
   const { reply, senderId, sock, from } = context;
-  
   if (!await isAuthorized(sock, from, senderId)) return reply('🚫 Only admins can end MCM.');
-  
   if (!from.endsWith('@g.us')) return reply('❌ MCM in groups only.');
-  
   try {
     const success = await endMCMSession(sock, from);
     if (success) return reply('✅ MCM ended and results declared!');
@@ -897,11 +729,8 @@ async function handleMCMEnd(context) {
 
 async function handleMCMCancel(context) {
   const { reply, senderId, sock, from } = context;
-  
   if (!await isAuthorized(sock, from, senderId)) return reply('🚫 Only admins can cancel MCM.');
-  
   if (!from.endsWith('@g.us')) return reply('❌ MCM in groups only.');
-  
   try {
     const success = await cancelMCMSession(from);
     if (success) {
@@ -917,53 +746,30 @@ async function handleMCMCancel(context) {
 
 async function handleMCMCurrent(context) {
   const { reply, from } = context;
-  
   if (!from.endsWith('@g.us')) return reply('❌ MCM status in groups only.');
-  
   try {
     const session = await getCurrentSession(from);
-    
     if (!session) {
-      const nextMCM = isMonday() 
-        ? `Today at ${mcmSettings.startTime}`
-        : moment().startOf('week').add(1, 'week').add(1, 'days').format('dddd, MMMM DD') + ` at ${mcmSettings.startTime}`;
+      const nextMCM = isMonday() ? `Today at ${mcmSettings.startTime}` : moment().day(1).add(1, 'week').format('dddd, MMMM DD') + ` at ${mcmSettings.startTime}`;
       return reply(`📅 *No active MCM*\n\n🕺 *Next:* ${nextMCM}\n💰 *Winner:* ₦${mcmSettings.winnerReward.toLocaleString()}`);
     }
-    
-    const participants = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.MCM_PARTICIPANTS).find({ sessionId: session.sessionId })
-        .sort({ totalRating: -1, ratingCount: -1 }).toArray()
-    );
-    
-    const totalRatings = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.MCM_RATINGS).countDocuments({ sessionId: session.sessionId })
-    );
-    
-    let statusMessage = `🕺 *MCM LIVE STATUS* 🕺\n\n`;
-    statusMessage += `📅 Date: ${session.date}\n`;
-    statusMessage += `🕐 Started: ${moment(session.startedAt).format('HH:mm')}\n`;
-    statusMessage += `⏰ Ends: ${mcmSettings.endTime}\n\n`;
-    statusMessage += `👥 Participants: ${participants.length}\n`;
-    statusMessage += `⭐ Total Ratings: ${totalRatings}\n\n`;
-    
+    const participants = await safeOperation(async (db) => await db.collection(COLLECTIONS.MCM_PARTICIPANTS).find({ sessionId: session.sessionId }).sort({ totalRating: -1, ratingCount: -1 }).toArray());
+    const totalRatings = await safeOperation(async (db) => await db.collection(COLLECTIONS.MCM_RATINGS).countDocuments({ sessionId: session.sessionId }));
+    let statusMessage = `🕺 *MCM LIVE STATUS* 🕺\n\n📅 Date: ${session.date}\n🕐 Started: ${moment(session.startedAt).format('HH:mm')}\n⏰ Ends: ${mcmSettings.endTime}\n\n👥 Participants: ${participants.length}\n⭐ Total Ratings: ${totalRatings}\n\n`;
     if (participants.length > 0) {
       statusMessage += `📊 *Current Standings (Total Points):*\n`;
       participants.slice(0, 5).forEach((p, i) => {
         const pos = i + 1;
         const emoji = pos === 1 ? '👑' : pos === 2 ? '🥈' : pos === 3 ? '🥉' : '🏅';
         const avg = p.averageRating > 0 ? p.averageRating.toFixed(1) : '0.0';
-        
         statusMessage += `${emoji} ${pos}. +${p.userPhone} - ${p.totalRating} pts (${p.ratingCount} ratings, avg ${avg})\n`;
       });
       if (participants.length > 5) statusMessage += `... and ${participants.length - 5} more\n`;
     } else {
       statusMessage += `❌ *No participants yet!*\n`;
     }
-    
     statusMessage += `\n💰 *Winner gets ₦${mcmSettings.winnerReward.toLocaleString()}!*`;
-    
     await reply(statusMessage);
-    
   } catch (error) {
     await reply('❌ Error loading status.');
     console.error('MCM current error:', error);
@@ -972,52 +778,16 @@ async function handleMCMCurrent(context) {
 
 async function handleMCMStats(context) {
   const { reply, senderId } = context;
-  
   try {
-    const stats = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.MCM_RECORDS).aggregate([
-        { $unwind: '$participants' },
-        { $match: { 'participants.userId': senderId } },
-        { $group: {
-            _id: null,
-            participationCount: { $sum: 1 },
-            totalRatingsReceived: { $sum: '$participants.ratingCount' },
-            totalPoints: { $sum: '$participants.totalRating' },
-            bestRating: { $max: '$participants.averageRating' }
-          } }
-      ]).toArray()
-    );
-    
-    const winStats = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.MCM_RECORDS).aggregate([
-        { $unwind: '$winners' },
-        { $match: { 'winners.userId': senderId } },
-        { $group: { _id: null, winsCount: { $sum: 1 } } }
-      ]).toArray()
-    );
-    
+    const stats = await safeOperation(async (db) => await db.collection(COLLECTIONS.MCM_RECORDS).aggregate([{ $unwind: '$participants' }, { $match: { 'participants.userId': senderId } }, { $group: { _id: null, participationCount: { $sum: 1 }, totalRatingsReceived: { $sum: '$participants.ratingCount' }, totalPoints: { $sum: '$participants.totalRating' }, bestRating: { $max: '$participants.averageRating' } } }]).toArray());
+    const winStats = await safeOperation(async (db) => await db.collection(COLLECTIONS.MCM_RECORDS).aggregate([{ $unwind: '$winners' }, { $match: { 'winners.userId': senderId } }, { $group: { _id: null, winsCount: { $sum: 1 } } }]).toArray());
     const { participationCount = 0, totalRatingsReceived = 0, totalPoints = 0, bestRating = 0 } = stats[0] || {};
     const { winsCount = 0 } = winStats[0] || {};
     const averageRating = totalRatingsReceived > 0 ? (totalPoints / totalRatingsReceived).toFixed(1) : '0.0';
     const winRate = participationCount > 0 ? ((winsCount / participationCount) * 100).toFixed(1) : '0.0';
-    
-    const userData = await getUserData(senderId);
-    
-    let statsMessage = `📊 *YOUR MCM STATISTICS* 📊\n\n`;
-    statsMessage += `🕺 *Participation:*\n`;
-    statsMessage += `• Total: ${participationCount}\n`;
-    statsMessage += `• Wins: ${winsCount} 👑\n`;
-    statsMessage += `• Win rate: ${winRate}%\n\n`;
-    statsMessage += `⭐ *Ratings:*\n`;
-    statsMessage += `• Total received: ${totalRatingsReceived}\n`;
-    statsMessage += `• Average: ${averageRating}/10\n`;
-    statsMessage += `• Best: ${bestRating.toFixed(1)}/10\n\n`;
-    statsMessage += `💰 *Financial:*\n`;
-    statsMessage += `• Balance: ₦${(userData.balance || 0).toLocaleString()}\n`;
-    statsMessage += `• MCM winnings: ₦${(winsCount * mcmSettings.winnerReward).toLocaleString()}`;
-    
+    const userData = await unifiedUserManager.getUserData(senderId);
+    let statsMessage = `📊 *YOUR MCM STATISTICS* 📊\n\n🕺 *Participation:*\n• Total: ${participationCount}\n• Wins: ${winsCount} 👑\n• Win rate: ${winRate}%\n\n⭐ *Ratings:*\n• Total received: ${totalRatingsReceived}\n• Average: ${averageRating}/10\n• Best: ${bestRating.toFixed(1)}/10\n\n💰 *Financial:*\n• Balance: ₦${(userData.balance || 0).toLocaleString()}\n• MCM winnings: ₦${(winsCount * mcmSettings.winnerReward).toLocaleString()}`;
     await reply(statsMessage);
-    
   } catch (error) {
     await reply('❌ Error loading stats.');
     console.error('MCM stats error:', error);
@@ -1026,39 +796,24 @@ async function handleMCMStats(context) {
 
 async function handleMCMHistory(context, args) {
   const { reply } = context;
-  
   try {
     const limit = args[0] ? Math.min(parseInt(args[0]), 10) : 5;
-    
-    const records = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.MCM_RECORDS).find({})
-        .sort({ date: -1 })
-        .limit(limit)
-        .toArray()
-    );
-    
+    const records = await safeOperation(async (db) => await db.collection(COLLECTIONS.MCM_RECORDS).find({}).sort({ date: -1 }).limit(limit).toArray());
     if (records.length === 0) return reply('📅 *No MCM history.*');
-    
     let historyMessage = `📚 *MCM HISTORY (Last ${records.length})* 📚\n\n`;
-    
     records.forEach((record, i) => {
       historyMessage += `${i + 1}. 📅 ${record.date}\n`;
       if (record.winners && record.winners.length > 0) {
         historyMessage += `   👑 Winners:\n`;
-        record.winners.forEach(w => {
-          historyMessage += `     • +${w.userPhone} (${w.totalRating} pts)\n`;
-        });
+        record.winners.forEach(w => { historyMessage += `     • +${w.userPhone} (${w.totalRating} pts)\n`; });
         historyMessage += `   💰 Prize each: ₦${record.winners[0].prizeAwarded.toLocaleString()}\n`;
       } else {
         historyMessage += `   🤷‍♂️ No winner\n`;
       }
       historyMessage += `   👥 Participants: ${record.totalParticipants}\n\n`;
     });
-    
     historyMessage += `💡 Use *mcm history [number]* for more`;
-    
     await reply(historyMessage);
-    
   } catch (error) {
     await reply('❌ Error loading history.');
     console.error('MCM history error:', error);
@@ -1067,44 +822,17 @@ async function handleMCMHistory(context, args) {
 
 async function handleMCMLeaderboard(context) {
   const { reply } = context;
-  
   try {
-    const leaders = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.MCM_RECORDS).aggregate([
-        { $unwind: '$winners' },
-        { $group: {
-            _id: '$winners.userId',
-            userPhone: { $first: '$winners.userPhone' },
-            wins: { $sum: 1 },
-            totalEarnings: { $sum: '$winners.prizeAwarded' },
-            bestRating: { $max: '$winners.averageRating' },
-            totalRatings: { $sum: '$winners.ratingCount' }
-          } },
-        { $sort: { wins: -1, bestRating: -1 } },
-        { $limit: 10 }
-      ]).toArray()
-    );
-    
+    const leaders = await safeOperation(async (db) => await db.collection(COLLECTIONS.MCM_RECORDS).aggregate([{ $unwind: '$winners' }, { $group: { _id: '$winners.userId', userPhone: { $first: '$winners.userPhone' }, wins: { $sum: 1 }, totalEarnings: { $sum: '$winners.prizeAwarded' }, bestRating: { $max: '$winners.averageRating' }, totalRatings: { $sum: '$winners.ratingCount' } } }, { $sort: { wins: -1, bestRating: -1 } }, { $limit: 10 }]).toArray());
     if (leaders.length === 0) return reply('🏆 *No MCM winners yet!*\n\nBe the first! 💪');
-    
-    let leaderboardMessage = `🏆 *MCM HALL OF FAME* 🏆\n\n`;
-    leaderboardMessage += `👑 *ALL-TIME LEADERBOARD:*\n\n`;
-    
+    let leaderboardMessage = `🏆 *MCM HALL OF FAME* 🏆\n\n👑 *ALL-TIME LEADERBOARD:*\n\n`;
     leaders.forEach((leader, i) => {
       const pos = i + 1;
       const emoji = pos === 1 ? '👑' : pos === 2 ? '🥈' : pos === 3 ? '🥉' : '🏅';
-      
-      leaderboardMessage += `${emoji} ${pos}. +${leader.userPhone}\n`;
-      leaderboardMessage += `   🏆 Wins: ${leader.wins}\n`;
-      leaderboardMessage += `   ⭐ Best: ${leader.bestRating.toFixed(1)}/10\n`;
-      leaderboardMessage += `   💰 Earned: ₦${leader.totalEarnings.toLocaleString()}\n\n`;
+      leaderboardMessage += `${emoji} ${pos}. +${leader.userPhone}\n   🏆 Wins: ${leader.wins}\n   ⭐ Best: ${leader.bestRating.toFixed(1)}/10\n   💰 Earned: ₦${leader.totalEarnings.toLocaleString()}\n\n`;
     });
-    
-    leaderboardMessage += `🕺 *Can you top the leaderboard?*\n`;
-    leaderboardMessage += `Next MCM: Every Monday 8:00 PM!`;
-    
+    leaderboardMessage += `🕺 *Can you top the leaderboard?*\nNext MCM: Every Monday 8:00 PM!`;
     await reply(leaderboardMessage);
-    
   } catch (error) {
     await reply('❌ Error loading leaderboard.');
     console.error('MCM leaderboard error:', error);
@@ -1113,134 +841,65 @@ async function handleMCMLeaderboard(context) {
 
 async function handleMCMSettings(context, args) {
   const { reply, senderId, sock, from, config } = context;
-  
   if (!await isAuthorized(sock, from, senderId)) return reply('🚫 Only admins can access settings.');
-  
   try {
     if (args.length === 0) {
-      let settingsMessage = `⚙️ *MCM SETTINGS* ⚙️\n\n`;
-      settingsMessage += `🕐 *Schedule:*\n`;
-      settingsMessage += `• Start: ${mcmSettings.startTime}\n`;
-      settingsMessage += `• End: ${mcmSettings.endTime}\n`;
-      settingsMessage += `• Auto-start: ${mcmSettings.autoStartEnabled ? '✅' : '❌'}\n`;
-      settingsMessage += `• Reminders: ${mcmSettings.reminderTimes.join(', ')}\n\n`;
-      settingsMessage += `💰 *Rewards:*\n`;
-      settingsMessage += `• Winner: ₦${mcmSettings.winnerReward.toLocaleString()}\n`;
-      settingsMessage += `• Participation: ₦${mcmSettings.participationReward.toLocaleString()}\n`;
-      settingsMessage += `• Participation: ${mcmSettings.enableParticipationReward ? '✅' : '❌'}\n\n`;
-      settingsMessage += `🔧 *Other:*\n`;
-      settingsMessage += `• Self-rating: ${mcmSettings.allowSelfRating ? '✅' : '❌'}\n`;
-      settingsMessage += `• Tag all: ${mcmSettings.tagAllMembers ? '✅' : '❌'}\n\n`;
-      settingsMessage += `🔧 *Commands:*\n`;
-      settingsMessage += `• \`${config.PREFIX}mcm settings prize 15000\`\n`;
-      settingsMessage += `• \`${config.PREFIX}mcm settings participation 1500\`\n`;
-      settingsMessage += `• \`${config.PREFIX}mcm settings starttime 20:30\`\n`;
-      settingsMessage += `• \`${config.PREFIX}mcm settings endtime 22:30\`\n`;
-      settingsMessage += `• \`${config.PREFIX}mcm settings autostart on/off\`\n`;
-      settingsMessage += `• \`${config.PREFIX}mcm settings parreward on/off\`\n`;
-      settingsMessage += `• \`${config.PREFIX}mcm settings selfrating on/off\`\n`;
-      settingsMessage += `• \`${config.PREFIX}mcm settings tagall on/off\`\n`;
-      
+      let settingsMessage = `⚙️ *MCM SETTINGS* ⚙️\n\n` +
+        `🕐 *Schedule:*\n• Start: ${mcmSettings.startTime}\n• End: ${mcmSettings.endTime}\n• Auto-start: ${mcmSettings.autoStartEnabled ? '✅' : '❌'}\n• Reminders: ${mcmSettings.reminderTimes.join(', ')}\n\n` +
+        `💰 *Rewards:*\n• Winner: ₦${mcmSettings.winnerReward.toLocaleString()}\n• Participation: ₦${mcmSettings.participationReward.toLocaleString()}\n• Participation: ${mcmSettings.enableParticipationReward ? '✅' : '❌'}\n\n` +
+        `🔧 *Other:*\n• Self-rating: ${mcmSettings.allowSelfRating ? '✅' : '❌'}\n• Tag all: ${mcmSettings.tagAllMembers ? '✅' : '❌'}\n\n` +
+        `🔧 *Commands:*\n• \`${config.PREFIX}mcm settings prize 15000\`\n• \`${config.PREFIX}mcm settings participation 1500\`\n• \`${config.PREFIX}mcm settings starttime 20:30\`\n• \`${config.PREFIX}mcm settings endtime 22:30\`\n• \`${config.PREFIX}mcm settings autostart on/off\`\n` +
+        `• \`${config.PREFIX}mcm settings parreward on/off\`\n• \`${config.PREFIX}mcm settings selfrating on/off\`\n• \`${config.PREFIX}mcm settings tagall on/off\``;
       await reply(settingsMessage);
       return;
     }
-    
     const setting = args[0].toLowerCase();
     const value = args[1]?.toLowerCase();
     let responseText = "";
     let needsReschedule = false;
-    
     switch (setting) {
-      case 'prize':
-      case 'winner':
-        const prizeAmount = parseInt(args[1]);
-        if (isNaN(prizeAmount)) return reply(`⚠️ Invalid. Use: ${config.PREFIX}mcm settings prize 15000`);
-        mcmSettings.winnerReward = prizeAmount;
-        responseText = `✅ Winner prize: ₦${prizeAmount.toLocaleString()}`;
+      case 'prize': case 'winner':
+        const prize = parseInt(args[1]);
+        if (isNaN(prize)) return reply(`⚠️ Invalid. Use: ${config.PREFIX}mcm settings prize 15000`);
+        mcmSettings.winnerReward = prize;
+        responseText = `✅ Winner prize: ₦${prize.toLocaleString()}`;
         break;
-        
       case 'participation':
-        const partAmount = parseInt(args[1]);
-        if (isNaN(partAmount)) return reply(`⚠️ Invalid. Use: ${config.PREFIX}mcm settings participation 1500`);
-        mcmSettings.participationReward = partAmount;
-        responseText = `✅ Participation: ₦${partAmount.toLocaleString()}`;
+        const part = parseInt(args[1]);
+        if (isNaN(part)) return reply(`⚠️ Invalid. Use: ${config.PREFIX}mcm settings participation 1500`);
+        mcmSettings.participationReward = part;
+        responseText = `✅ Participation: ₦${part.toLocaleString()}`;
         break;
-        
       case 'starttime':
         if (!/^\d{2}:\d{2}$/.test(args[1])) return reply(`⚠️ Invalid. Use: ${config.PREFIX}mcm settings starttime 20:30`);
         mcmSettings.startTime = args[1];
         needsReschedule = true;
         responseText = `✅ Start time: ${args[1]}. Rescheduling cron.`;
         break;
-        
       case 'endtime':
         if (!/^\d{2}:\d{2}$/.test(args[1])) return reply(`⚠️ Invalid. Use: ${config.PREFIX}mcm settings endtime 22:30`);
         mcmSettings.endTime = args[1];
         needsReschedule = true;
         responseText = `✅ End time: ${args[1]}. Rescheduling cron.`;
         break;
-        
-      case 'autostart':
-        if (['on', 'true', 'enable'].includes(value)) {
-          mcmSettings.autoStartEnabled = true;
-          responseText = "✅ Auto-start enabled.";
-          needsReschedule = true;
-        } else if (['off', 'false', 'disable'].includes(value)) {
-          mcmSettings.autoStartEnabled = false;
-          responseText = "✅ Auto-start disabled.";
-          needsReschedule = true;
+      case 'autostart': case 'parreward': case 'selfrating': case 'tagall':
+        const flag = ['on', 'true', 'enable'].includes(value);
+        const keyMap = { autostart: 'autoStartEnabled', parreward: 'enableParticipationReward', selfrating: 'allowSelfRating', tagall: 'tagAllMembers' };
+        const settingKey = keyMap[setting];
+        if (settingKey) {
+            mcmSettings[settingKey] = flag;
+            responseText = `✅ ${setting} ${flag ? 'enabled' : 'disabled'}.`;
+            if (setting === 'autostart') needsReschedule = true;
         } else {
-          responseText = `⚠️ Use: on/off`;
+            responseText = `⚠️ Use: on/off`;
         }
         break;
-        
-      case 'parreward':
-        if (['on', 'true', 'enable'].includes(value)) {
-          mcmSettings.enableParticipationReward = true;
-          responseText = "✅ Participation rewards enabled.";
-        } else if (['off', 'false', 'disable'].includes(value)) {
-          mcmSettings.enableParticipationReward = false;
-          responseText = "✅ Participation rewards disabled.";
-        } else {
-          responseText = `⚠️ Use: on/off`;
-        }
-        break;
-        
-      case 'selfrating':
-        if (['on', 'true', 'enable'].includes(value)) {
-          mcmSettings.allowSelfRating = true;
-          responseText = "✅ Self-rating enabled.";
-        } else if (['off', 'false', 'disable'].includes(value)) {
-          mcmSettings.allowSelfRating = false;
-          responseText = "✅ Self-rating disabled.";
-        } else {
-          responseText = `⚠️ Use: on/off`;
-        }
-        break;
-        
-      case 'tagall':
-        if (['on', 'true', 'enable'].includes(value)) {
-          mcmSettings.tagAllMembers = true;
-          responseText = "✅ Tag all members enabled.";
-        } else if (['off', 'false', 'disable'].includes(value)) {
-          mcmSettings.tagAllMembers = false;
-          responseText = "✅ Tag all members disabled.";
-        } else {
-          responseText = `⚠️ Use: on/off`;
-        }
-        break;
-        
       default:
         responseText = `⚠️ Unknown: ${setting}\nAvailable: prize, participation, starttime, endtime, autostart, parreward, selfrating, tagall`;
     }
-    
     await saveSettings();
     await reply(responseText);
-    
-    if (needsReschedule && context.sock) {
-      setupMCMCronJobs(context.sock);
-    }
-    
+    if (needsReschedule && context.sock) setupMCMCronJobs(context.sock);
   } catch (error) {
     await reply('❌ Error updating settings.');
     console.error('MCM settings error:', error);
@@ -1249,9 +908,7 @@ async function handleMCMSettings(context, args) {
 
 async function handleMCMReschedule(context) {
   const { reply, senderId, sock, from } = context;
-  
   if (!await isAuthorized(sock, from, senderId)) return reply('🚫 Only admins can reschedule.');
-  
   try {
     await setupMCMCronJobs(sock);
     await reply('✅ Cron jobs rescheduled!');
@@ -1263,13 +920,9 @@ async function handleMCMReschedule(context) {
 
 async function handleMCMAddGroup(context) {
   const { reply, senderId, sock, from } = context;
-  
   if (!await isAuthorized(sock, from, senderId)) return reply('🚫 Only admins can add groups.');
-  
   if (!from.endsWith('@g.us')) return reply('❌ Use in group.');
-  
   if (mcmSettings.groupJids.includes(from)) return reply('✅ Group already added.');
-  
   mcmSettings.groupJids.push(from);
   await saveSettings();
   await reply('✅ Group added to MCM!');
@@ -1277,14 +930,10 @@ async function handleMCMAddGroup(context) {
 
 async function handleMCMRemoveGroup(context) {
   const { reply, senderId, sock, from } = context;
-  
   if (!await isAuthorized(sock, from, senderId)) return reply('🚫 Only admins can remove groups.');
-  
   if (!from.endsWith('@g.us')) return reply('❌ Use in group.');
-  
   const index = mcmSettings.groupJids.indexOf(from);
   if (index === -1) return reply('❌ Group not in MCM.');
-  
   mcmSettings.groupJids.splice(index, 1);
   await saveSettings();
   await reply('✅ Group removed from MCM.');
@@ -1292,14 +941,10 @@ async function handleMCMRemoveGroup(context) {
 
 async function handleMCMAddAdmin(context, args) {
   const { reply, senderId, sock, from } = context;
-  
   if (!await isAuthorized(sock, from, senderId)) return reply('🚫 Only admins can add admins.');
-  
   const number = args[0]?.replace(/\D/g, '');
   if (!number) return reply('⚠️ Use: addadmin <number>');
-  
   if (mcmSettings.adminNumbers.includes(number)) return reply('✅ Already admin.');
-  
   mcmSettings.adminNumbers.push(number);
   await saveSettings();
   await reply(`✅ Admin added: ${number}`);
@@ -1307,15 +952,11 @@ async function handleMCMAddAdmin(context, args) {
 
 async function handleMCMRemoveAdmin(context, args) {
   const { reply, senderId, sock, from } = context;
-  
   if (!await isAuthorized(sock, from, senderId)) return reply('🚫 Only admins can remove admins.');
-  
   const number = args[0]?.replace(/\D/g, '');
   if (!number) return reply('⚠️ Use: removeadmin <number>');
-  
   const index = mcmSettings.adminNumbers.indexOf(number);
   if (index === -1) return reply('❌ Not an admin.');
-  
   mcmSettings.adminNumbers.splice(index, 1);
   await saveSettings();
   await reply(`✅ Admin removed: ${number}`);
@@ -1323,38 +964,28 @@ async function handleMCMRemoveAdmin(context, args) {
 
 async function handleMCMTest(context, args) {
   const { reply, config } = context;
-  
   const testText = args.join(' ');
-  if (!testText) return reply(`🔍 *MCM RATING VALIDATOR* 🔍\n\n*Usage:* ${config.PREFIX}mcmtest [message]\n\n*Examples:*\n• ${config.PREFIX}mcmtest "He looks amazing! 9"\n• ${config.PREFIX}mcmtest "8️⃣ handsome"\n• ${config.PREFIX}mcmtest "🔟 stunning king!"`);
-  
+  if (!testText) return reply(`🔍 *MCM RATING VALIDATOR* 🔍\n\n*Usage:* ${config.PREFIX}mcmtest [message]\n\n*Examples:*\n• ${config.PREFIX}mcmtest "He looks great! 9"\n• ${config.PREFIX}mcmtest "8️⃣ handsome"\n• ${config.PREFIX}mcmtest "🔟 amazing star!"`);
   try {
     const rating = extractRating(testText);
-    
-    let result = `🔍 *RESULTS* 🔍\n\n`;
-    result += `📝 Message: "${testText}"\n\n`;
-    
+    let result = `🔍 *RESULTS* 🔍\n\n📝 Message: "${testText}"\n\n`;
     if (rating) {
-      result += `✅ *VALID!*\n`;
-      result += `⭐ Rating: ${rating}/10\n`;
+      result += `✅ *VALID!*\n⭐ Rating: ${rating}/10\n`;
     } else {
-      result += `❌ *INVALID*\n\n`;
-      result += `💡 *Formats:*\n`;
-      result += `• Numbers: "9", "10", "He's a perfect 8"\n`;
-      result += `• Emojis: "9️⃣", "🔟", "Handsome 1️⃣0️⃣"\n`;
-      result += `• Range: 1-10`;
+      result += `❌ *INVALID*\n\n💡 *Formats:*\n• Numbers: "9", "10", "He's a perfect 8"\n• Emojis: "9️⃣", "🔟", "Awesome 1️⃣0️⃣"\n• Range: 1-10`;
     }
-    
     await reply(result);
-    
   } catch (error) {
     await reply('❌ Error testing.');
     console.error('MCM test error:', error);
   }
 }
 
+// =======================================================================
 // MAIN PLUGIN HANDLER AND INIT
+// =======================================================================
+
 export async function init(sock) {
-  await initDatabase();
   await loadSettings();
   await setupMCMCronJobs(sock);
   console.log('✅ MCM plugin initialized');
@@ -1362,8 +993,6 @@ export async function init(sock) {
 
 export default async function mcmHandler(m, sock, config) {
   try {
-    if (!db) await initDatabase();
-    
     if (m.body && !m.body.startsWith(config.PREFIX)) {
       if (await handlePhotoSubmission(m, sock)) return;
       if (await handleRatingSubmission(m, sock)) return;
@@ -1393,55 +1022,22 @@ export default async function mcmHandler(m, sock, config) {
 
 async function handleMCMSubCommand(subCommand, args, context) {
   switch (subCommand.toLowerCase()) {
-    case 'start':
-      await handleMCMStart(context);
-      break;
-    case 'end':
-      await handleMCMEnd(context);
-      break;
-    case 'cancel':
-      await handleMCMCancel(context);
-      break;
-    case 'current':
-    case 'status':
-      await handleMCMCurrent(context);
-      break;
-    case 'stats':
-      await handleMCMStats(context);
-      break;
-    case 'history':
-      await handleMCMHistory(context, args);
-      break;
-    case 'leaderboard':
-    case 'leaders':
-      await handleMCMLeaderboard(context);
-      break;
-    case 'settings':
-      await handleMCMSettings(context, args);
-      break;
-    case 'reschedule':
-      await handleMCMReschedule(context);
-      break;
-    case 'addgroup':
-      await handleMCMAddGroup(context);
-      break;
-    case 'removegroup':
-      await handleMCMRemoveGroup(context);
-      break;
-    case 'addadmin':
-      await handleMCMAddAdmin(context, args);
-      break;
-    case 'removeadmin':
-      await handleMCMRemoveAdmin(context, args);
-      break;
-    case 'test':
-      await handleMCMTest(context, args);
-      break;
-    case 'help':
-      await showMCMMenu(context.reply, context.config.PREFIX);
-      break;
-    default:
-      await context.reply(`❓ Unknown: *${subCommand}*\n\nUse *${context.config.PREFIX}mcm help*`);
+    case 'start': await handleMCMStart(context); break;
+    case 'end': await handleMCMEnd(context); break;
+    case 'cancel': await handleMCMCancel(context); break;
+    case 'current': case 'status': await handleMCMCurrent(context); break;
+    case 'stats': await handleMCMStats(context); break;
+    case 'history': await handleMCMHistory(context, args); break;
+    case 'leaderboard': case 'leaders': await handleMCMLeaderboard(context); break;
+    case 'settings': await handleMCMSettings(context, args); break;
+    case 'reschedule': await handleMCMReschedule(context); break;
+    case 'addgroup': await handleMCMAddGroup(context); break;
+    case 'removegroup': await handleMCMRemoveGroup(context); break;
+    case 'addadmin': await handleMCMAddAdmin(context, args); break;
+    case 'removeadmin': await handleMCMRemoveAdmin(context, args); break;
+    case 'test': await handleMCMTest(context, args); break;
+    case 'help': await showMCMMenu(context.reply, context.config.PREFIX); break;
+    default: await context.reply(`❓ Unknown: *${subCommand}*\n\nUse *${context.config.PREFIX}mcm help*`);
   }
 }
 
