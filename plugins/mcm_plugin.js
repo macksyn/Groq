@@ -1,5 +1,5 @@
 // plugins/mcm.js - Man Crush Monday Plugin
-import { getDatabase, getCollection, safeOperation } from '../lib/mongoManager.js';
+import { PluginHelpers } from '../lib/pluginIntegration.js';
 import moment from 'moment-timezone';
 import cron from 'node-cron';
 
@@ -73,8 +73,8 @@ let cronJobs = {
 // Initialize database and settings
 async function initDatabase() {
   try {
-    db = await getDatabase();
-    await safeOperation(async (db) => {
+    db = await PluginHelpers.getDatabase();
+    await PluginHelpers.safeDBOperation(async (db) => {
       await db.collection(COLLECTIONS.MCM_SESSIONS).createIndex({ date: 1, groupJid: 1 }, { unique: true });
       await db.collection(COLLECTIONS.MCM_PARTICIPANTS).createIndex({ sessionId: 1, userId: 1 });
       await db.collection(COLLECTIONS.MCM_RATINGS).createIndex({ sessionId: 1, raterId: 1, participantId: 1 });
@@ -90,9 +90,8 @@ async function initDatabase() {
 
 async function loadSettings() {
   try {
-    const settings = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.MCM_SETTINGS).findOne({ type: 'mcm_config' })
-    );
+    const collection = await PluginHelpers.getCollection(COLLECTIONS.MCM_SETTINGS);
+    const settings = await collection.findOne({ type: 'mcm_config' });
     if (settings) {
       mcmSettings = { ...defaultSettings, ...settings.data };
     }
@@ -103,13 +102,13 @@ async function loadSettings() {
 
 async function saveSettings() {
   try {
-    await safeOperation(async (db) => {
-      await db.collection(COLLECTIONS.MCM_SETTINGS).replaceOne(
+    await PluginHelpers.safeDBOperation(async (db, collection) => {
+      await collection.replaceOne(
         { type: 'mcm_config' },
         { type: 'mcm_config', data: mcmSettings, updatedAt: new Date() },
         { upsert: true }
       );
-    });
+    }, COLLECTIONS.MCM_SETTINGS);
   } catch (error) {
     console.error('Error saving MCM settings:', error);
   }
@@ -160,13 +159,7 @@ async function isAuthorized(sock, from, sender) {
 // Economy functions
 async function initUser(userId) {
   try {
-    await safeOperation(async (db) => {
-      await db.collection(COLLECTIONS.USERS).updateOne(
-        { userId },
-        { $setOnInsert: { balance: 0, transactions: [] } },
-        { upsert: true }
-      );
-    });
+  await PluginHelpers.initUser(userId);
   } catch (error) {
     console.error('Error initializing user:', error);
   }
@@ -174,15 +167,7 @@ async function initUser(userId) {
 
 async function addMoney(userId, amount, reason) {
   try {
-    await safeOperation(async (db) => {
-      await db.collection(COLLECTIONS.USERS).updateOne(
-        { userId },
-        {
-          $inc: { balance: amount },
-          $push: { transactions: { amount, reason, date: new Date() } }
-        }
-      );
-    });
+  await PluginHelpers.addMoney(userId, amount, reason);
   } catch (error) {
     console.error('Error adding money:', error);
   }
@@ -190,9 +175,7 @@ async function addMoney(userId, amount, reason) {
 
 async function getUserData(userId) {
   try {
-    return await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.USERS).findOne({ userId }) || { balance: 0 }
-    );
+  return await PluginHelpers.getUserData(userId);
   } catch (error) {
     console.error('Error getting user data:', error);
     return { balance: 0 };

@@ -1,7 +1,7 @@
 // plugins/rental_plugin.js - COMPLETELY REWRITTEN FOR EFFICIENCY & REALISM
-import { MongoClient } from 'mongodb';
 import moment from 'moment-timezone';
-import { unifiedUserManager } from '../lib/pluginIntegration.js';
+import cron from 'node-cron';
+import { PluginHelpers } from '../lib/pluginIntegration.js';
 
 // Plugin information export
 export const info = {
@@ -18,9 +18,6 @@ export const info = {
   ]
 };
 
-// MongoDB Configuration
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-const DATABASE_NAME = process.env.DATABASE_NAME || 'whatsapp_bot';
 const COLLECTIONS = {
   RENTAL_GROUPS: 'rental_groups',
   TENANTS: 'tenants',
@@ -28,10 +25,8 @@ const COLLECTIONS = {
   PAYMENT_HISTORY: 'payment_history',
   BILLING_CYCLES: 'billing_cycles'
 };
-
-// Database connection
+// Database reference
 let db = null;
-let mongoClient = null;
 
 // Set Nigeria timezone
 moment.tz.setDefault('Africa/Lagos');
@@ -60,26 +55,20 @@ let rentalSettings = {};
 // Initialize MongoDB with proper error handling
 async function initDatabase() {
   if (db) return db;
-  
   try {
-    mongoClient = new MongoClient(MONGODB_URI);
-    await mongoClient.connect();
-    db = mongoClient.db(DATABASE_NAME);
-    
-    // Create comprehensive indexes
-    await Promise.all([
-      db.collection(COLLECTIONS.RENTAL_GROUPS).createIndex({ groupId: 1 }, { unique: true }),
-      db.collection(COLLECTIONS.TENANTS).createIndex({ tenantId: 1, groupId: 1 }, { unique: true }),
-      db.collection(COLLECTIONS.TENANTS).createIndex({ groupId: 1 }),
-      db.collection(COLLECTIONS.PAYMENT_HISTORY).createIndex({ tenantId: 1, groupId: 1 }),
-      db.collection(COLLECTIONS.PAYMENT_HISTORY).createIndex({ groupId: 1, date: -1 }),
-      db.collection(COLLECTIONS.BILLING_CYCLES).createIndex({ groupId: 1, tenantId: 1, periodStart: 1 }, { unique: true })
-    ]);
-    
-    console.log('✅ MongoDB connected successfully for Rental Plugin v2.0');
+    db = await PluginHelpers.getDatabase();
+    await PluginHelpers.safeDBOperation(async (db) => {
+      await db.collection(COLLECTIONS.RENTAL_GROUPS).createIndex({ groupId: 1 }, { unique: true });
+      await db.collection(COLLECTIONS.TENANTS).createIndex({ tenantId: 1, groupId: 1 }, { unique: true });
+      await db.collection(COLLECTIONS.TENANTS).createIndex({ groupId: 1 });
+      await db.collection(COLLECTIONS.PAYMENT_HISTORY).createIndex({ tenantId: 1, groupId: 1 });
+      await db.collection(COLLECTIONS.PAYMENT_HISTORY).createIndex({ groupId: 1, date: -1 });
+      await db.collection(COLLECTIONS.BILLING_CYCLES).createIndex({ groupId: 1, tenantId: 1, periodStart: 1 }, { unique: true });
+    });
+    console.log('✅ MongoDB pooled connection for Rental Plugin');
     return db;
   } catch (error) {
-    console.error('❌ MongoDB connection failed for Rental Plugin:', error);
+    console.error('❌ MongoDB pooled connection failed for Rental Plugin:', error);
     throw error;
   }
 }
@@ -87,7 +76,8 @@ async function initDatabase() {
 // Load and cache settings
 async function loadSettings(groupId) {
   try {
-    const settings = await db.collection(COLLECTIONS.RENTAL_SETTINGS).findOne({ groupId });
+    const collection = await PluginHelpers.getCollection(COLLECTIONS.RENTAL_SETTINGS);
+    const settings = await collection.findOne({ groupId });
     rentalSettings[groupId] = settings ? { ...defaultSettings, ...settings.data } : { ...defaultSettings };
     return rentalSettings[groupId];
   } catch (error) {
@@ -100,11 +90,13 @@ async function loadSettings(groupId) {
 // Save settings efficiently
 async function saveSettings(groupId) {
   try {
-    await db.collection(COLLECTIONS.RENTAL_SETTINGS).replaceOne(
-      { groupId },
-      { groupId, data: rentalSettings[groupId], updatedAt: new Date() },
-      { upsert: true }
-    );
+    await PluginHelpers.safeDBOperation(async (db, collection) => {
+      await collection.replaceOne(
+        { groupId },
+        { groupId, data: rentalSettings[groupId], updatedAt: new Date() },
+        { upsert: true }
+      );
+    }, COLLECTIONS.RENTAL_SETTINGS);
   } catch (error) {
     console.error(`Error saving settings for ${groupId}:`, error);
   }
@@ -166,7 +158,8 @@ function calculateCurrentBillingPeriod(settings) {
 
 // Check if tenant has paid for current period
 async function hasPaidCurrentPeriod(tenantId, groupId, billingInfo) {
-  const payment = await db.collection(COLLECTIONS.PAYMENT_HISTORY).findOne({
+  const collection = await PluginHelpers.getCollection(COLLECTIONS.PAYMENT_HISTORY);
+  const payment = await collection.findOne({
     tenantId,
     groupId,
     date: { 
@@ -174,7 +167,6 @@ async function hasPaidCurrentPeriod(tenantId, groupId, billingInfo) {
       $lte: billingInfo.periodEnd.toDate() 
     }
   });
-  
   return !!payment;
 }
 
@@ -185,7 +177,8 @@ async function hasPaidCurrentPeriod(tenantId, groupId, billingInfo) {
 async function checkRentals(sock) {
   try {
     const startTime = Date.now();
-    const groups = await db.collection(COLLECTIONS.RENTAL_GROUPS).find({ active: true }).toArray();
+  const collection = await PluginHelpers.getCollection(COLLECTIONS.RENTAL_GROUPS);
+  const groups = await collection.find({ active: true }).toArray();
     
     if (groups.length === 0) {
       console.log('📭 No active rental groups found');
@@ -210,13 +203,11 @@ async function checkRentals(sock) {
         for (const tenant of tenants) {
           totalProcessed++;
           const hasPaid = await hasPaidCurrentPeriod(tenant.tenantId, group.groupId, billingInfo);
-          
           // Skip if already paid for current period
           if (hasPaid) {
             console.log(`✅ ${tenant.tenantId.split('@')[0]} has paid for current period`);
             continue;
           }
-
           // Handle different scenarios based on due date
           if (!billingInfo.isOverdue) {
             // Rent not due yet - send reminders
@@ -224,7 +215,16 @@ async function checkRentals(sock) {
           } else {
             // Rent is overdue
             await handleOverdueRent(sock, tenant, group, settings, billingInfo);
+            // Granular warning: grace period expiring soon
             if (settings.autoEvict) {
+              const gracePeriodEnd = billingInfo.dueDate.clone().add(settings.gracePeriodDays, 'days');
+              const today = moment();
+              const daysLeft = gracePeriodEnd.diff(today, 'days');
+              if (daysLeft === 1) {
+                const warningMsg = `⚠️ *FINAL WARNING* ⚠️\n\nYour rent is overdue and the grace period expires in *1 day*!\n\nPay now to avoid eviction from the group.\n\nDue Date: ${billingInfo.dueDate.format('MMM Do, YYYY')}\nGrace Period Ends: ${gracePeriodEnd.format('MMM Do, YYYY')}`;
+                await sock.sendMessage(tenant.tenantId, { text: warningMsg });
+                console.log(`⚠️ Sent final warning to ${tenant.tenantId.split('@')[0]}`);
+              }
               const evicted = await handleEvictionCheck(sock, tenant, group, settings, billingInfo);
               if (evicted) totalEvicted++;
             }
@@ -254,10 +254,9 @@ async function handleRentReminders(sock, tenant, group, settings, billingInfo) {
                          `💰 Your Rent Wallet: *${settings.currencySymbol}${tenant.wallet.toLocaleString()}*\n` +
                          `📊 Status: ${tenant.wallet >= settings.rentAmount ? '✅ Ready!' : '❌ Insufficient funds'}\n\n` +
                          `${tenant.wallet < settings.rentAmount ? `💡 Transfer funds: \`rent wallet transfer ${settings.rentAmount - tenant.wallet}\`` : '✨ You\'re all set!'}`;
-      
       await sock.sendMessage(tenant.tenantId, { text: reminderMsg });
       console.log(`📬 Sent ${reminderDay}-day reminder to ${tenant.tenantId.split('@')[0]}`);
-      break; // Only send one reminder per check
+      break;
     }
   }
 }
@@ -303,13 +302,14 @@ async function handleEvictionCheck(sock, tenant, group, settings, billingInfo) {
       await sock.groupParticipantsUpdate(group.groupId, [tenant.tenantId], "remove");
       
       // Remove from database
-      await db.collection(COLLECTIONS.TENANTS).deleteOne({ 
+      const tenantsCollection = await PluginHelpers.getCollection(COLLECTIONS.TENANTS);
+      await tenantsCollection.deleteOne({ 
         tenantId: tenant.tenantId, 
         groupId: group.groupId 
       });
-      
       // Log eviction
-      await db.collection(COLLECTIONS.PAYMENT_HISTORY).insertOne({
+      const paymentCollection = await PluginHelpers.getCollection(COLLECTIONS.PAYMENT_HISTORY);
+      await paymentCollection.insertOne({
         tenantId: tenant.tenantId,
         groupId: group.groupId,
         amount: 0,
@@ -344,7 +344,8 @@ async function processRentPayment(tenant, group, settings, billingInfo, method =
   const paymentDate = new Date();
   
   // Update tenant wallet and last payment
-  await db.collection(COLLECTIONS.TENANTS).updateOne(
+  const tenantsCollection = await PluginHelpers.getCollection(COLLECTIONS.TENANTS);
+  await tenantsCollection.updateOne(
     { tenantId: tenant.tenantId, groupId: group.groupId },
     { 
       $set: { 
@@ -354,9 +355,9 @@ async function processRentPayment(tenant, group, settings, billingInfo, method =
       } 
     }
   );
-  
   // Record payment history
-  await db.collection(COLLECTIONS.PAYMENT_HISTORY).insertOne({
+  const paymentCollection = await PluginHelpers.getCollection(COLLECTIONS.PAYMENT_HISTORY);
+  await paymentCollection.insertOne({
     tenantId: tenant.tenantId,
     groupId: group.groupId,
     amount: settings.rentAmount,
@@ -376,7 +377,8 @@ async function transferToRentWallet(userId, amount, groupId, reason = 'Transfer 
     console.log(`💰 Transfer request: ${userId} → ${amount} in group ${groupId}`);
     
     // Validate tenant exists
-    const tenant = await db.collection(COLLECTIONS.TENANTS).findOne({ 
+    const tenantsCollection = await PluginHelpers.getCollection(COLLECTIONS.TENANTS);
+    const tenant = await tenantsCollection.findOne({ 
       tenantId: userId, 
       groupId: groupId 
     });
@@ -404,7 +406,7 @@ async function transferToRentWallet(userId, amount, groupId, reason = 'Transfer 
     }
     
     // Update rental wallet
-    const updateResult = await db.collection(COLLECTIONS.TENANTS).updateOne(
+    const updateResult = await tenantsCollection.updateOne(
       { tenantId: userId, groupId: groupId },
       { $inc: { wallet: amount } }
     );
@@ -417,7 +419,7 @@ async function transferToRentWallet(userId, amount, groupId, reason = 'Transfer 
     
     // Get final balances
     const finalEconomyData = await getUserEconomyData(userId);
-    const finalTenant = await db.collection(COLLECTIONS.TENANTS).findOne({ 
+    const finalTenant = await tenantsCollection.findOne({ 
       tenantId: userId, 
       groupId: groupId 
     });
@@ -439,7 +441,7 @@ async function transferToRentWallet(userId, amount, groupId, reason = 'Transfer 
 // Economy integration helpers
 async function getUserEconomyData(userId) {
   try {
-    return await unifiedUserManager.getUserData(userId);
+    return await PluginHelpers.getUserData(userId);
   } catch (error) {
     console.error('Error getting user economy data:', error);
     return { balance: 0 };
@@ -448,7 +450,7 @@ async function getUserEconomyData(userId) {
 
 async function initEconomyUser(userId) {
   try {
-    return await unifiedUserManager.initUser(userId);
+    return await PluginHelpers.initUser(userId);
   } catch (error) {
     console.error('Error initializing economy user:', error);
     throw error;
@@ -459,25 +461,23 @@ async function initEconomyUser(userId) {
 // 🛠️ UTILITY FUNCTIONS
 // =======================
 
-let monitoringInterval = null;
+let monitoringJob = null;
 
 function startMonitoring(sock) {
-  if (monitoringInterval) clearInterval(monitoringInterval);
-  
-  // Check every 6 hours for better responsiveness
-  const checkInterval = 6 * 60 * 60 * 1000;
-  console.log(`🏘️ Starting enhanced rental monitoring (6-hour intervals)`);
-  
-  monitoringInterval = setInterval(() => checkRentals(sock), checkInterval);
-  
+  if (monitoringJob) monitoringJob.stop();
+  // Schedule job every 6 hours (at minute 0)
+  monitoringJob = cron.schedule('0 */6 * * *', () => {
+    checkRentals(sock);
+  });
+  console.log(`🏘️ Rental monitoring scheduled every 6 hours via node-cron.`);
   // Initial check after 30 seconds
   setTimeout(() => checkRentals(sock), 30000);
 }
 
 function stopMonitoring() {
-  if (monitoringInterval) {
-    clearInterval(monitoringInterval);
-    monitoringInterval = null;
+  if (monitoringJob) {
+    monitoringJob.stop();
+    monitoringJob = null;
     console.log('🛑 Rental monitoring stopped');
   }
 }
@@ -537,39 +537,42 @@ export default async function rentalHandler(m, sock, config) {
 }
 
 async function handleSubCommand(subCommand, args, context) {
+  // Already destructured above, do not redeclare
   const { from, senderId } = context;
-  const isAdmin = await isAuthorized(context.sock, from, senderId);
-  const settings = await loadSettings(from);
-  
-  // Check if group is set up
-  const rentalGroup = await db.collection(COLLECTIONS.RENTAL_GROUPS).findOne({ groupId: from });
-  const needsSetup = ['setup', 'help'].includes(subCommand);
-  
-  if (!rentalGroup && !needsSetup) {
-    return context.reply('❌ Rental system not set up in this group. Admin should use `rent setup` first.');
-  }
-  
-  // Admin-only commands
-  const adminCommands = ['setup', 'addtenant', 'defaulters', 'evict', 'disable', 'stats'];
-  if (adminCommands.includes(subCommand) && settings.adminOnly && !isAdmin) {
-    return context.reply('🚫 This is an admin-only command.');
-  }
-  
-  // Route to handlers
-  switch (subCommand) {
-    case 'help': await showHelpMenu(context); break;
-    case 'setup': await handleSetup(context); break;
-    case 'pay': await handlePay(context); break;
-    case 'wallet': await handleWallet(context, args); break;
-    case 'status': await handleStatus(context); break;
-    case 'settings': await handleSettings(context, args); break;
-    case 'addtenant': await handleAddTenant(context, args); break;
-    case 'defaulters': await handleDefaulters(context); break;
-    case 'evict': await handleEvict(context, args); break;
-    case 'disable': await handleDisable(context); break;
-    case 'stats': await handleStats(context); break;
-    default: 
-      await context.reply(`❓ Unknown command '*${subCommand}*'. Use \`rent help\` for available options.`);
+  try {
+    await initDatabase();
+    const isAdmin = await isAuthorized(context.sock, from, senderId);
+    const settings = await loadSettings(from);
+    // Check if group is set up
+    const rentalGroup = await db.collection(COLLECTIONS.RENTAL_GROUPS).findOne({ groupId: from });
+    const needsSetup = ['setup', 'help'].includes(subCommand);
+    if (!rentalGroup && !needsSetup) {
+      return context.reply('❌ Rental system not set up in this group. Admin should use `rent setup` first.');
+    }
+    // Admin-only commands
+    const adminCommands = ['setup', 'addtenant', 'defaulters', 'evict', 'disable', 'stats'];
+    if (adminCommands.includes(subCommand) && settings.adminOnly && !isAdmin) {
+      return context.reply('🚫 This is an admin-only command.');
+    }
+    // Route to handlers
+    switch (subCommand) {
+      case 'help': await showHelpMenu(context); break;
+      case 'setup': await handleSetup(context); break;
+      case 'pay': await handlePay(context); break;
+      case 'wallet': await handleWallet(context, args); break;
+      case 'status': await handleStatus(context); break;
+      case 'settings': await handleSettings(context, args); break;
+      case 'addtenant': await handleAddTenant(context, args); break;
+      case 'defaulters': await handleDefaulters(context); break;
+      case 'evict': await handleEvict(context, args); break;
+      case 'disable': await handleDisable(context); break;
+      case 'stats': await handleStats(context); break;
+      default: 
+        await context.reply(`❓ Unknown command '*${subCommand}*'. Use \`rent help\` for available options.`);
+    }
+  } catch (error) {
+    console.error('❌ Critical error in handleSubCommand:', error);
+    await context.reply('❌ A critical error occurred while processing your command. Please try again later or contact an admin.');
   }
 }
 

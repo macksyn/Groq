@@ -1,6 +1,6 @@
 // plugins/autoInterview.js - Enhanced with MongoDB persistence, admin tools, mandatory photo after name, flexible DOB
 import axios from 'axios';
-import mongoManager from '../lib/mongoManager.js';
+import { PluginHelpers } from '../lib/pluginIntegration.js';
 
 export const info = {
   name: 'autoInterview',
@@ -159,7 +159,7 @@ const DEFAULT_QUESTIONS = [
   {
     id: 10,
     question: "Have you ever been in a situation where a group chat got heated? What did you do, and what would you do differently now to prevent escalation?",
-    required: total: true,
+  required: true,
     category: "conflict"
   },
   {
@@ -481,17 +481,15 @@ function clearReminderTimer(userId) {
 
 // MongoDB Helper Functions (unchanged)
 async function saveSession(session) {
-  await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.sessions);
-    await coll.replaceOne({ userId: session.userId }, session.toDB(), { upsert: true });
-  });
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.replaceOne({ userId: session.userId }, session.toDB(), { upsert: true });
+  }, COLLECTIONS.sessions);
 }
 
 async function loadSession(userId) {
-  const obj = await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.sessions);
-    return await coll.findOne({ userId });
-  });
+  const obj = await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.findOne({ userId });
+  }, COLLECTIONS.sessions);
   if (obj) {
     const session = InterviewSession.fromDB(obj);
     interviewSessions.set(userId, session);
@@ -501,68 +499,59 @@ async function loadSession(userId) {
 }
 
 async function deleteSession(userId) {
-  await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.sessions);
-    await coll.deleteOne({ userId });
-  });
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.deleteOne({ userId });
+  }, COLLECTIONS.sessions);
   interviewSessions.delete(userId);
   clearResponseTimer(userId);
   clearReminderTimer(userId);
 }
 
 async function initGroupSettings(groupId) {
-  let settings = await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.settings);
-    return await coll.findOne({ groupId });
-  });
+  let settings = await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.findOne({ groupId });
+  }, COLLECTIONS.settings);
 
   if (!settings) {
     settings = new GroupSettings(groupId);
-    await mongoManager.safeOperation(async (db) => {
-      const coll = db.collection(COLLECTIONS.settings);
-      await coll.insertOne(settings.toDB());
-    });
+    await PluginHelpers.safeDBOperation(async (db, collection) => {
+      await collection.insertOne(settings.toDB());
+    }, COLLECTIONS.settings);
   } else {
     settings = GroupSettings.fromDB(settings);
   }
   groupSettings.set(groupId, settings);
 
-  let questions = await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.questions);
-    return await coll.findOne({ groupId });
-  });
+  let questions = await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.findOne({ groupId });
+  }, COLLECTIONS.questions);
   if (!questions || !questions.questions) {
     questions = { groupId, questions: [...DEFAULT_QUESTIONS] };
-    await mongoManager.safeOperation(async (db) => {
-      const coll = db.collection(COLLECTIONS.questions);
-      await coll.insertOne(questions);
-    });
+    await PluginHelpers.safeDBOperation(async (db, collection) => {
+      await collection.insertOne(questions);
+    }, COLLECTIONS.questions);
   }
   interviewQuestions.set(groupId, questions.questions);
 
-  let stats = await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.stats);
-    return await coll.findOne({ groupId });
-  });
+  let stats = await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.findOne({ groupId });
+  }, COLLECTIONS.stats);
   if (!stats) {
     stats = { groupId, totalInterviews: 0, approved: 0, rejected: 0, autoRemoved: 0, pendingReviews: 0, averageScore: 0, averageDuration: 0 };
-    await mongoManager.safeOperation(async (db) => {
-      const coll = db.collection(COLLECTIONS.stats);
-      await coll.insertOne(stats);
-    });
+    await PluginHelpers.safeDBOperation(async (db, collection) => {
+      await collection.insertOne(stats);
+    }, COLLECTIONS.stats);
   }
   interviewStats.set(groupId, stats);
 
-  let prompt = await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.evalPrompts);
-    return await coll.findOne({ groupId });
-  });
+  let prompt = await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.findOne({ groupId });
+  }, COLLECTIONS.evalPrompts);
   if (!prompt) {
     prompt = { groupId, prompt: DEFAULT_EVAL_PROMPT };
-    await mongoManager.safeOperation(async (db) => {
-      const coll = db.collection(COLLECTIONS.evalPrompts);
-      await coll.insertOne(prompt);
-    });
+    await PluginHelpers.safeDBOperation(async (db, collection) => {
+      await collection.insertOne(prompt);
+    }, COLLECTIONS.evalPrompts);
   }
   evalPrompts.set(groupId, prompt.prompt);
 
@@ -570,45 +559,39 @@ async function initGroupSettings(groupId) {
 }
 
 async function saveSettings(groupId, settings) {
-  await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.settings);
-    await coll.replaceOne({ groupId }, settings.toDB());
-  });
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.replaceOne({ groupId }, settings.toDB());
+  }, COLLECTIONS.settings);
 }
 
 async function saveQuestions(groupId, questions) {
-  await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.questions);
-    await coll.updateOne({ groupId }, { $set: { questions } }, { upsert: true });
-  });
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.updateOne({ groupId }, { $set: { questions } }, { upsert: true });
+  }, COLLECTIONS.questions);
 }
 
 async function saveStats(groupId, stats) {
-  await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.stats);
-    await coll.replaceOne({ groupId }, { groupId, ...stats });
-  });
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.replaceOne({ groupId }, { groupId, ...stats });
+  }, COLLECTIONS.stats);
 }
 
 async function saveEvalPrompt(groupId, prompt) {
-  await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.evalPrompts);
-    await coll.replaceOne({ groupId }, { groupId, prompt }, { upsert: true });
-  });
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.replaceOne({ groupId }, { groupId, prompt }, { upsert: true });
+  }, COLLECTIONS.evalPrompts);
 }
 
 async function getPendingSessions(groupId) {
-  return await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.sessions);
-    return await coll.find({ groupId, status: 'pending_review' }).toArray();
-  });
+  return await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.find({ groupId, status: 'pending_review' }).toArray();
+  }, COLLECTIONS.sessions);
 }
 
 async function getActiveSessions(groupId) {
-  return await mongoManager.safeOperation(async (db) => {
-    const coll = db.collection(COLLECTIONS.sessions);
-    return await coll.find({ groupId, status: 'active' }).toArray();
-  });
+  return await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.find({ groupId, status: 'active' }).toArray();
+  }, COLLECTIONS.sessions);
 }
 
 async function startInterview(userId, groupId, userName, sock) {
