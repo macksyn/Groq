@@ -1,7 +1,7 @@
 // plugins/birthday.js - Birthday plugin compatible with PluginManager
 import moment from 'moment-timezone';
 import cron from 'node-cron';
-import mongoManager from '../lib/mongoManager.js';
+import { PluginHelpers } from '../lib/pluginIntegration.js';
 
 const isConnectionHealthy = global.isConnectionHealthy || (() => true);
 const safeSend = global.sendMessageSafely || ((sock, jid, msg) => sock.sendMessage(jid, msg));
@@ -30,7 +30,7 @@ moment.tz.setDefault('Africa/Lagos');
 const defaultSettings = {
   enableReminders: true,
   enableAutoWishes: true,
-  enablePrivateWishes: true, // New: separate toggle for private wishes
+  enablePrivateWishes: true,
   reminderDays: [7, 3, 1],
   reminderTime: '09:00',
   wishTime: '00:01',
@@ -42,7 +42,7 @@ const defaultSettings = {
 
 // Initialize indexes for performance
 async function ensureIndexes() {
-  await mongoManager.safeOperation(async (db) => {
+  await PluginHelpers.safeDBOperation(async (db) => {
     const birthdays = db.collection(COLLECTIONS.BIRTHDAYS);
     await birthdays.createIndex({ 'birthday.searchKey': 1 });
     await birthdays.createIndex({ userId: 1 }, { unique: true });
@@ -50,14 +50,14 @@ async function ensureIndexes() {
     await wishes.createIndex({ userId: 1, date: 1 });
     const reminders = db.collection(COLLECTIONS.BIRTHDAY_REMINDERS);
     await reminders.createIndex({ reminderKey: 1 }, { unique: true });
-  });
+  }, COLLECTIONS.BIRTHDAYS);
 }
 
 let birthdaySettings = { ...defaultSettings };
 
 async function loadSettings() {
   try {
-    const collection = await mongoManager.getCollection(COLLECTIONS.BIRTHDAY_SETTINGS);
+    const collection = await PluginHelpers.getCollection(COLLECTIONS.BIRTHDAY_SETTINGS);
     const settings = await collection.findOne({ type: 'birthday' });
     if (settings) {
       birthdaySettings = { ...defaultSettings, ...settings.data };
@@ -69,7 +69,7 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
-  await mongoManager.safeOperation(async (db, collection) => {
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
     await collection.replaceOne(
       { type: 'birthday' },
       { type: 'birthday', data: birthdaySettings, updatedAt: new Date() },
@@ -96,7 +96,7 @@ function calculateAge(birthday) {
 }
 
 async function getAllBirthdays() {
-  return await mongoManager.safeOperation(async (db, collection) => {
+  return await PluginHelpers.safeDBOperation(async (db, collection) => {
     const birthdays = await collection.find({}).toArray();
     const formattedBirthdays = {};
     birthdays.forEach(entry => {
@@ -111,7 +111,7 @@ async function getAllBirthdays() {
 }
 
 async function getBirthdayData(userId) {
-  return await mongoManager.safeOperation(async (db, collection) => {
+  return await PluginHelpers.safeDBOperation(async (db, collection) => {
     const data = await collection.findOne({ userId });
     if (data) {
       data.birthday.age = calculateAge(data.birthday);
@@ -123,7 +123,7 @@ async function getBirthdayData(userId) {
 async function getTodaysBirthdays() {
   const today = moment.tz('Africa/Lagos');
   const todayKey = `${String(today.month() + 1).padStart(2, '0')}-${String(today.date()).padStart(2, '0')}`;
-  return await mongoManager.safeOperation(async (db, collection) => {
+  return await PluginHelpers.safeDBOperation(async (db, collection) => {
     const birthdays = await collection.find({ 'birthday.searchKey': todayKey }).toArray();
     return birthdays.map(b => ({ ...b, birthday: { ...b.birthday, age: calculateAge(b.birthday) } }));
   }, COLLECTIONS.BIRTHDAYS);
@@ -132,7 +132,7 @@ async function getTodaysBirthdays() {
 async function getUpcomingBirthdays(daysAhead) {
   const targetDate = moment.tz('Africa/Lagos').add(daysAhead, 'days');
   const targetKey = `${String(targetDate.month() + 1).padStart(2, '0')}-${String(targetDate.date()).padStart(2, '0')}`;
-  return await mongoManager.safeOperation(async (db, collection) => {
+  return await PluginHelpers.safeDBOperation(async (db, collection) => {
     const birthdays = await collection.find({ 'birthday.searchKey': targetKey }).toArray();
     return birthdays.map(b => ({ ...b, birthday: { ...b.birthday, age: calculateAge(b.birthday) } }));
   }, COLLECTIONS.BIRTHDAYS);
@@ -140,7 +140,7 @@ async function getUpcomingBirthdays(daysAhead) {
 
 async function getCustomWishes() {
   try {
-    const collection = await mongoManager.getCollection(COLLECTIONS.CUSTOM_WISHES);
+    const collection = await PluginHelpers.getCollection(COLLECTIONS.CUSTOM_WISHES);
     const wishes = await collection.find({}).toArray();
     return wishes.length > 0 ? wishes.map(w => w.text) : [];
   } catch (error) {
@@ -191,7 +191,7 @@ async function sendBirthdayWishes(sock, dryRun = false) {
     return;
   }
 
-  const health = await mongoManager.healthCheck();
+  const health = await PluginHelpers.mongoHealthCheck();
   if (!health.healthy) {
     console.log('❌ MongoDB not healthy, skipping birthday wishes');
     return;
@@ -208,7 +208,7 @@ async function sendBirthdayWishes(sock, dryRun = false) {
   console.log(`🎂 Found ${todaysBirthdays.length} birthday(s) today!`);
   const today = moment.tz('Africa/Lagos').format('YYYY-MM-DD');
 
-  await mongoManager.safeOperation(async (db, collection) => {
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
     for (const birthdayPerson of todaysBirthdays) {
       const existingWish = await collection.findOne({ userId: birthdayPerson.userId, date: today });
       if (existingWish) {
@@ -272,14 +272,14 @@ async function sendBirthdayWishes(sock, dryRun = false) {
 async function sendBirthdayReminders(sock, dryRun = false) {
   if (!birthdaySettings.enableReminders) return;
 
-  const health = await mongoManager.healthCheck();
+  const health = await PluginHelpers.mongoHealthCheck();
   if (!health.healthy) {
     console.log('❌ MongoDB not healthy, skipping reminders');
     return;
   }
 
   const today = moment.tz('Africa/Lagos').format('YYYY-MM-DD');
-  await mongoManager.safeOperation(async (db, collection) => {
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
     for (const daysAhead of birthdaySettings.reminderDays) {
       const upcomingBirthdays = await getUpcomingBirthdays(daysAhead);
       if (upcomingBirthdays.length === 0) continue;
@@ -315,7 +315,7 @@ async function sendBirthdayReminders(sock, dryRun = false) {
 }
 
 async function cleanupRecords() {
-  await mongoManager.safeOperation(async (db) => {
+  await PluginHelpers.safeDBOperation(async (db) => {
     const cutoffDate = moment.tz('Africa/Lagos').subtract(30, 'days').toDate();
     await db.collection(COLLECTIONS.BIRTHDAY_WISHES).deleteMany({ timestamp: { $lt: cutoffDate } });
     await db.collection(COLLECTIONS.BIRTHDAY_REMINDERS).deleteMany({ timestamp: { $lt: cutoffDate } });
@@ -338,10 +338,9 @@ class BirthdayScheduler {
     this.tasks.push(
       cron.schedule(`${birthdaySettings.wishTime.split(':')[1]} ${birthdaySettings.wishTime.split(':')[0]} * * *`, () => sendBirthdayWishes(this.sock)),
       cron.schedule(`${birthdaySettings.reminderTime.split(':')[1]} ${birthdaySettings.reminderTime.split(':')[0]} * * *`, () => sendBirthdayReminders(this.sock)),
-      cron.schedule('0 0 * * *', cleanupRecords) // Daily at midnight
+      cron.schedule('0 0 * * *', cleanupRecords)
     );
 
-    // Immediate check
     setTimeout(() => {
       const now = moment.tz('Africa/Lagos');
       if (now.format('HH:mm') === birthdaySettings.wishTime) sendBirthdayWishes(this.sock);
@@ -369,7 +368,7 @@ export function initializeBirthdayScheduler(sock) {
   birthdayScheduler.start();
 }
 
-// Command handlers (unchanged logic, updated for new settings and age calc)
+// Command handlers remain unchanged
 async function handleBirthdayCommand(m, sock, config) {
   await loadSettings();
   if (!m.body || !m.body.startsWith(config.PREFIX)) return;
@@ -404,32 +403,35 @@ async function handleBirthdayCommand(m, sock, config) {
             const todayBdays = await getTodaysBirthdays();
             let msg = todayBdays.length > 0
               ? `🎉 *Today's Birthdays* 🎉\n\n${todayBdays.map(b => `👤 ${b.name}: ${b.birthday.displayDate}${b.birthday.age ? ` (Age ${b.birthday.age})` : ''}`).join('\n')}`
-              : '📅 No birthdays today.';
+              : '📅 No birthdays today!';
             await reply(msg);
             break;
           case 'upcoming':
-            let upcomingMsg = '🎂 *Upcoming Birthdays* 🎂\n\n';
-            for (let days = 1; days <= 30; days++) {
-              const bdays = await getUpcomingBirthdays(days);
-              if (bdays.length > 0) {
-                upcomingMsg += `📅 In ${days} day${days > 1 ? 's' : ''}:\n${bdays.map(b => `👤 ${b.name}: ${b.birthday.displayDate}${b.birthday.age ? ` (Age ${b.birthday.age + 1})` : ''}`).join('\n')}\n\n`;
+            let upcomingMsg = `📅 *Upcoming Birthdays* 📅\n\n`;
+            for (const days of birthdaySettings.reminderDays) {
+              const upcoming = await getUpcomingBirthdays(days);
+              if (upcoming.length > 0) {
+                upcomingMsg += `🎂 *In ${days} days:*\n${upcoming.map(b => `👤 ${b.name}: ${b.birthday.displayDate}${b.birthday.age ? ` (Age ${b.birthday.age})` : ''}`).join('\n')}\n\n`;
               }
             }
-            await reply(upcomingMsg || '📅 No upcoming birthdays in the next 30 days.');
+            await reply(upcomingMsg || '📅 No upcoming birthdays in the next ' + birthdaySettings.reminderDays.join(', ') + ' days.');
             break;
           case 'month':
-            const monthName = args[2]?.toLowerCase();
-            if (!monthName) {
-              await reply('⚠️ Please specify a month (e.g., January, Jan).');
+            const monthInput = args[2]?.toLowerCase();
+            if (!monthInput) {
+              await reply('⚠️ Please specify a month\n\nExample: *' + config.PREFIX + 'birthday month January*');
               return;
             }
-            const monthNum = Object.keys(MONTH_NAMES).find(k => k.startsWith(monthName));
-            if (!monthNum) {
+            const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+            const monthIndex = monthNames.findIndex(m => m.startsWith(monthInput));
+            if (monthIndex === -1) {
               await reply('⚠️ Invalid month name.');
               return;
             }
-            const bdays = await mongoManager.safeOperation(async (db, collection) => {
-              return await collection.find({ 'birthday.month': MONTH_NAMES[monthNum] }).sort({ 'birthday.day': 1 }).toArray();
+            const monthName = monthNames[monthIndex];
+            const monthKey = String(monthIndex + 1).padStart(2, '0');
+            const bdays = await PluginHelpers.safeDBOperation(async (db, collection) => {
+              return await collection.find({ 'birthday.searchKey': new RegExp(`^${monthKey}-`) }).toArray();
             }, COLLECTIONS.BIRTHDAYS);
             await reply(bdays.length > 0
               ? `🎂 *Birthdays in ${monthName}* 🎂\n\n${bdays.map(b => `👤 ${b.name}: ${b.birthday.displayDate}${b.birthday.age ? ` (Age ${b.birthday.age})` : ''}`).join('\n')}`
@@ -539,8 +541,7 @@ async function showSettings(reply) {
                 `👑 *Authorized Admins:* ${settings.adminNumbers.length}\n\n` +
                 `🔧 *Change Settings:*\n` +
                 `• *reminders on/off*\n• *wishes on/off*\n• *privatewishes on/off*\n• *remindertime HH:MM*\n` +
-                `• *wishtime HH:MM*\n• *reminderdays 7,3,1*\n• *groupreminders on/off*\n` +
-                `• *privatereminders on/off*\n• *addadmin @user*\n• *removeadmin @user*`;
+                `• *wishtime HH:MM*\n• *reminderdays 7,3,1*\n• *groupreminders on/off*\n• *privatereminders on/off*\n• *addadmin @user*\n• *removeadmin @user*`;
   await reply(message);
 }
 
