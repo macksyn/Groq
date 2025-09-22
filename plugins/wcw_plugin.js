@@ -280,7 +280,7 @@ function formatReminderMessage(timeUntil) {
   const messages = [
     `🔥 *WCW COUNTDOWN IS ON!* 🔥\n\nLadies and gentlemen, welcome to the ultimate glamour showdown! 💃✨\n\nIn just ${timeUntil}, the spotlight turns on for WOMAN CRUSH WEDNESDAY!\n\n👑 *Ladies:* Prepare to dazzle with your fierce photos – the guys are waiting to crown the queen!\n👀 *Guys:* Get your ratings ready – 1 to 10, make it count!\n\n💥 Epic prizes: Winner grabs ₦${wcwSettings.winnerReward.toLocaleString()} + bragging rights!\n🎉 Participation vibe: ₦${wcwSettings.participationReward.toLocaleString()} just for joining the fun!\n\nTune in at 8:00 PM sharp – this is YOUR stage! 📺\n#WCWSpotlight #GlamourNight #RateTheQueens`,
 
-    `🎤 *LIVE FROM GIST HQ: WCW PRE-SHOW HYPE!* 🎤\n\nThe clock is ticking... ${timeUntil} until the red carpet rolls out for WOMAN CRUSH WEDNESDAY! 🌟\n\n💄 *Ladies, it's showtime:* Strike a pose, upload your slay-worthy pic, and let the ratings pour in!\n🕺 *Gentlemen, you're the judges:* From 1-10, vote for the ultimate crush!\n\n🏆 Grand prize alert: ₦${wcwSettings.winnerReward.toLocaleString()} for the top diva!\n🎁 Everyone wins: ₦${wcwSettings.participationReward.toLocaleString()} for stepping into the arena!\n\nDon't miss the drama, the dazzle, and the declarations at 8:00 PM! 📣\n#WCWLiveEvent #BeautyBattle #TuneInNow`
+    `🎤 *WCW IS STARTING SOON!* 🎤\n\nThe clock is ticking... ${timeUntil} until the red carpet rolls out for WOMAN CRUSH WEDNESDAY! 🌟\n\n💄 *Ladies, it's showtime:* Strike a pose, upload your slay-worthy pic, and let the ratings pour in!\n🕺 *Gentlemen, you're the judges:* From 1-10, vote for the ultimate crush!\n\n🏆 Grand prize alert: ₦${wcwSettings.winnerReward.toLocaleString()} for the top diva!\n🎁 Everyone wins: ₦${wcwSettings.participationReward.toLocaleString()} for stepping into the arena!\n\nDon't miss the drama, the dazzle, and the declarations at 8:00 PM! 📣\n#WCWLiveEvent #BeautyBattle #TuneInNow`
   ];
   
   return messages[Math.floor(Math.random() * messages.length)];
@@ -600,14 +600,34 @@ async function handleRatingSubmission(m, sock) {
     
     if (!wcwSettings.allowSelfRating && senderId === participantId) {
       await sock.sendMessage(groupJid, { react: { text: '🚫', key: m.key } });
+      await sock.sendMessage(groupJid, {
+        text: `🚫 @${senderId.split('@')[0]} - Self-rating is not allowed!`,
+        mentions: [senderId]
+      }, { quoted: m });
       return true;
     }
     
     const ratingText = m.body || '';
+    
+    // Check if the message contains a potential rating (numbers or emojis)
+    const hasRatingAttempt = ratingText.match(/\b([1-9]|10)\b/) || // Matches numbers 1-10
+                            Object.keys(emojiToNumber).some(emoji => ratingText.includes(emoji)) || // Matches rating emojis
+                            ratingText.includes('1️⃣0️⃣'); // Special case for composed "10" emoji
+    
+    if (!hasRatingAttempt) {
+      // No rating attempt detected, ignore the message silently
+      return false;
+    }
+    
     const rating = extractRating(ratingText);
     
     if (!rating) {
+      // Invalid rating attempt, react with ❌
       await sock.sendMessage(groupJid, { react: { text: '❌', key: m.key } });
+      await sock.sendMessage(groupJid, {
+        text: `❌ @${senderId.split('@')[0]} - Invalid rating! Please use a number or emoji between 1-10 (e.g., "8", "🔟").`,
+        mentions: [senderId]
+      }, { quoted: m });
       return true;
     }
     
