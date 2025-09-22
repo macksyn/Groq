@@ -1153,4 +1153,3 @@ export default async function autoInterviewHandler(m, sock, config) {
     }
   }
 }
-```
