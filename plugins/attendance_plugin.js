@@ -1,6 +1,6 @@
 // plugins/attendance.js - Attendance plugin compatible with PluginManager
 import moment from 'moment-timezone';
-import mongoManager from '../lib/mongoManager.js';
+import { PluginHelpers } from '../lib/pluginIntegration.js';
 
 export const info = {
   name: 'Attendance System',
@@ -15,8 +15,8 @@ export const info = {
 };
 
 const COLLECTIONS = {
-  USERS: 'economy_users', // Matches pluginIntegration.js
-  TRANSACTIONS: 'economy_transactions', // For transaction logging
+  USERS: 'economy_users',
+  TRANSACTIONS: 'economy_transactions',
   BIRTHDAYS: 'birthdays',
   ATTENDANCE_RECORDS: 'attendance_records',
   SETTINGS: 'attendance_settings'
@@ -55,7 +55,7 @@ function startCacheCleanup() {
 startCacheCleanup();
 
 async function ensureIndexes() {
-  await mongoManager.safeOperation(async (db) => {
+  await PluginHelpers.safeDBOperation(async (db) => {
     const records = db.collection(COLLECTIONS.ATTENDANCE_RECORDS);
     await records.createIndex({ userId: 1, date: 1 }, { background: true });
     const birthdays = db.collection(COLLECTIONS.BIRTHDAYS);
@@ -74,7 +74,7 @@ let attendanceSettings = { ...defaultSettings };
 
 async function loadSettings() {
   try {
-    const collection = await mongoManager.getCollection(COLLECTIONS.SETTINGS);
+    const collection = await PluginHelpers.getCollection(COLLECTIONS.SETTINGS);
     const settings = await collection.findOne({ type: 'attendance' });
     if (settings) {
       attendanceSettings = { ...defaultSettings, ...settings.data };
@@ -86,7 +86,7 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
-  await mongoManager.safeOperation(async (db, collection) => {
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
     await collection.replaceOne(
       { type: 'attendance' },
       { type: 'attendance', data: attendanceSettings, updatedAt: new Date() },
@@ -97,130 +97,19 @@ async function saveSettings() {
 
 // User Management Functions
 async function initUser(userId) {
-  // Check cache first
-  if (userCache.has(userId)) {
-    const cached = userCache.get(userId);
-    if (Date.now() - cached.timestamp < cacheTimeout) {
-      return cached.user;
-    }
-  }
-
-  return await mongoManager.safeOperation(async (db, collection) => {
-    const existingUser = await collection.findOne({ userId });
-    
-    if (!existingUser) {
-      const newUser = {
-        userId,
-        balance: 0,
-        bank: 0,
-        inventory: [],
-        clan: null,
-        bounty: 0,
-        rank: 'Newbie',
-        lastAttendance: null,
-        totalAttendances: 0,
-        streak: 0,
-        longestStreak: 0,
-        birthdayData: null,
-        lastDaily: null,
-        lastWork: null,
-        lastRob: null,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-      await collection.insertOne(newUser);
-      userCache.set(userId, { user: newUser, timestamp: Date.now() });
-      console.log(`✅ Initialized user: ${userId}`);
-      return newUser;
-    } else {
-      // Ensure backward compatibility
-      const requiredFields = {
-        balance: 0,
-        bank: 0,
-        inventory: [],
-        clan: null,
-        bounty: 0,
-        rank: 'Newbie',
-        totalAttendances: 0,
-        streak: 0,
-        longestStreak: 0,
-        birthdayData: null,
-        lastDaily: null,
-        lastWork: null,
-        lastRob: null
-      };
-      const updates = {};
-      let needsUpdate = false;
-      
-      for (const [field, defaultValue] of Object.entries(requiredFields)) {
-        if (existingUser[field] === undefined) {
-          updates[field] = defaultValue;
-          needsUpdate = true;
-        }
-      }
-      if (!existingUser.updatedAt) {
-        updates.updatedAt = new Date();
-        needsUpdate = true;
-      }
-      if (needsUpdate) {
-        await collection.updateOne(
-          { userId },
-          { $set: updates }
-        );
-        Object.assign(existingUser, updates);
-      }
-      userCache.set(userId, { user: existingUser, timestamp: Date.now() });
-      return existingUser;
-    }
-  }, COLLECTIONS.USERS);
+  return await PluginHelpers.getUserData(userId);
 }
 
 async function getUserData(userId) {
-  return await initUser(userId);
+  return await PluginHelpers.getUserData(userId);
 }
 
 async function updateUserData(userId, data) {
-  return await mongoManager.safeOperation(async (db, collection) => {
-    const updateData = { ...data, updatedAt: new Date() };
-    const result = await collection.updateOne(
-      { userId },
-      { $set: updateData },
-      { upsert: true }
-    );
-    userCache.delete(userId); // Invalidate cache
-    console.log(`✅ Updated user data for ${userId}`);
-    return result;
-  }, COLLECTIONS.USERS);
+  return await PluginHelpers.updateUser(userId, data);
 }
 
 async function addMoney(userId, amount, reason = 'Attendance reward') {
-  return await mongoManager.safeOperation(async (db) => {
-    const usersCollection = db.collection(COLLECTIONS.USERS);
-    const transactionsCollection = db.collection(COLLECTIONS.TRANSACTIONS);
-    
-    const user = await getUserData(userId);
-    const newBalance = (user.balance || 0) + amount;
-    
-    await Promise.all([
-      usersCollection.updateOne(
-        { userId },
-        { $set: { balance: newBalance, updatedAt: new Date() } }
-      ),
-      transactionsCollection.insertOne({
-        userId,
-        type: 'credit',
-        amount,
-        reason,
-        balanceBefore: user.balance || 0,
-        balanceAfter: newBalance,
-        timestamp: new Date()
-      })
-    ]);
-    
-    userCache.delete(userId); // Invalidate cache
-    console.log(`✅ Added ₦${amount} to ${userId} (${reason})`);
-    return newBalance;
-  });
+  return await PluginHelpers.addMoney(userId, amount, reason);
 }
 
 const MONTH_NAMES = {
@@ -335,7 +224,7 @@ function formatBirthday(day, month, year, originalText) {
 async function saveBirthdayData(userId, name, birthdayData) {
   if (!birthdayData) return { success: false, error: 'No birthday data provided' };
 
-  return await mongoManager.safeOperation(async (db, collection) => {
+  return await PluginHelpers.safeDBOperation(async (db, collection) => {
     const existingRecord = await collection.findOne({ userId });
     let updateType = 'new';
     let finalName = name;
@@ -367,7 +256,7 @@ async function saveBirthdayData(userId, name, birthdayData) {
     };
 
     await collection.replaceOne({ userId }, birthdayRecord, { upsert: true });
-    await updateUserData(userId, { birthdayData, displayName: finalName });
+    await PluginHelpers.updateUser(userId, { birthdayData, displayName: finalName });
 
     console.log(`✅ Birthday data processed for ${finalName} (Type: ${updateType})`);
     return { success: true, updateType, finalName };
@@ -375,7 +264,7 @@ async function saveBirthdayData(userId, name, birthdayData) {
 }
 
 async function saveAttendanceRecord(userId, attendanceData) {
-  return await mongoManager.safeOperation(async (db, collection) => {
+  return await PluginHelpers.safeDBOperation(async (db, collection) => {
     const record = {
       userId,
       date: attendanceData.date,
@@ -391,7 +280,7 @@ async function saveAttendanceRecord(userId, attendanceData) {
 }
 
 async function cleanupRecords() {
-  await mongoManager.safeOperation(async (db) => {
+  await PluginHelpers.safeDBOperation(async (db) => {
     const cutoffDate = moment.tz('Africa/Lagos').subtract(90, 'days').toDate();
     await db.collection(COLLECTIONS.ATTENDANCE_RECORDS).deleteMany({ timestamp: { $lt: cutoffDate } });
     console.log('✅ Attendance records cleanup completed');
@@ -450,14 +339,11 @@ function validateAttendanceForm(body, hasImg = false) {
     if (!match || !match[1] || match[1].trim().length < attendanceSettings.minFieldLength) {
       validation.missingFields.push(field.fieldName);
     } else if (field.extract) {
-      const extractedValue = match[1].trim();
-      validation.extractedData[field.name.toLowerCase()] = extractedValue;
+      validation.extractedData[field.name.toLowerCase()] = match[1].trim();
       if (field.isBirthday) {
-        const parsedBirthday = parseBirthday(extractedValue);
-        if (parsedBirthday) {
-          validation.extractedData.parsedBirthday = parsedBirthday;
-        } else {
-          validation.missingFields.push(`${field.fieldName} (invalid format)`);
+        validation.extractedData.parsedBirthday = parseBirthday(match[1].trim());
+        if (!validation.extractedData.parsedBirthday) {
+          validation.missingFields.push(field.fieldName + " (invalid format)");
         }
       }
     }
@@ -802,7 +688,7 @@ async function handleAttendanceRecords(context, args) {
   const { reply, senderId } = context;
   try {
     const limit = args[0] ? Math.min(Math.max(parseInt(args[0]), 1), 50) : 10;
-    const records = await mongoManager.safeOperation(async (db, collection) => {
+    const records = await PluginHelpers.safeDBOperation(async (db, collection) => {
       return await collection.find({ userId: senderId }).sort({ timestamp: -1 }).limit(limit).toArray();
     }, COLLECTIONS.ATTENDANCE_RECORDS);
 
