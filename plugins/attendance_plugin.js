@@ -448,7 +448,7 @@ async function handleAutoAttendance(m, sock, config) {
     if (validation.extractedData.parsedBirthday && validation.extractedData.name) {
       const birthdayResult = await saveBirthdayData(senderId, validation.extractedData.name, validation.extractedData.parsedBirthday);
       if (birthdayResult.success) {
-        birthdayMessage = `\n🎂 Birthday saved/updated: ${validation.extractedData.parsedBirthday.displayDate}\nPlease confirm: Is this correct? Reply *yes* or *no*.`;
+        birthdayMessage = `\n🎂 Birthday saved/updated: ${validation.extractedData.parsedBirthday.displayDate}.`;
       }
     }
 
