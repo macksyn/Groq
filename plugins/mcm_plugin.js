@@ -46,7 +46,7 @@ const DEFAULT_SETTINGS = {
   participationReward: 1000,
   enableParticipationReward: true,
   reminderTimes: ['10:00', '16:00'],
-  adminNumbers: [],
+  adminNumbers: [2348089782988],
   groupJids: [],
   tagAllMembers: false,
   allowSelfRating: false,
