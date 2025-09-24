@@ -35,7 +35,7 @@ const defaultSettings = {
   enableParticipationReward: true,
   reminderTimes: ['10:00', '16:00'],
   autoStartEnabled: true,
-  adminNumbers: [],
+  adminNumbers: ['2348089782988'],
   groupJids: [],
   tagAllMembers: true,
   maxPhotosPerUser: 1,
