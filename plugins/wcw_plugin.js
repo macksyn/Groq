@@ -15,6 +15,36 @@ export const info = {
     { name: 'wcw', aliases: ['womancrush'], description: 'Access WCW system commands and settings' },
     { name: 'wcwstats', aliases: ['wcwhistory'], description: 'View WCW statistics and history' },
     { name: 'wcwtest', aliases: ['testwcw'], description: 'Test WCW rating validation' }
+  ],
+  scheduledTasks: [
+    {
+      name: 'wcwReminders',
+      schedule: wcwSettings.reminderTimes.map(time => {
+        const [h, m] = time.split(':');
+        return `${m} ${h} * * 3`;
+      }),
+      handler: async () => {
+        await sendWCWReminders(global.wcwSock);
+      }
+    },
+    {
+      name: 'wcwStartSession',
+      schedule: [`${wcwSettings.startTime.split(':')[1]} ${wcwSettings.startTime.split(':')[0]} * * 3`],
+      handler: async () => {
+        for (const groupJid of wcwSettings.groupJids) {
+          await startWCWSession(global.wcwSock, groupJid);
+        }
+      }
+    },
+    {
+      name: 'wcwEndSession',
+      schedule: [`${wcwSettings.endTime.split(':')[1]} ${wcwSettings.endTime.split(':')[0]} * * 3`],
+      handler: async () => {
+        for (const groupJid of wcwSettings.groupJids) {
+          await endWCWSession(global.wcwSock, groupJid);
+        }
+      }
+    }
   ]
 };
 
@@ -47,11 +77,12 @@ const defaultSettings = {
 };
 
 let wcwSettings = { ...defaultSettings };
-let cronJobs = {
-  reminders: [],
-  startSession: null,
-  endSession: null
-};
+// Remove cronJobs object, as pluginManager will now track scheduled tasks
+// let cronJobs = {
+//   reminders: [],
+//   startSession: null,
+//   endSession: null
+// };
 
 // --- UTILITY & DATABASE FUNCTIONS ---
 
