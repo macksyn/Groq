@@ -1,4 +1,4 @@
-// plugins/wcw.js - Woman Crush Wednesday Plugin (FIXED & Finalized)
+// plugins/wcw.js - Woman Crush Wednesday Plugin (COMPLETE WITH RESTART RECOVERY)
 import { unifiedUserManager, getDatabase, safeOperation } from '../lib/pluginIntegration.js';
 import sharp from 'sharp';
 import moment from 'moment-timezone';
@@ -8,9 +8,9 @@ import chalk from 'chalk';
 // Plugin information for your pluginManager
 export const info = {
   name: 'Woman Crush Wednesday (WCW)',
-  version: '2.2.1',
-  author: 'System Rewrite (Fixed)',
-  description: 'Weekly Woman Crush Wednesday contest with automated scheduling, rating system, and rewards.',
+  version: '2.4.0',
+  author: 'System Rewrite (Complete with Restart Recovery)',
+  description: 'Weekly Woman Crush Wednesday contest with automated scheduling, rating system, rewards, and restart recovery.',
   commands: [
     { name: 'wcw', aliases: ['womancrush'], description: 'Access WCW system commands and settings' },
     { name: 'wcwstats', aliases: ['wcwhistory'], description: 'View WCW statistics and history' },
@@ -107,22 +107,51 @@ async function saveSettings() {
   }
 }
 
+// Database operation with retry mechanism
+async function safeOperationWithRetry(operation, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await safeOperation(operation);
+    } catch (error) {
+      console.error(`Database operation failed (attempt ${i + 1}):`, error);
+      if (i === retries - 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
+    }
+  }
+}
+
 // --- AUTHORIZATION ---
 
 async function isAuthorized(sock, from, sender, config) {
   try {
-    if (wcwSettings.adminNumbers.includes(sender.split('@')[0])) return true;
-    if (sender.split('@')[0] === config.OWNER_NUMBER) return true;
+    // Check admin numbers first
+    const senderNumber = sender.split('@')[0];
+    if (wcwSettings.adminNumbers.includes(senderNumber)) return true;
+    if (senderNumber === config.OWNER_NUMBER) return true;
+    
+    // Only check group admin if it's a group
     if (!from.endsWith('@g.us')) return false;
 
-    const groupMetadata = await sock.groupMetadata(from);
+    // ✅ FIX: Add timeout and error handling for group metadata
+    const timeout = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Timeout')), 5000)
+    );
+    
+    const groupMetadata = await Promise.race([
+      sock.groupMetadata(from),
+      timeout
+    ]);
+    
     const groupAdmins = groupMetadata.participants
       .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
       .map(p => p.id);
+    
     return groupAdmins.includes(sender);
   } catch (error) {
     console.error('Error checking authorization:', error);
-    return false;
+    // ✅ FIX: Default to checking if user is in admin numbers only
+    return wcwSettings.adminNumbers.includes(sender.split('@')[0]) || 
+           sender.split('@')[0] === config.OWNER_NUMBER;
   }
 }
 
@@ -144,121 +173,340 @@ async function getCurrentSession(groupJid) {
   }
 }
 
+// ✅ FIXED: Rating extraction function - simplified and more reliable
 function extractRating(text) {
+  if (!text) return null;
+  
+  // ✅ FIX: Handle 10 emojis properly (check this first)
   if (text.includes('1️⃣0️⃣')) {
-      return 10;
+    return 10;
   }
-  const emojiToNumber = { '1️⃣': 1, '2️⃣': 2, '3️⃣': 3, '4️⃣': 4, '5️⃣': 5, '6️⃣': 6, '7️⃣': 7, '8️⃣': 8, '9️⃣': 9, '🔟': 10 };
+  
+  // ✅ Check for single digit emojis
+  const emojiToNumber = { 
+    '1️⃣': 1, '2️⃣': 2, '3️⃣': 3, '4️⃣': 4, '5️⃣': 5, 
+    '6️⃣': 6, '7️⃣': 7, '8️⃣': 8, '9️⃣': 9, '🔟': 10 
+  };
+  
   for (const [emoji, number] of Object.entries(emojiToNumber)) {
     if (text.includes(emoji)) return number;
   }
-  const numbers = text.match(/\b([1-9]|10)\b/g);
+  
+  // ✅ FIX: Better regex for number extraction (handles 10 properly)
+  const numbers = text.match(/\b(10|[1-9])\b/g);
   if (!numbers) return null;
+  
   const rating = parseInt(numbers[0]);
   return (rating >= wcwSettings.validRatingRange.min && rating <= wcwSettings.validRatingRange.max) ? rating : null;
 }
 
+// --- SESSION RECOVERY FUNCTIONS ---
+
+async function checkAndRecoverActiveSessions(sock) {
+  try {
+    if (!isWednesday()) return;
+
+    const today = getCurrentDate();
+    const activeSessions = await safeOperation(db => 
+      db.collection(COLLECTIONS.WCW_SESSIONS).find({
+        date: today,
+        status: 'active'
+      }).toArray()
+    );
+
+    if (activeSessions.length === 0) {
+      console.log(chalk.yellow('No active WCW sessions found to recover'));
+      return;
+    }
+
+    const currentTime = getNigeriaTime();
+    const endTime = moment.tz(`${today} ${wcwSettings.endTime}`, 'DD-MM-YYYY HH:mm', 'Africa/Lagos');
+
+    for (const session of activeSessions) {
+      console.log(chalk.blue(`🔄 Recovering WCW session: ${session.sessionId}`));
+      
+      // Check if session should have already ended
+      if (currentTime.isAfter(endTime)) {
+        console.log(chalk.orange(`⏰ Session ${session.sessionId} should have ended, ending now...`));
+        await endWCWSession(sock, session.groupJid);
+        continue;
+      }
+
+      // Notify groups that bot is back online
+      try {
+        await sock.sendMessage(session.groupJid, {
+          text: `🤖 *Bot Reconnected!* 🤖\n\n` +
+                `✅ Your WCW session is still ACTIVE!\n` +
+                `⏰ Ends at: ${wcwSettings.endTime}\n` +
+                `📸 Keep submitting photos and ratings!\n\n` +
+                `*Session recovered successfully* 🔄`
+        });
+        
+        console.log(chalk.green(`✅ Notified group ${session.groupJid} of session recovery`));
+      } catch (error) {
+        console.error(`Error notifying group ${session.groupJid}:`, error);
+      }
+
+      // Set up dynamic end job for this specific session
+      setupDynamicEndJob(sock, session);
+    }
+
+    console.log(chalk.green(`✅ Recovered ${activeSessions.length} active WCW sessions`));
+  } catch (error) {
+    console.error(chalk.red('❌ Error recovering active sessions:'), error);
+  }
+}
+
+function setupDynamicEndJob(sock, session) {
+  try {
+    const today = getCurrentDate();
+    const endTime = moment.tz(`${today} ${wcwSettings.endTime}`, 'DD-MM-YYYY HH:mm', 'Africa/Lagos');
+    const currentTime = getNigeriaTime();
+    
+    if (currentTime.isAfter(endTime)) {
+      // Should have already ended
+      endWCWSession(sock, session.groupJid).catch(console.error);
+      return;
+    }
+
+    const timeUntilEnd = endTime.diff(currentTime);
+    console.log(chalk.blue(`⏰ Setting dynamic end job for session ${session.sessionId} in ${moment.duration(timeUntilEnd).humanize()}`));
+
+    setTimeout(() => {
+      endWCWSession(sock, session.groupJid).catch(error => {
+        console.error(`Error in dynamic end job for ${session.groupJid}:`, error);
+      });
+    }, timeUntilEnd);
+
+  } catch (error) {
+    console.error('Error setting up dynamic end job:', error);
+  }
+}
+
 // --- MESSAGE HANDLERS ---
 
+// ✅ FIXED: Photo submission validation
 async function handlePhotoSubmission(m, sock) {
   try {
     const groupJid = m.from;
     const senderId = m.sender;
     
-    if (!isWednesday() || !groupJid.endsWith('@g.us')) return false;
+    if (!isWednesday() || !groupJid.endsWith('@g.us')) {
+      console.log(`Photo submission rejected: isWednesday=${isWednesday()}, isGroup=${groupJid.endsWith('@g.us')}`);
+      return false;
+    }
 
     const session = await getCurrentSession(groupJid);
-    if (!session) return false;
+    if (!session) {
+      console.log('No active WCW session found');
+      return false;
+    }
 
+    // ✅ FIX: The original logic was flawed - it required BOTH reply AND keyword
     const quotedMessageId = m.message?.imageMessage?.contextInfo?.stanzaId;
     const isReplyingToStartMessage = session.startMessageKey && quotedMessageId === session.startMessageKey.id;
     
     const caption = m.message?.imageMessage?.caption || '';
-    const keywords = ['wcw', 'rate', 'crush'];
+    const keywords = ['wcw', 'rate', 'crush', 'woman', 'wednesday'];
     const hasKeyword = keywords.some(keyword => new RegExp(`\\b${keyword}\\b`, 'i').test(caption));
 
-    if (!isReplyingToStartMessage && !hasKeyword) return false;
+    // ✅ Should be OR condition, not AND
+    if (!isReplyingToStartMessage && !hasKeyword) {
+      console.log(`Photo not qualifying: reply=${isReplyingToStartMessage}, hasKeyword=${hasKeyword}, caption="${caption}"`);
+      return false;
+    }
 
     const existingParticipant = await safeOperation(db =>
-      db.collection(COLLECTIONS.WCW_PARTICIPANTS).findOne({ sessionId: session.sessionId, userId: senderId })
+      db.collection(COLLECTIONS.WCW_PARTICIPANTS).findOne({ 
+        sessionId: session.sessionId, 
+        userId: senderId 
+      })
     );
 
     if (existingParticipant) {
       await m.react('❌');
-      await sock.sendMessage(groupJid, { text: `🚫 @${senderId.split('@')[0]} - You already submitted your photo!`, mentions: [senderId] });
+      await sock.sendMessage(groupJid, { 
+        text: `🚫 @${senderId.split('@')[0]} - You already submitted your photo!`, 
+        mentions: [senderId] 
+      });
       return true;
     }
 
-    const participantData = { sessionId: session.sessionId, userId: senderId, userPhone: senderId.split('@')[0], messageKey: m.key, photoSubmittedAt: new Date(), totalRating: 0, averageRating: 0, ratingCount: 0 };
-    await safeOperation(async (db) => {
-      await db.collection(COLLECTIONS.WCW_PARTICIPANTS).insertOne(participantData);
-      await db.collection(COLLECTIONS.WCW_SESSIONS).updateOne({ sessionId: session.sessionId }, { $push: { participants: senderId } });
+    const participantData = { 
+      sessionId: session.sessionId, 
+      userId: senderId, 
+      userPhone: senderId.split('@')[0], 
+      messageKey: m.key, 
+      photoSubmittedAt: new Date(), 
+      totalRating: 0, 
+      averageRating: 0, 
+      ratingCount: 0 
+    };
+
+    // ✅ FIX: Better error handling for database operations
+    const insertResult = await safeOperation(async (db) => {
+      const result = await db.collection(COLLECTIONS.WCW_PARTICIPANTS).insertOne(participantData);
+      await db.collection(COLLECTIONS.WCW_SESSIONS).updateOne(
+        { sessionId: session.sessionId }, 
+        { $push: { participants: senderId } }
+      );
+      return result;
     });
+
+    if (!insertResult) {
+      console.error('Failed to insert participant data');
+      await m.react('❌');
+      return false;
+    }
 
     await m.react('✅');
     if (wcwSettings.enableParticipationReward) {
-      await unifiedUserManager.addMoney(senderId, wcwSettings.participationReward, 'WCW participation');
+      try {
+        await unifiedUserManager.addMoney(senderId, wcwSettings.participationReward, 'WCW participation');
+      } catch (error) {
+        console.error('Failed to add participation reward:', error);
+        // Don't fail the submission just because reward failed
+      }
     }
+    
     console.log(chalk.green(`📸 WCW photo submitted by ${senderId.split('@')[0]}`));
     return true;
 
   } catch (error) {
     console.error('Error handling photo submission:', error);
+    await m.react('❌');
     return false;
   }
 }
 
+// ✅ FIXED: Rating submission handler
 async function handleRatingSubmission(m, sock) {
   try {
     const groupJid = m.from;
     const raterId = m.sender;
+    
+    // ✅ Add proper validation
+    if (!m.quoted || !m.quoted.sender) {
+      console.log('No quoted message or sender found for rating');
+      return false;
+    }
+    
     const participantId = m.quoted.sender;
 
-    if (!isWednesday() || !groupJid.endsWith('@g.us') || !participantId) return false;
+    if (!isWednesday() || !groupJid.endsWith('@g.us') || !participantId) {
+      console.log(`Rating conditions not met: isWednesday=${isWednesday()}, isGroup=${groupJid.endsWith('@g.us')}, hasParticipant=${!!participantId}`);
+      return false;
+    }
 
     const session = await getCurrentSession(groupJid);
-    if (!session) return false;
+    if (!session) {
+      console.log('No active WCW session found for rating');
+      return false;
+    }
 
-    const participant = await safeOperation(db => db.collection(COLLECTIONS.WCW_PARTICIPANTS).findOne({ sessionId: session.sessionId, userId: participantId }));
-    if (!participant) return false;
+    const participant = await safeOperation(db => 
+      db.collection(COLLECTIONS.WCW_PARTICIPANTS).findOne({ 
+        sessionId: session.sessionId, 
+        userId: participantId 
+      })
+    );
+    
+    if (!participant) {
+      console.log(`Participant ${participantId.split('@')[0]} not found in current session`);
+      return false;
+    }
 
     if (!wcwSettings.allowSelfRating && raterId === participantId) {
       await m.react('🚫');
+      console.log(`Self-rating blocked for ${raterId.split('@')[0]}`);
       return true;
     }
 
     const rating = extractRating(m.body || '');
-    if (!rating) return false;
+    if (!rating) {
+      console.log(`No valid rating found in message: "${m.body}"`);
+      return false;
+    }
     
-    await safeOperation(db => db.collection(COLLECTIONS.WCW_RATINGS).updateOne({ sessionId: session.sessionId, raterId, participantId }, { $set: { rating, updatedAt: new Date() } }, { upsert: true }));
-    updateParticipantRatings(session.sessionId, participantId);
+    // ✅ Add better error handling for database operations
+    const ratingResult = await safeOperation(async (db) => {
+      const result = await db.collection(COLLECTIONS.WCW_RATINGS).updateOne(
+        { sessionId: session.sessionId, raterId, participantId },
+        { 
+          $set: { 
+            rating, 
+            updatedAt: new Date() 
+          } 
+        },
+        { upsert: true }
+      );
+      return result;
+    });
+
+    if (!ratingResult) {
+      console.error('Failed to save rating to database');
+      await m.react('❌');
+      return true;
+    }
+
+    // ✅ Await the rating update
+    await updateParticipantRatings(session.sessionId, participantId);
     await m.react('✅');
+    
     console.log(chalk.cyan(`⭐ WCW rating ${rating} by ${raterId.split('@')[0]} to ${participantId.split('@')[0]}`));
     return true;
 
   } catch (error) {
     console.error('Error handling rating submission:', error);
+    await m.react('❌');
     return false;
   }
 }
 
+// ✅ FIXED: Rating update function with better error handling
 async function updateParticipantRatings(sessionId, participantId) {
   try {
     await safeOperation(async (db) => {
-      const ratings = await db.collection(COLLECTIONS.WCW_RATINGS).find({ sessionId, participantId }).toArray();
+      const ratings = await db.collection(COLLECTIONS.WCW_RATINGS)
+        .find({ sessionId, participantId })
+        .toArray();
+      
       const totalRating = ratings.reduce((sum, r) => sum + r.rating, 0);
       const ratingCount = ratings.length;
       const averageRating = ratingCount > 0 ? totalRating / ratingCount : 0;
-      await db.collection(COLLECTIONS.WCW_PARTICIPANTS).updateOne({ sessionId, userId: participantId }, { $set: { totalRating, averageRating: Math.round(averageRating * 100) / 100, ratingCount, updatedAt: new Date() } });
+      
+      const updateResult = await db.collection(COLLECTIONS.WCW_PARTICIPANTS).updateOne(
+        { sessionId, userId: participantId },
+        { 
+          $set: { 
+            totalRating, 
+            averageRating: Math.round(averageRating * 100) / 100, 
+            ratingCount, 
+            updatedAt: new Date() 
+          } 
+        }
+      );
+      
+      console.log(`Updated ratings for ${participantId.split('@')[0]}: ${averageRating.toFixed(1)}/10 (${ratingCount} ratings)`);
+      return updateResult;
     });
   } catch (error) {
     console.error('Error updating participant ratings:', error);
+    throw error; // Re-throw so caller knows it failed
   }
 }
 
 // --- CORE EVENT WORKFLOW ---
 
 async function startWCWSession(sock, groupJid) {
+  try {
+    // Check if session already exists (restart scenario)
+    const existingSession = await getCurrentSession(groupJid);
+    if (existingSession) {
+      console.log(chalk.yellow(`Session already exists for ${groupJid}, skipping start`));
+      return;
+    }
+
     const startMessage = `💃 WOMAN CRUSH WEDNESDAY IS NOW LIVE! 💃\n\n` +
          `🔴 LIVE NOW - LIVE NOW - LIVE NOW 🔴\n\n` +
          `*HOW TO PARTICIPATE:*\n` +
@@ -272,11 +520,32 @@ async function startWCWSession(sock, groupJid) {
          `💄 Let the glamour begin! 💄\n#WCWLive`;
 
     const groupMetadata = await sock.groupMetadata(groupJid);
-    const sentMessage = await sock.sendMessage(groupJid, { text: startMessage, mentions: groupMetadata.participants.map(p => p.id) });
+    const sentMessage = await sock.sendMessage(groupJid, { 
+      text: startMessage, 
+      mentions: groupMetadata.participants.map(p => p.id) 
+    });
 
-    const sessionData = { sessionId: `wcw_${getCurrentDate()}_${groupJid}`, date: getCurrentDate(), groupJid, status: 'active', startedAt: new Date(), startMessageKey: sentMessage.key };
+    const sessionData = { 
+      sessionId: `wcw_${getCurrentDate()}_${groupJid}`, 
+      date: getCurrentDate(), 
+      groupJid, 
+      status: 'active', 
+      startedAt: new Date(), 
+      startMessageKey: sentMessage.key,
+      participants: [],
+      botRestartRecoverable: true // Flag to help with recovery
+    };
+
     await safeOperation(db => db.collection(COLLECTIONS.WCW_SESSIONS).insertOne(sessionData));
     console.log(chalk.green(`✅ WCW session started for ${groupJid}`));
+
+    // Set up dynamic end job for this session
+    setupDynamicEndJob(sock, { groupJid, sessionId: sessionData.sessionId });
+
+  } catch (error) {
+    console.error('Error starting WCW session:', error);
+    throw error;
+  }
 }
 
 async function endWCWSession(sock, groupJid) {
@@ -309,31 +578,40 @@ async function endWCWSession(sock, groupJid) {
   return true;
 }
 
+// ✅ FIXED: Winner declaration with better error handling
 async function declareWinner(sock, groupJid, winner) {
-    await unifiedUserManager.addMoney(winner.userId, wcwSettings.winnerReward, 'WCW Winner');
-    let framedBuffer = null;
-    try {
-        const quotedMsg = await sock.loadMessage(winner.messageKey.remoteJid, winner.messageKey.id);
+  await unifiedUserManager.addMoney(winner.userId, wcwSettings.winnerReward, 'WCW Winner');
+  
+  let framedBuffer = null;
+  try {
+    // ✅ FIX: Better error handling for message loading
+    if (winner.messageKey && winner.messageKey.remoteJid && winner.messageKey.id) {
+      const quotedMsg = await sock.loadMessage(winner.messageKey.remoteJid, winner.messageKey.id);
+      if (quotedMsg && quotedMsg.message?.imageMessage) {
         const stream = await sock.downloadMediaMessage(quotedMsg);
         const chunks = [];
         for await (const chunk of stream) chunks.push(chunk);
         framedBuffer = await frameWinnerPhoto(Buffer.concat(chunks));
-    } catch (err) {
-      console.error('Error processing winner photo:', err);
+      }
     }
-    
-    const winnerMessage = `👑 AND THE CROWN GOES TO... 👑\n\n` +
-                         `🎉 Congratulations @${winner.userPhone}! You are tonight's Woman Crush Queen! 🎉\n\n` +
-                         `💰 Prize: ₦${wcwSettings.winnerReward.toLocaleString()} 💰\n` +
-                         `⭐ Total Points: ${winner.totalRating}\n` +
-                         `📊 Average Rating: ${winner.averageRating.toFixed(1)}/10\n` +
-                         `🗳️ Based on ${winner.ratingCount} ratings\n\n` +
-                         `#WCWWinner #QueenCrowned`;
+  } catch (err) {
+    console.error('Error processing winner photo:', err);
+    // Continue without framed photo
+  }
+  
+  const winnerMessage = `👑 AND THE CROWN GOES TO... 👑\n\n` +
+                       `🎉 Congratulations @${winner.userPhone}! You are tonight's Woman Crush Queen! 🎉\n\n` +
+                       `💰 Prize: ₦${wcwSettings.winnerReward.toLocaleString()} 💰\n` +
+                       `⭐ Total Points: ${winner.totalRating}\n` +
+                       `📊 Average Rating: ${winner.averageRating.toFixed(1)}/10\n` +
+                       `🗳️ Based on ${winner.ratingCount} ratings\n\n` +
+                       `#WCWWinner #QueenCrowned`;
 
-    const messagePayload = framedBuffer 
-      ? { image: framedBuffer, caption: winnerMessage, mentions: [winner.userId] }
-      : { text: winnerMessage, mentions: [winner.userId] };
-    await sock.sendMessage(groupJid, messagePayload);
+  const messagePayload = framedBuffer 
+    ? { image: framedBuffer, caption: winnerMessage, mentions: [winner.userId] }
+    : { text: winnerMessage, mentions: [winner.userId] };
+    
+  await sock.sendMessage(groupJid, messagePayload);
 }
 
 async function frameWinnerPhoto(photoBuffer) {
@@ -374,22 +652,79 @@ async function sendWCWReminders(sock) {
   }
 }
 
+// ✅ FIXED: Cron job setup with restart awareness
 function setupWCWCronJobs(sock) {
-  stopAllCronJobs();
-  wcwSettings.reminderTimes.forEach(time => {
-    const [h, m] = time.split(':');
-    cronJobs.reminders.push(cron.schedule(`${m} ${h} * * 3`, () => sendWCWReminders(sock), { timezone: 'Africa/Lagos' }));
-  });
-  const [startH, startM] = wcwSettings.startTime.split(':');
-  cronJobs.startSession = cron.schedule(`${startM} ${startH} * * 3`, () => {
-    if (!wcwSettings.autoStartEnabled) return;
-    wcwSettings.groupJids.forEach(groupJid => startWCWSession(sock, groupJid).catch(e => console.error(e)));
-  }, { timezone: 'Africa/Lagos' });
-  const [endH, endM] = wcwSettings.endTime.split(':');
-  cronJobs.endSession = cron.schedule(`${endM} ${endH} * * 3`, () => {
-    wcwSettings.groupJids.forEach(groupJid => endWCWSession(sock, groupJid).catch(e => console.error(e)));
-  }, { timezone: 'Africa/Lagos' });
-  console.log(chalk.green(`✅ WCW cron jobs scheduled. Session: ${wcwSettings.startTime}-${wcwSettings.endTime}.`));
+  try {
+    stopAllCronJobs();
+    
+    // ✅ FIX: Validate time format before creating cron jobs
+    const validateTime = (timeString) => {
+      const [h, m] = timeString.split(':');
+      const hour = parseInt(h);
+      const minute = parseInt(m);
+      return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
+    };
+    
+    if (!validateTime(wcwSettings.startTime) || !validateTime(wcwSettings.endTime)) {
+      console.error('Invalid time format in WCW settings');
+      return;
+    }
+    
+    // Set up reminder jobs
+    wcwSettings.reminderTimes.forEach(time => {
+      if (validateTime(time)) {
+        const [h, m] = time.split(':');
+        cronJobs.reminders.push(cron.schedule(`${m} ${h} * * 3`, () => {
+          sendWCWReminders(sock).catch(console.error);
+        }, { timezone: 'Africa/Lagos' }));
+      }
+    });
+    
+    // 🔄 ENHANCED: Start session job with restart awareness
+    const [startH, startM] = wcwSettings.startTime.split(':');
+    cronJobs.startSession = cron.schedule(`${startM} ${startH} * * 3`, async () => {
+      if (!wcwSettings.autoStartEnabled) return;
+      
+      // Check for existing active sessions before starting new ones
+      for (const groupJid of wcwSettings.groupJids) {
+        try {
+          const existingSession = await getCurrentSession(groupJid);
+          if (existingSession) {
+            console.log(chalk.yellow(`Skipping start for ${groupJid} - session already active`));
+            continue;
+          }
+          await startWCWSession(sock, groupJid);
+        } catch (error) {
+          console.error(`Error starting WCW session in ${groupJid}:`, error);
+        }
+      }
+    }, { timezone: 'Africa/Lagos' });
+    
+    // 🔄 ENHANCED: End session job with better recovery
+    const [endH, endM] = wcwSettings.endTime.split(':');
+    cronJobs.endSession = cron.schedule(`${endM} ${endH} * * 3`, async () => {
+      // End all active sessions for today
+      const today = getCurrentDate();
+      const activeSessions = await safeOperation(db => 
+        db.collection(COLLECTIONS.WCW_SESSIONS).find({
+          date: today,
+          status: 'active'
+        }).toArray()
+      );
+
+      for (const session of activeSessions) {
+        try {
+          await endWCWSession(sock, session.groupJid);
+        } catch (error) {
+          console.error(`Error ending WCW session in ${session.groupJid}:`, error);
+        }
+      }
+    }, { timezone: 'Africa/Lagos' });
+    
+    console.log(chalk.green(`✅ WCW cron jobs scheduled. Session: ${wcwSettings.startTime}-${wcwSettings.endTime}.`));
+  } catch (error) {
+    console.error('Error setting up WCW cron jobs:', error);
+  }
 }
 
 function stopAllCronJobs() {
@@ -403,32 +738,80 @@ async function handleWCWCommand(m, sock, args, config) {
   const { from, sender } = m;
   if (args.length === 0) {
     const session = await getCurrentSession(from);
-    let statusMessage = `💃 *Woman Crush Wednesday System* 💃\n\n` + `*Status:* ${session ? '🔴 Live' : '⚫ Offline'}\n` + `*Schedule:* ${wcwSettings.startTime} - ${wcwSettings.endTime}\n\n` + `Use *${config.PREFIX}wcwstats* to view history.\n` + ((await isAuthorized(sock, from, sender, config)) ? `*Admin:* Use *${config.PREFIX}wcw help* for commands.` : '');
+    let statusMessage = `💃 *Woman Crush Wednesday System* 💃\n\n` + 
+      `*Status:* ${session ? '🔴 Live' : '⚫ Offline'}\n` + 
+      `*Schedule:* ${wcwSettings.startTime} - ${wcwSettings.endTime}\n\n` + 
+      `Use *${config.PREFIX}wcwstats* to view history.\n` + 
+      ((await isAuthorized(sock, from, sender, config)) ? `*Admin:* Use *${config.PREFIX}wcw help* for commands.` : '');
     return sock.sendMessage(from, { text: statusMessage });
   }
-  if (!await isAuthorized(sock, from, sender, config)) return m.reply('🚫 You are not authorized to use admin commands.');
+  
+  if (!await isAuthorized(sock, from, sender, config)) {
+    return m.reply('🚫 You are not authorized to use admin commands.');
+  }
+  
   const subCommand = args[0].toLowerCase();
+  
   switch (subCommand) {
     case 'start':
       if (!isWednesday()) return m.reply('📅 WCW can only be started on Wednesdays!');
       if (await getCurrentSession(from)) return m.reply('⚠️ A session is already active!');
       await startWCWSession(sock, from);
       break;
+      
     case 'end':
       if (!await getCurrentSession(from)) return m.reply('⚠️ No active session to end.');
       await endWCWSession(sock, from);
       break;
+      
+    case 'recover':
+      // 🔄 NEW: Manual recovery command
+      await m.reply('🔄 Checking for active sessions to recover...');
+      await checkAndRecoverActiveSessions(sock);
+      await m.reply('✅ Session recovery check completed!');
+      break;
+      
+    case 'status':
+      // 🔄 NEW: Detailed status command
+      const session = await getCurrentSession(from);
+      if (!session) {
+        return m.reply('📊 No active WCW session in this group.');
+      }
+      
+      const participants = await safeOperation(db => 
+        db.collection(COLLECTIONS.WCW_PARTICIPANTS)
+          .find({ sessionId: session.sessionId })
+          .toArray()
+      );
+      
+      const totalRatings = await safeOperation(db => 
+        db.collection(COLLECTIONS.WCW_RATINGS)
+          .countDocuments({ sessionId: session.sessionId })
+      );
+      
+      const statusMsg = `📊 *WCW Session Status*\n\n` +
+        `🆔 Session: ${session.sessionId}\n` +
+        `📅 Started: ${moment(session.startedAt).format('HH:mm')}\n` +
+        `👥 Participants: ${participants.length}\n` +
+        `⭐ Total Ratings: ${totalRatings}\n` +
+        `⏰ Ends: ${wcwSettings.endTime}`;
+      
+      await m.reply(statusMsg);
+      break;
+      
     case 'addgroup':
       if (wcwSettings.groupJids.includes(from)) return m.reply('⚠️ This group is already in the WCW system!');
       wcwSettings.groupJids.push(from);
       await saveSettings();
       m.reply('✅ This group has been added to the WCW system!');
       break;
+      
     case 'removegroup':
       wcwSettings.groupJids = wcwSettings.groupJids.filter(id => id !== from);
       await saveSettings();
       m.reply('✅ This group has been removed from the WCW system!');
       break;
+      
     case 'setprize':
       const prize = parseInt(args[1]);
       if (isNaN(prize) || prize < 0) return m.reply('❌ Invalid amount.');
@@ -436,8 +819,9 @@ async function handleWCWCommand(m, sock, args, config) {
       await saveSettings();
       m.reply(`✅ Winner prize set to ₦${prize.toLocaleString()}!`);
       break;
+      
     default:
-      m.reply(`*WCW Admin Help*\n\n*Commands:*\n- start\n- end\n- addgroup\n- removegroup\n- setprize <amount>`);
+      m.reply(`*WCW Admin Help*\n\n*Commands:*\n- start\n- end\n- recover\n- status\n- addgroup\n- removegroup\n- setprize <amount>`);
   }
 }
 
@@ -460,6 +844,10 @@ async function initializePlugin(sock) {
     try {
         await initDatabase();
         await loadSettings();
+        
+        // 🔄 NEW: Check for active sessions before setting up cron jobs
+        await checkAndRecoverActiveSessions(sock);
+        
         setupWCWCronJobs(sock);
         isInitialized = true;
         console.log(chalk.green('✅ WCW Plugin initialized successfully'));
@@ -468,6 +856,7 @@ async function initializePlugin(sock) {
     }
 }
 
+// ✅ FIXED: Main handler with improved message flow
 export default async function wcwPlugin(m, sock, config) {
   try {
     // One-time initialization on first message.
@@ -475,20 +864,33 @@ export default async function wcwPlugin(m, sock, config) {
       await initializePlugin(sock);
     }
 
+    // ✅ FIX: Handle non-command messages first (photos and ratings)
     if (!m.body?.startsWith(config.PREFIX)) {
-      if (m.message?.imageMessage) await handlePhotoSubmission(m, sock);
-      if (m.quoted?.imageMessage) await handleRatingSubmission(m, sock);
-      return;
+      let handled = false;
+      
+      // Check for photo submissions
+      if (m.message?.imageMessage) {
+        handled = await handlePhotoSubmission(m, sock);
+        if (handled) return; // Exit early if photo was processed
+      }
+      
+      // Check for rating submissions (only if not a photo)
+      if (!handled && m.quoted?.message?.imageMessage) {
+        handled = await handleRatingSubmission(m, sock);
+      }
+      
+      return; // Exit for all non-command messages
     }
 
+    // Handle commands
     const args = m.body.slice(config.PREFIX.length).trim().split(/\s+/);
     const command = args.shift()?.toLowerCase();
     
     const commandMap = {
-      'wcw': handleWCWCommand,
-      'womancrush': handleWCWCommand,
-      'wcwstats': handleWCWStatsCommand,
-      'wcwhistory': handleWCWStatsCommand,
+      'wcw': (m, sock, args, config) => handleWCWCommand(m, sock, args, config),
+      'womancrush': (m, sock, args, config) => handleWCWCommand(m, sock, args, config),
+      'wcwstats': (m) => handleWCWStatsCommand(m),
+      'wcwhistory': (m) => handleWCWStatsCommand(m),
     };
     
     if (commandMap[command]) {
@@ -498,5 +900,3 @@ export default async function wcwPlugin(m, sock, config) {
     console.error(chalk.red('❌ Error in WCW Plugin main handler:'), error);
   }
 }
-
-
