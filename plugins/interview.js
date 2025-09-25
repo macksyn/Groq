@@ -559,11 +559,11 @@ async function startInterview(userId, groupId, userName, sock) {
   interviewSessions.set(userId, session);
   await saveSession(session);
 
-  const welcomeMsg = `🎉 *Welcome to Gist HQ Interview, ${userName}!* 🎉
+  const welcomeMsg = `🎉 *Welcome to Gist HQ Interview Room, ${userName}!* 🎉
 
-Ehen, ${userName}! 👋 I'm your friendly AI interviewer, here to gist with you before you join our main Gist HQ fam!
+So uhmm, ${userName}! 👋 I'm your friendly AI interviewer, here to gist with you before you join our main Gist HQ!
 
-This na just 10-15 minutes. Ready? Omo, let's start! 🚀
+This is just 10-15 minutes stuff. Ready? So, let's start! 🚀
 
 *Question 1/${interviewQuestions.get(groupId).length}:* What's your name and where are you from? Tell us a bit about yourself! 😊`;
 
