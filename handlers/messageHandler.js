@@ -7,7 +7,7 @@ import PluginManager from '../lib/pluginManager.js';
 const reactionEmojis = ['❤️', '👍', '🔥', '⚡', '🎉', '💯', '✨', '🚀'];
 
 // Main message handler
-export default async function MessageHandler(messageUpdate, sock, logger, config) {
+export default async function MessageHandler(messageUpdate, sock, logger, config, bot) {
   try {
     if (messageUpdate.type !== 'notify') return;
     if (!messageUpdate.messages?.[0]) return;
@@ -160,7 +160,7 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
 
     // Execute all plugins using PluginManager
     try {
-      await PluginManager.executePlugins(m, sock, config);
+      await PluginManager.executePlugins(m, sock, config, bot);
     } catch (error) {
       console.error(chalk.red('❌ Plugin execution error:'), error.message);
     }
