@@ -401,8 +401,14 @@ export default async function ownerHandler(m, sock, config, bot) {
 
   if (requiredPermission === 'admin' && !isOwner) {
     try {
-      const isAdmin = await OwnerHelpers.isUserAdmin(m.sender.replace('@s.whatsapp.net', ''));
-      if (!isAdmin) return m.reply('❌ You are not authorized to use this command.');
+      const senderPhone = m.sender.replace('@s.whatsapp.net', '');
+      const isDbAdmin = await OwnerHelpers.isUserAdmin(senderPhone);
+      const configAdmins = (config.ADMIN_NUMBERS || '').split(',').map(num => num.trim());
+      const isConfigAdmin = configAdmins.includes(senderPhone);
+
+      if (!isDbAdmin && !isConfigAdmin) {
+        return m.reply('❌ You are not authorized to use this command.');
+      }
     } catch (error) {
       console.error('Error checking admin status:', error);
       return m.reply('❌ Error checking authorization.');
