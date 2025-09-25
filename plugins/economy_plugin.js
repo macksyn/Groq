@@ -521,8 +521,11 @@ async function loadCryptoPrices() {
 }
 
 // MODIFIED: Start dynamic market updates
-setInterval(updateCryptoPrices, 5 * 60 * 1000); // Every 5 minutes for price fluctuation
-setInterval(updateMarketConditions, 6 * 60 * 60 * 1000); // Every 6 hours for market trends and business ROI
+(async () => {
+  await loadCryptoPrices();
+  setInterval(updateCryptoPrices, 5 * 60 * 1000); // Every 5 minutes for price fluctuation
+  setInterval(updateMarketConditions, 6 * 60 * 60 * 1000); // Every 6 hours for market trends and business ROI
+})();
 
 // Achievement definitions (UNCHANGED)
 const ACHIEVEMENTS = {
@@ -883,7 +886,7 @@ async function cleanupExpiredEffects(userId) {
     const user = await getUserData(userId);
     if (!user.activeEffects) return;
     
-    const now = Date.now();
+    const now = new Date();
     const cleanEffects = {};
     let needsUpdate = false;
     
