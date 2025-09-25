@@ -4,7 +4,7 @@ import { PluginHelpers } from '../lib/pluginIntegration.js';
 
 export const info = {
   name: 'autoInterview',
-  version: '2.4.0',
+  version: '2.4.1',
   author: 'Alex Macksyn',
   description: 'Enhanced AI-powered interview system for Gist HQ with MongoDB persistence, admin tools, mandatory photo, flexible DOB, and conflict assessment',
   commands: [
@@ -167,7 +167,7 @@ class InterviewSession {
       ...this,
       startTime: this.startTime.toISOString(),
       lastResponseTime: this.lastResponseTime.toISOString(),
-      conversationHistory: this.conversationHistory.slice(-10) // Limit history
+      conversationHistory: this.conversationHistory.slice(-10)
     };
   }
 
@@ -296,7 +296,6 @@ User: ${userName}`
   }
 
   async parseDOB(userResponse, userName) {
-    // Regex fallback for common DOB formats
     const dobRegex = /(?:(\d{1,2})[\/\-\s](?:\d{1,2}|\w+)(?:[\/\-\s](\d{4}))?)/i;
     const match = userResponse.match(dobRegex);
     if (match) {
@@ -307,7 +306,6 @@ User: ${userName}`
       }
     }
 
-    // AI-based parsing
     try {
       const messages = [
         {
@@ -492,7 +490,6 @@ async function initGroupSettings(groupId) {
   }
   evalPrompts.set(groupId, prompt.prompt);
 
-  // Cleanup stale sessions
   await PluginHelpers.safeDBOperation(async (db, collection) => {
     await collection.deleteMany({ groupId, startTime: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } });
   }, COLLECTIONS.sessions);
@@ -605,7 +602,6 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
     return;
   }
 
-  // Validate photo
   if (currentQ.type === 'photo') {
     if (isImage && imageData?.mimetype?.startsWith('image/')) {
       session.photo = { mimetype: imageData.mimetype, url: imageData.url || 'uploaded' };
@@ -618,7 +614,6 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
     }
   }
 
-  // Handle DOB
   if (currentQ.type === 'dob' && !isImage) {
     const dobResult = await aiEngine.parseDOB(userMessage, session.displayName);
     if (dobResult.day && dobResult.month) {
@@ -632,7 +627,6 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
     }
   }
 
-  // Save response
   const isFollowUp = session.currentQuestion % 1 !== 0;
   const responsesArray = isFollowUp ? session.followUpResponses : session.responses;
   responsesArray.push({
@@ -643,7 +637,6 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
   });
   await saveSession(session);
 
-  // AI follow-up logic
   if (currentQ.type !== 'photo' && currentQ.type !== 'dob' && !isImage) {
     const shouldFollowUp = session.aiFollowUps < 2 && settings.aiFollowUpEnabled && userMessage.length > 10 && Math.random() > 0.5;
     if (shouldFollowUp) {
@@ -1125,6 +1118,18 @@ Average Duration: ${stats.averageDuration.toFixed(2)} mins`;
   }
 }
 
+// New function to handle new member events
+export async function handleNewMember(userId, groupId, userName, sock, config) {
+  try {
+    if (userId === sock.user.id || isAdmin(userId, groupId, config)) return;
+    console.log(`🎯 New member: ${userName} (${userId}) in group ${groupId}`);
+    setTimeout(() => startInterview(userId, groupId, userName, sock), 2000);
+  } catch (error) {
+    console.error('handleNewMember error:', error);
+    await sock.sendMessage(groupId, { text: `⚠️ Error processing new member ${userName}. Admins notified.` });
+  }
+}
+
 export default async function autoInterviewHandler(m, sock, config) {
   try {
     if (!m.key.remoteJid.endsWith('@g.us')) return;
@@ -1137,13 +1142,7 @@ export default async function autoInterviewHandler(m, sock, config) {
     const settings = groupSettings.get(groupId);
 
     if (m.key.fromMe === false && m.messageStubType === 26) {
-      const newMembers = [userId];
-      for (const newMember of newMembers) {
-        if (newMember === sock.user.id || isAdmin(newMember, groupId, config)) continue;
-        const memberName = newMember.split('@')[0];
-        console.log(`🎯 New member: ${memberName} in group ${groupId}`);
-        setTimeout(() => startInterview(newMember, groupId, memberName, sock), 2000);
-      }
+      await handleNewMember(userId, groupId, userName, sock, config);
       return;
     }
 
