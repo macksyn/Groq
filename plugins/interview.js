@@ -1197,6 +1197,10 @@ export default async function autoInterviewHandler(m, sock, config) {
              await sock.sendMessage(session.groupId, { text: clarificationMsg });
              return;
         }
+
+        // Fallback for any other unhandled message types during an active session
+        const clarificationMsg = `I'm sorry, I didn't understand that. Please provide a valid response to the question.`;
+        await sock.sendMessage(session.groupId, { text: clarificationMsg });
     }
 
     if (m.message?.conversation && m.message.conversation.startsWith(config.PREFIX)) {
