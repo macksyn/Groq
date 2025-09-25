@@ -88,22 +88,44 @@ async function saveSettings() {
   }
 }
 
-// Check if user is authorized (UNCHANGED)
+// ✅ ADDED: New connection health check
+function isConnectionHealthy(sock) {
+  // Basic check: Ensure sock and user attributes are present
+  if (!sock || !sock.user || !sock.user.id) {
+    return false;
+  }
+  // More advanced checks can be added here if the socket library provides connection status
+  // For now, we assume if sock.user is populated, the connection is likely active.
+  return true;
+}
+
+// ✅ REFACTORED: More efficient authorization check
 function isAuthorized(senderId) {
-  // Check if user is in admin list
-  if (birthdaySettings.adminNumbers.includes(senderId.split('@')[0])) {
-    return true;
+  const userId = senderId.split('@')[0];
+  
+  const adminSet = new Set([
+    ...birthdaySettings.adminNumbers.map(num => num.split('@')[0]),
+    ...(process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : []),
+    process.env.OWNER_NUMBER || ''
+  ]);
+
+  adminSet.delete(''); // Remove empty string if OWNER_NUMBER is not set
+
+  return adminSet.has(userId);
+}
+
+// ✅ ADDED: New safe message sending function
+async function safeSend(sock, recipient, message) {
+  try {
+    if (!isConnectionHealthy(sock)) {
+      console.log(`❌ Connection unhealthy, skipping message to ${recipient}`);
+      return;
+    }
+    await sock.sendMessage(recipient, message);
+  } catch (error) {
+    console.error(`❌ Failed to send message to ${recipient}:`, error.message);
+    // Optional: Add more robust error handling, like retries or notifications
   }
-  
-  // Check owner/admin from environment
-  const ownerNumber = process.env.OWNER_NUMBER || '';
-  const adminNumbers = process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : [];
-  
-  if (senderId.split('@')[0] === ownerNumber || adminNumbers.includes(senderId.split('@')[0])) {
-    return true;
-  }
-  
-  return false;
 }
 
 // ✅ REFACTORED: Uses getCollection for safe, shared database access.
@@ -234,6 +256,12 @@ async function sendBirthdayWishes(sock) {
     return;
   }
   
+  // Check connection first
+  if (!isConnectionHealthy(sock)) {
+    console.log('❌ Connection not healthy, skipping birthday wishes');
+    return;
+  }
+
   const todaysBirthdays = await getTodaysBirthdays();
   if (todaysBirthdays.length === 0) return;
   
@@ -258,6 +286,12 @@ async function sendBirthdayWishes(sock) {
         break;
       }
       
+      // Double-check connection before each person
+      if (!isConnectionHealthy(sock)) {
+        console.log('❌ Connection lost during birthday processing');
+        break;
+      }
+
       const wishMessage = getBirthdayWishMessage(birthdayPerson);
       let successfulSends = 0;
     
@@ -356,6 +390,8 @@ async function sendBirthdayReminders(sock) {
         if (birthdaySettings.enableGroupReminders && birthdaySettings.reminderGroups.length > 0) {
           for (const groupId of birthdaySettings.reminderGroups) {
             try {
+            if (!isConnectionHealthy(sock)) break;
+
               await sock.sendMessage(groupId, {
                 text: reminderMessage,
                 mentions: [birthdayPerson.userId]
@@ -418,47 +454,54 @@ class BirthdayScheduler {
   start() {
     if (this.running) return;
     this.running = true;
-    
     console.log('🎂 Birthday scheduler started');
-    
-    // Check for birthdays every minute
-    const birthdayInterval = setInterval(async () => {
-      const now = moment.tz('Africa/Lagos');
-      
-      // Send birthday wishes at the specified time
-      if (now.format('HH:mm') === birthdaySettings.wishTime) {
-        await sendBirthdayWishes(this.sock);
-      }
-      
-      // Send reminders at the specified time
-      if (now.format('HH:mm') === birthdaySettings.reminderTime) {
-        await sendBirthdayReminders(this.sock);
-      }
-      
-      // Clean up old records once a day at midnight
-      if (now.format('HH:mm') === '00:00') {
-        await cleanupReminderRecords();
-      }
-      
-    }, 60000); // Check every minute
-    
-    this.intervals.push(birthdayInterval);
-    
-    // Also check immediately on start
-    setTimeout(async () => {
-      const now = moment.tz('Africa/Lagos');
-      if (now.format('HH:mm') === birthdaySettings.wishTime) {
-        await sendBirthdayWishes(this.sock);
-      }
-      if (now.format('HH:mm') === birthdaySettings.reminderTime) {
-        await sendBirthdayReminders(this.sock);
-      }
-    }, 5000);
+    this.scheduleNextWish();
+    this.scheduleNextReminder();
+    this.scheduleNextCleanup();
+  }
+
+  scheduleNextWish() {
+    const now = moment.tz('Africa/Lagos');
+    let wishTime = moment.tz(birthdaySettings.wishTime, 'HH:mm', 'Africa/Lagos');
+    if (now.isAfter(wishTime)) {
+      wishTime.add(1, 'day');
+    }
+    const delay = wishTime.diff(now);
+    this.intervals.push(setTimeout(async () => {
+      await sendBirthdayWishes(this.sock);
+      this.scheduleNextWish();
+    }, delay));
+    console.log(`Next birthday wish check scheduled for: ${wishTime.format('YYYY-MM-DD HH:mm')}`);
+  }
+
+  scheduleNextReminder() {
+    const now = moment.tz('Africa/Lagos');
+    let reminderTime = moment.tz(birthdaySettings.reminderTime, 'HH:mm', 'Africa/Lagos');
+    if (now.isAfter(reminderTime)) {
+      reminderTime.add(1, 'day');
+    }
+    const delay = reminderTime.diff(now);
+    this.intervals.push(setTimeout(async () => {
+      await sendBirthdayReminders(this.sock);
+      this.scheduleNextReminder();
+    }, delay));
+    console.log(`Next birthday reminder check scheduled for: ${reminderTime.format('YYYY-MM-DD HH:mm')}`);
+  }
+
+  scheduleNextCleanup() {
+    const now = moment.tz('Africa/Lagos');
+    let cleanupTime = moment.tz('00:00', 'HH:mm', 'Africa/Lagos').add(1, 'day');
+    const delay = cleanupTime.diff(now);
+    this.intervals.push(setTimeout(async () => {
+      await cleanupReminderRecords();
+      this.scheduleNextCleanup();
+    }, delay));
+    console.log(`Next cleanup scheduled for: ${cleanupTime.format('YYYY-MM-DD HH:mm')}`);
   }
   
   stop() {
     this.running = false;
-    this.intervals.forEach(interval => clearInterval(interval));
+    this.intervals.forEach(timeout => clearTimeout(timeout));
     this.intervals = [];
     console.log('🎂 Birthday scheduler stopped');
   }
