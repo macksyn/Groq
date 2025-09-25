@@ -1,6 +1,13 @@
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
+import { OwnerHelpers } from '../lib/helpers.js';
+
+let botConfig = {};
+
+export function initialize(config) {
+  botConfig = config;
+}
 
 export const info = {
   name: 'autoInterview',
@@ -882,25 +889,31 @@ async function updateStats(groupId, updates, session) {
   await saveStats(groupId, stats);
 }
 
-function isAdmin(userId, groupId, config) {
+async function isAdmin(userId, groupId) {
   try {
     if (!userId || typeof userId !== 'string') return false;
     const cleanUserId = userId.replace('@s.whatsapp.net', '');
 
-    if (config.OWNER_NUMBER && cleanUserId === config.OWNER_NUMBER.replace('@s.whatsapp.net', '')) return true;
+    // Check owner from config
+    if (botConfig.OWNER_NUMBER && cleanUserId === botConfig.OWNER_NUMBER.replace('@s.whatsapp.net', '')) {
+      return true;
+    }
 
-    if (config.ADMIN_NUMBERS) {
-      const adminNumbers = Array.isArray(config.ADMIN_NUMBERS)
-        ? config.ADMIN_NUMBERS.map(num => String(num).replace('@s.whatsapp.net', ''))
-        : config.ADMIN_NUMBERS.split(',').map(num => num.trim().replace('@s.whatsapp.net', ''));
+    // Check admin numbers from config
+    if (botConfig.ADMIN_NUMBERS) {
+      const adminNumbers = Array.isArray(botConfig.ADMIN_NUMBERS)
+        ? botConfig.ADMIN_NUMBERS.map(num => String(num).replace('@s.whatsapp.net', ''))
+        : botConfig.ADMIN_NUMBERS.split(',').map(num => num.trim().replace('@s.whatsapp.net', ''));
       if (adminNumbers.includes(cleanUserId)) return true;
     }
 
-    if (config.MODS && Array.isArray(config.MODS)) {
-      const cleanMods = config.MODS.map(mod => String(mod).replace('@s.whatsapp.net', ''));
-      if (cleanMods.includes(cleanUserId)) return true;
+    // Check database admins
+    const dbAdmins = await OwnerHelpers.getAdmins();
+    if (dbAdmins.some(admin => admin.phone === cleanUserId)) {
+      return true;
     }
 
+    // Check group-specific admins (from interview settings)
     const settings = groupSettings.get(groupId);
     if (settings?.adminIds?.length > 0) {
       const cleanGroupAdmins = settings.adminIds.map(admin => String(admin).replace('@s.whatsapp.net', ''));
@@ -916,7 +929,7 @@ function isAdmin(userId, groupId, config) {
 
 async function handleAdminCommand(command, args, m, sock, config, groupId) {
   const userId = m.sender;
-  if (!isAdmin(userId, groupId, config)) {
+  if (!await isAdmin(userId, groupId)) {
     await sock.sendMessage(groupId, { text: `❌ This command is for admins only! 👮‍♀️` }, { quoted: m });
     return;
   }
@@ -1119,9 +1132,9 @@ Average Duration: ${stats.averageDuration.toFixed(2)} mins`;
 }
 
 // New function to handle new member events
-export async function handleNewMember(userId, groupId, userName, sock, config) {
+export async function handleNewMember(userId, groupId, userName, sock) {
   try {
-    if (userId === sock.user.id || isAdmin(userId, groupId, config)) return;
+    if (userId === sock.user.id || (await isAdmin(userId, groupId))) return;
     console.log(`🎯 New member: ${userName} (${userId}) in group ${groupId}`);
     setTimeout(() => startInterview(userId, groupId, userName, sock), 2000);
   } catch (error) {
@@ -1142,7 +1155,7 @@ export default async function autoInterviewHandler(m, sock, config) {
     const settings = groupSettings.get(groupId);
 
     if (m.key.fromMe === false && m.messageStubType === 26) {
-      await handleNewMember(userId, groupId, userName, sock, config);
+      await handleNewMember(userId, groupId, userName, sock);
       return;
     }
 
