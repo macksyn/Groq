@@ -158,21 +158,11 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       }
     }
 
-    // Execute plugins or button handlers
-    if (m.isBot) {
-      // Handle button click
-      try {
-        await PluginManager.executeButtonHandler(m, sock, config);
-      } catch (error) {
-        console.error(chalk.red('❌ Button handler execution error:'), error.message);
-      }
-    } else {
-      // Handle regular command
-      try {
-        await PluginManager.executePlugins(m, sock, config);
-      } catch (error) {
-        console.error(chalk.red('❌ Plugin execution error:'), error.message);
-      }
+    // Execute all plugins using PluginManager
+    try {
+      await PluginManager.executePlugins(m, sock, config);
+    } catch (error) {
+      console.error(chalk.red('❌ Plugin execution error:'), error.message);
     }
 
   } catch (error) {
