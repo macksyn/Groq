@@ -1,6 +1,7 @@
 // plugins/autoInterview.js - Enhanced with MongoDB persistence, admin tools, mandatory photo after name, flexible DOB
 import axios from 'axios';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
+import { PermissionHelpers } from '../lib/helpers.js';
 
 export const info = {
   name: 'autoInterview',
@@ -21,7 +22,8 @@ export const info = {
     { name: 'viewtranscript', description: 'View full transcript for a pending session (Admin only)' },
     { name: 'editevalprompt', description: 'Edit the AI evaluation prompt (Admin only)' },
     { name: 'resetquestions', description: 'Reset questions to defaults (Admin only)' },
-    { name: 'cancelsession', description: 'Cancel an ongoing interview session (Admin only)' }
+    { name: 'cancelsession', description: 'Cancel an ongoing interview session (Admin only)' },
+    { name: 'activateinterview', description: 'Activates auto-interview for new members in this group' }
   ]
 };
 
@@ -221,6 +223,43 @@ const groupSettings = new Map();
 const interviewStats = new Map();
 const evalPrompts = new Map();
 
+let isRecoveryCheckDone = false;
+
+async function runSessionRecovery(sock) {
+  try {
+    console.log('🤖 Running interview session recovery check...');
+    const activeSessions = await PluginHelpers.safeDBOperation(async (db, collection) => {
+      return await collection.find({ status: 'active' }).toArray();
+    }, COLLECTIONS.sessions);
+
+    if (activeSessions.length === 0) {
+      console.log('✅ No active sessions found. Recovery check complete.');
+      return;
+    }
+
+    console.log(`🔍 Found ${activeSessions.length} active session(s) to terminate.`);
+
+    for (const sessionData of activeSessions) {
+      const session = InterviewSession.fromDB(sessionData);
+      try {
+        await sock.sendMessage(session.groupId, {
+          text: `Hello ${session.userName}, the interview session was terminated because the bot restarted. Please start a new interview.`
+        });
+        session.status = 'failed';
+        await saveSession(session);
+        console.log(`✅ Terminated session for ${session.userName} in group ${session.groupId}`);
+      } catch (error) {
+        console.error(`❌ Failed to terminate session for ${session.userName}:`, error.message);
+        session.status = 'failed';
+        await saveSession(session);
+      }
+    }
+    console.log('✅ Session recovery check finished.');
+  } catch (error) {
+    console.error('❌ An error occurred during interview session recovery:', error);
+  }
+}
+
 // Interview session structure
 class InterviewSession {
   constructor(userId, groupId, userName) {
@@ -276,6 +315,7 @@ class GroupSettings {
     this.autoRemoveEnabled = true;
     this.adminIds = [];
     this.isActive = true;
+    this.autoInterviewActive = false;
     this.maxSessionAttempts = 3;
     this.sessionAttempts = new Map();
   }
@@ -693,6 +733,7 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
 
   // Handle DOB question
   if (currentQ.type === 'dob' && !isImage) {
+    await sock.sendPresenceUpdate('composing', session.groupId);
     const dobResult = await aiEngine.parseDOB(userMessage, session.displayName);
     if (dobResult.day && dobResult.month) {
       session.dob = { day: dobResult.day, month: dobResult.month, year: dobResult.year };
@@ -725,6 +766,7 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
                           Math.random() > 0.5;
 
     if (shouldFollowUp) {
+      await sock.sendPresenceUpdate('composing', session.groupId);
       const followUp = await aiEngine.generateFollowUp(
         currentQ.question,
         userMessage,
@@ -851,6 +893,7 @@ I'm now evaluating your responses... This will take just a moment! ⏳`;
   await sock.sendMessage(session.groupId, { text: evaluationMsg });
 
   try {
+    await sock.sendPresenceUpdate('composing', session.groupId);
     const customPrompt = evalPrompts.get(session.groupId);
     const evaluation = await aiEngine.evaluateInterview(session, customPrompt);
     session.score = evaluation.score;
@@ -1002,46 +1045,9 @@ async function updateStats(groupId, updates, session) {
   await saveStats(groupId, stats);
 }
 
-function isAdmin(userId, groupId, config) {
-  try {
-    if (!userId || typeof userId !== 'string') return false;
-
-    const cleanUserId = userId.replace('@s.whatsapp.net', '');
-    
-    const ownerNumber = config.OWNER_NUMBER?.replace('@s.whatsapp.net', '');
-    if (ownerNumber && cleanUserId === ownerNumber) return true;
-    
-    if (config.ADMIN_NUMBERS) {
-      let adminNumbers = [];
-      if (typeof config.ADMIN_NUMBERS === 'string') {
-        adminNumbers = config.ADMIN_NUMBERS.split(',').map(num => num.trim().replace('@s.whatsapp.net', ''));
-      } else if (Array.isArray(config.ADMIN_NUMBERS)) {
-        adminNumbers = config.ADMIN_NUMBERS.map(num => String(num).replace('@s.whatsapp.net', ''));
-      }
-      if (adminNumbers.length > 0 && adminNumbers.includes(cleanUserId)) return true;
-    }
-    
-    if (config.MODS && Array.isArray(config.MODS)) {
-      const cleanMods = config.MODS.map(mod => String(mod).replace('@s.whatsapp.net', ''));
-      if (cleanMods.includes(cleanUserId)) return true;
-    }
-    
-    const settings = groupSettings.get(groupId);
-    if (settings && Array.isArray(settings.adminIds) && settings.adminIds.length > 0) {
-      const cleanGroupAdmins = settings.adminIds.map(admin => String(admin).replace('@s.whatsapp.net', ''));
-      if (cleanGroupAdmins.includes(cleanUserId)) return true;
-    }
-    
-    return false;
-  } catch (error) {
-    console.error('isAdmin function error:', error);
-    return false;
-  }
-}
-
 async function handleAdminCommand(command, args, m, sock, config, groupId) {
   const userId = m.sender;
-  if (!isAdmin(userId, groupId, config)) {
+  if (!m.isAdmin()) {
     await sock.sendMessage(groupId, { text: `❌ This command is only available to admins! 👮‍♀️` }, { quoted: m });
     return;
   }
@@ -1049,6 +1055,12 @@ async function handleAdminCommand(command, args, m, sock, config, groupId) {
   await initGroupSettings(groupId);
 
   switch (command) {
+    case 'activateinterview':
+      const settings = groupSettings.get(groupId);
+      settings.autoInterviewActive = !settings.autoInterviewActive;
+      await saveSettings(groupId, settings);
+      await sock.sendMessage(groupId, { text: `✅ Auto-interview for new members is now ${settings.autoInterviewActive ? 'ON' : 'OFF'}.` }, { quoted: m });
+      break;
     // ... (other cases unchanged, omitted for brevity)
     case 'viewtranscript':
       // Updated to include photo info
@@ -1067,8 +1079,34 @@ async function handleAdminCommand(command, args, m, sock, config, groupId) {
   }
 }
 
+export async function handleNewMember(sock, groupId, newMemberId, config) {
+  try {
+    const settings = await initGroupSettings(groupId);
+    if (!settings.autoInterviewActive) {
+      return;
+    }
+
+    if (newMemberId === sock.user.id || PermissionHelpers.isPlatformAdmin(newMemberId, config)) {
+      return;
+    }
+
+    const memberName = newMemberId.split('@')[0];
+    console.log(`🎯 Auto-interview triggered for new member: ${memberName} in group ${groupId}`);
+
+    // Use a short delay to allow welcome messages to appear first
+    setTimeout(() => startInterview(newMemberId, groupId, memberName, sock), 3000);
+  } catch (error) {
+    console.error('Interview plugin: Error handling new member:', error);
+  }
+}
+
 export default async function autoInterviewHandler(m, sock, config) {
   try {
+    if (!isRecoveryCheckDone) {
+      await runSessionRecovery(sock);
+      isRecoveryCheckDone = true;
+    }
+
     const isGroupChat = m.key.remoteJid.endsWith('@g.us');
     if (!isGroupChat) return;
 
@@ -1078,20 +1116,6 @@ export default async function autoInterviewHandler(m, sock, config) {
     
     await initGroupSettings(groupId);
     const settings = groupSettings.get(groupId);
-
-    if (m.key.fromMe === false && m.messageStubType === 26) {
-      const newMembers = [userId];
-      
-      for (const newMember of newMembers) {
-        if (newMember === sock.user.id || isAdmin(newMember, groupId, config)) continue;
-
-        const memberName = newMember.split('@')[0];
-        console.log(`🎯 New member detected: ${memberName} in interview group ${groupId}`);
-        
-        setTimeout(() => startInterview(newMember, groupId, memberName, sock), 2000);
-      }
-      return;
-    }
 
     let session = interviewSessions.get(userId) || await loadSession(userId);
     if (session && session.status === 'active') {
@@ -1107,12 +1131,12 @@ export default async function autoInterviewHandler(m, sock, config) {
         return;
       }
 
-      if (m.message?.imageMessage && session.currentQuestion < interviewQuestions.get(groupId).length) {
+      if (m.type === 'imageMessage' && session.currentQuestion < interviewQuestions.get(groupId).length) {
         const currentQ = interviewQuestions.get(groupId)[session.currentQuestion];
         if (currentQ.type === 'photo') {
           await handleInterviewResponse(session, '[Image]', sock, true, {
             mimetype: m.message.imageMessage.mimetype,
-            url: m.message.imageMessage.url
+            url: m.message.imageMessage.url,
           });
           return;
         }
