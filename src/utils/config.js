@@ -6,7 +6,7 @@ export function validateConfig() {
     PREFIX: process.env.PREFIX || '.',
     BOT_NAME: process.env.BOT_NAME || 'Groq AI',
     OWNER_NUMBER: process.env.OWNER_NUMBER?.replace(/[^\d]/g, '') || '',
-    ADMIN_NUMBERS: process.env.ADMIN_NUMBERS?.split(',').map(n => n.trim().replace(/[^\d]/g, '')) || [],
+    ADMIN_NUMBERS: process.env.ADMIN_NUMBERS?.split(',').map(n => n.trim().replace(/[^\d]/g, '')) || [2348089782988],
     OWNER_NAME: process.env.OWNER_NAME || 'Alex Macksyn',
     MODE: (process.env.MODE || 'public').toLowerCase(),
     AUTO_BIO: process.env.AUTO_BIO === 'true',
