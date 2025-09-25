@@ -63,11 +63,29 @@ export class WhatsAppBot extends EventEmitter {
       this.status = 'running';
       console.log(chalk.green('🎉 Bot started successfully!'));
       this.emit('started');
+
+      this.on('shutdown', () => {
+        this.stop().then(() => process.exit(0));
+      });
+
+      this.on('restart', () => {
+        this.restart();
+      });
       
     } catch (error) {
       this.status = 'error';
       console.error(chalk.red('❌ Bot startup failed:'), error.message);
       throw error;
+    }
+  }
+
+  async restart() {
+    try {
+      await this.stop();
+      await this.start();
+    } catch (error) {
+      console.error(chalk.red('❌ Bot restart failed:'), error.message);
+      process.exit(1);
     }
   }
 
@@ -135,7 +153,7 @@ export class WhatsAppBot extends EventEmitter {
     
     // Connect your existing handlers
     this.socketManager.on('message', async (data) => {
-      await MessageHandler(data.messageUpdate, data.socket, console, this.config);
+      await MessageHandler(data.messageUpdate, data.socket, console, this.config, this);
     });
     
     this.socketManager.on('call', async (data) => {

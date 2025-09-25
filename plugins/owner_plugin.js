@@ -20,76 +20,53 @@ export const info = {
     { name: 'setname', description: 'Change bot profile name' },
     { name: 'setstatus', description: 'Change bot profile status' },
     { name: 'shutdown', description: 'Shutdown bot' },
-    { name: 'restart', description: 'Restart bot' }
+    { name: 'restart', description: 'Restart bot' },
+    { name: 'help', description: 'Show this help message' }
   ]
 };
 
 import { OwnerHelpers } from '../lib/helpers.js';
+import PluginManager from '../lib/pluginManager.js';
 
-export default async function ownerHandler(m, sock, config) {
-  if (!m.body || !m.body.startsWith(config.PREFIX)) return;
-  
-  const args = m.body.slice(config.PREFIX.length).trim().split(' ');
-  const command = args[0].toLowerCase();
-  
-  // Define owner-only commands
-  const ownerCommands = [
-    'reload', 'rl', 'stats', 'status', 'enable', 'disable', 'mode', 
-    'ban', 'unban', 'banned', 'broadcast', 'addadmin', 'removeadmin', 
-    'admins', 'setname', 'setstatus', 'shutdown', 'restart'
-  ];
-  
-  // Only process if it's actually an owner command
-  if (!ownerCommands.includes(command)) {
-    return; // Let other plugins handle non-owner commands
-  }
-  
-  const isOwner = m.sender === config.OWNER_NUMBER + '@s.whatsapp.net';
-  
-  // Check admin status for specific commands
-  let isAdmin = false;
-  if (!isOwner && ['ban', 'unban', 'banned', 'addadmin', 'removeadmin', 'admins'].includes(command)) {
-    try {
-      const admins = await OwnerHelpers.getAdmins();
-      const senderPhone = m.sender.replace('@s.whatsapp.net', '');
-      isAdmin = admins.some(admin => admin.phone === senderPhone);
-      
-      if (!isAdmin) {
-        await m.reply('❌ You are not authorized to use this command.');
-        return;
-      }
-    } catch (error) {
-      console.error('Error checking admin status:', error);
-      await m.reply('❌ Error checking authorization.');
-      return;
-    }
-  } else if (!isOwner) {
-    await m.reply('❌ You are not the owner. These commands are restricted.');
-    return;
-  }
+// --- Helper Functions ---
 
-  try {
-    // Reload plugins
-    if (command === 'reload' || command === 'rl') {
-      const { default: PluginManager } = await import('../lib/pluginManager.js');
-      await sock.sendMessage(m.from, { text: '🔄 Reloading all plugins...' });
-      
+// Extracts target user from message (quoted or by argument)
+const getTargetUser = (m, args) => {
+  if (m.quoted && m.quoted.sender) {
+    return m.quoted.sender.replace('@s.whatsapp.net', '');
+  }
+  if (args[1]) {
+    return args[1].replace('@s.whatsapp.net', '');
+  }
+  return null;
+};
+
+// --- Command Handlers ---
+
+const commands = {
+  reload: {
+    name: 'reload',
+    aliases: ['rl'],
+    description: 'Reload all plugins',
+    cooldown: 10,
+    execute: async (m, sock) => {
+      await m.reply('🔄 Reloading all plugins...');
       try {
         await PluginManager.reloadAllPlugins();
         const stats = PluginManager.getPluginStats();
-        await sock.sendMessage(m.from, {
-          text: `✅ *Plugins Reloaded Successfully!*\n\n📊 *Results:*\n• Total: ${stats.total}\n• Enabled: ${stats.enabled}\n• Disabled: ${stats.disabled}\n\n🔥 All plugins are ready to serve!`
-        });
+        await m.reply(`✅ *Plugins Reloaded Successfully!*\n\n📊 *Results:*\n• Total: ${stats.total}\n• Enabled: ${stats.enabled}\n• Disabled: ${stats.disabled}\n\n🔥 All plugins are ready to serve!`);
       } catch (error) {
-        await sock.sendMessage(m.from, {
-          text: `❌ *Plugin Reload Failed*\n\n📝 Error: ${error.message}`
-        });
+        await m.reply(`❌ *Plugin Reload Failed*\n\n📝 Error: ${error.message}`);
       }
     }
+  },
 
-    // Bot statistics
-    else if (command === 'stats' || command === 'status') {
-      const { default: PluginManager } = await import('../lib/pluginManager.js');
+  stats: {
+    name: 'stats',
+    aliases: ['status'],
+    description: 'Show bot statistics',
+    cooldown: 5,
+    execute: async (m, sock) => {
       const stats = PluginManager.getPluginStats();
       const health = await PluginManager.healthCheck();
       const memUsage = process.memoryUsage();
@@ -99,373 +76,343 @@ export default async function ownerHandler(m, sock, config) {
       
       const statsText = `📊 *Bot Statistics*\n\n🤖 *System:*\n• Uptime: ${uptimeStr}\n• Memory: ${memUsedMB}MB\n• Health: ${health.healthy ? '✅ Healthy' : '⚠️ Issues'}\n\n🔌 *Plugins:*\n• Total: ${stats.total}\n• Enabled: ${stats.enabled}\n• Disabled: ${stats.disabled}\n• Executions: ${stats.totalExecutions}\n• Errors: ${stats.totalErrors}\n${health.issues.length > 0 ? `\n⚠️ *Issues:*\n${health.issues.map(issue => `• ${issue}`).join('\n')}` : ''}\n\n🌐 *API Endpoints:*\n• /plugins - Plugin management\n• /health - System health\n• /stats - Statistics`;
       
-      await sock.sendMessage(m.from, { text: statsText });
+      await m.reply(statsText);
     }
+  },
 
-    // Enable plugin
-    else if (command === 'enable') {
+  enable: {
+    name: 'enable',
+    description: 'Enable a plugin',
+    usage: '<plugin-name>',
+    execute: async (m, sock, args, config) => {
       const pluginName = args[1];
-      if (!pluginName) {
-        await sock.sendMessage(m.from, {
-          text: `❌ Please specify plugin name\n\n📝 Usage: ${config.PREFIX}enable <plugin-name>`
-        });
-        return;
-      }
+      if (!pluginName) return m.reply(`❌ Please specify plugin name\n\n📝 Usage: ${config.PREFIX}enable <plugin-name>`);
       
-      const { default: PluginManager } = await import('../lib/pluginManager.js');
       const success = await PluginManager.enablePlugin(pluginName);
-      
       if (success) {
-        await sock.sendMessage(m.from, {
-          text: `✅ Plugin *${pluginName}* has been enabled!`
-        });
+        await m.reply(`✅ Plugin *${pluginName}* has been enabled!`);
       } else {
-        await sock.sendMessage(m.from, {
-          text: `❌ Failed to enable plugin *${pluginName}*\n\nPlugin might not exist or already enabled.`
-        });
+        await m.reply(`❌ Failed to enable plugin *${pluginName}*\n\nPlugin might not exist or already enabled.`);
       }
     }
+  },
 
-    // Disable plugin
-    else if (command === 'disable') {
+  disable: {
+    name: 'disable',
+    description: 'Disable a plugin',
+    usage: '<plugin-name>',
+    execute: async (m, sock, args, config) => {
       const pluginName = args[1];
-      if (!pluginName) {
-        await sock.sendMessage(m.from, {
-          text: `❌ Please specify plugin name\n\n📝 Usage: ${config.PREFIX}disable <plugin-name>`
-        });
-        return;
-      }
+      if (!pluginName) return m.reply(`❌ Please specify plugin name\n\n📝 Usage: ${config.PREFIX}disable <plugin-name>`);
       
-      const { default: PluginManager } = await import('../lib/pluginManager.js');
       const success = await PluginManager.disablePlugin(pluginName);
-      
       if (success) {
-        await sock.sendMessage(m.from, {
-          text: `🚫 Plugin *${pluginName}* has been disabled!`
-        });
+        await m.reply(`🚫 Plugin *${pluginName}* has been disabled!`);
       } else {
-        await sock.sendMessage(m.from, {
-          text: `❌ Failed to disable plugin *${pluginName}*\n\nPlugin might not exist or already disabled.`
-        });
+        await m.reply(`❌ Failed to disable plugin *${pluginName}*\n\nPlugin might not exist or already disabled.`);
       }
     }
+  },
 
-    // Ban user
-    else if (command === 'ban') {
-      let targetUser = null;
-      let reason = '';
-
-      // Check if there's a quoted message
-      if (m.quoted && m.quoted.sender) {
-        targetUser = m.quoted.sender.replace('@s.whatsapp.net', '');
-        reason = args.slice(1).join(' ') || 'No reason provided';
-      } 
-      // Check if phone number is provided as argument
-      else if (args[1]) {
-        targetUser = args[1].replace('@s.whatsapp.net', '');
-        reason = args.slice(2).join(' ') || 'No reason provided';
+  mode: {
+    name: 'mode',
+    description: 'Change bot mode (public/private)',
+    usage: '<public|private>',
+    execute: async (m, sock, args, config) => {
+      const mode = args[1];
+      if (!mode || !['public', 'private'].includes(mode.toLowerCase())) {
+        const currentMode = await OwnerHelpers.getBotMode();
+        return m.reply(`❌ Usage: ${config.PREFIX}mode <public|private>\n\n📊 Current mode: *${currentMode}*`);
       }
 
-      if (!targetUser) {
-        await sock.sendMessage(m.from, { 
-          text: `❌ Usage: ${config.PREFIX}ban <phone-number> [reason]\n\n💡 *Tip:* You can also reply to a message and use \`${config.PREFIX}ban [reason]\`` 
-        });
-        return;
-      }
+      await OwnerHelpers.setBotMode(mode.toLowerCase());
+      await m.reply(`🔧 Bot mode changed to *${mode.toLowerCase()}*.\n\n${mode.toLowerCase() === 'private' ? '🔒 Bot will only respond to owner and admins.' : '🌐 Bot will respond to everyone.'}`);
+    }
+  },
 
-      // Don't allow banning the owner
-      if (targetUser === config.OWNER_NUMBER) {
-        await sock.sendMessage(m.from, { text: '❌ Cannot ban the bot owner!' });
-        return;
-      }
+  ban: {
+    name: 'ban',
+    description: 'Ban a user by phone number',
+    usage: '<phone-number> [reason]',
+    minArgs: 1,
+    execute: async (m, sock, args, config) => {
+      const targetUser = getTargetUser(m, args);
+      const reason = (m.quoted ? args.slice(1) : args.slice(2)).join(' ') || 'No reason provided';
 
-      // Don't allow banning yourself
-      const senderPhone = m.sender.replace('@s.whatsapp.net', '');
-      if (targetUser === senderPhone) {
-        await sock.sendMessage(m.from, { text: '❌ You cannot ban yourself!' });
-        return;
-      }
+      if (!targetUser) return m.reply(`❌ Usage: ${config.PREFIX}ban <phone-number> [reason]\n\n💡 *Tip:* You can also reply to a message and use \`${config.PREFIX}ban [reason]\``);
+      if (targetUser === config.OWNER_NUMBER) return m.reply('❌ Cannot ban the bot owner!');
+      if (targetUser === m.sender.replace('@s.whatsapp.net', '')) return m.reply('❌ You cannot ban yourself!');
 
       try {
         await OwnerHelpers.banUser(targetUser);
-        
-        const banMessage = `🚫 User *${targetUser}* has been banned.\n\n📝 *Reason:* ${reason}\n👤 *Banned by:* ${senderPhone}`;
-        
-        // If in a group, mention the banned user
-        if (m.isGroup && m.quoted) {
-          await sock.sendMessage(m.from, { 
-            text: banMessage,
-            mentions: [m.quoted.sender]
-          });
-        } else {
-          await sock.sendMessage(m.from, { text: banMessage });
-        }
+        const banMessage = `🚫 User *${targetUser}* has been banned.\n\n📝 *Reason:* ${reason}\n👤 *Banned by:* ${m.sender.replace('@s.whatsapp.net', '')}`;
+        await sock.sendMessage(m.from, { text: banMessage, mentions: m.quoted ? [m.quoted.sender] : [] });
       } catch (error) {
-        await sock.sendMessage(m.from, { text: `❌ Error banning user: ${error.message}` });
+        await m.reply(`❌ Error banning user: ${error.message}`);
       }
     }
+  },
 
-    // Unban user
-    else if (command === 'unban') {
-      let targetUser = null;
-
-      // Check if there's a quoted message
-      if (m.quoted && m.quoted.sender) {
-        targetUser = m.quoted.sender.replace('@s.whatsapp.net', '');
-      } 
-      // Check if phone number is provided as argument
-      else if (args[1]) {
-        targetUser = args[1].replace('@s.whatsapp.net', '');
-      }
-
-      if (!targetUser) {
-        await sock.sendMessage(m.from, { 
-          text: `❌ Usage: ${config.PREFIX}unban <phone-number>\n\n💡 *Tip:* You can also reply to a message and use \`${config.PREFIX}unban\`` 
-        });
-        return;
-      }
+  unban: {
+    name: 'unban',
+    description: 'Unban a user by phone number',
+    usage: '<phone-number>',
+    minArgs: 1,
+    execute: async (m, sock, args, config) => {
+      const targetUser = getTargetUser(m, args);
+      if (!targetUser) return m.reply(`❌ Usage: ${config.PREFIX}unban <phone-number>\n\n💡 *Tip:* You can also reply to a message and use \`${config.PREFIX}unban\``);
 
       try {
         const success = await OwnerHelpers.unbanUser(targetUser);
-        
         if (success) {
           const unbanMessage = `✅ User *${targetUser}* has been unbanned.\n👤 *Unbanned by:* ${m.sender.replace('@s.whatsapp.net', '')}`;
-          
-          // If in a group, mention the unbanned user
-          if (m.isGroup && m.quoted) {
-            await sock.sendMessage(m.from, { 
-              text: unbanMessage,
-              mentions: [m.quoted.sender]
-            });
-          } else {
-            await sock.sendMessage(m.from, { text: unbanMessage });
-          }
+          await sock.sendMessage(m.from, { text: unbanMessage, mentions: m.quoted ? [m.quoted.sender] : [] });
         } else {
-          await sock.sendMessage(m.from, { text: `❌ User *${targetUser}* was not found in the ban list.` });
+          await m.reply(`❌ User *${targetUser}* was not found in the ban list.`);
         }
       } catch (error) {
-        await sock.sendMessage(m.from, { text: `❌ Error unbanning user: ${error.message}` });
+        await m.reply(`❌ Error unbanning user: ${error.message}`);
       }
     }
+  },
 
-    // List banned users
-    else if (command === 'banned') {
+  banned: {
+    name: 'banned',
+    description: 'List banned users',
+    execute: async (m, sock) => {
       try {
         const list = await OwnerHelpers.getBannedUsers();
-        
-        if (list.length === 0) {
-          await sock.sendMessage(m.from, { text: '✅ No banned users.' });
-          return;
-        }
+        if (list.length === 0) return m.reply('✅ No banned users.');
 
         let message = `🚫 *Banned Users (${list.length}):*\n\n`;
-        
         list.forEach((user, i) => {
           const bannedDate = user.bannedAt ? new Date(user.bannedAt).toLocaleDateString() : 'Unknown';
           message += `${i + 1}. *${user.phone}*\n   📅 Banned: ${bannedDate}\n\n`;
         });
-        
-        message += `💡 *Tip:* Reply to a message and use \`${config.PREFIX}unban\` to unban someone quickly.`;
-        
-        await sock.sendMessage(m.from, { text: message });
+        message += `💡 *Tip:* Reply to a message and use \`.unban\` to unban someone quickly.`;
+        await m.reply(message);
       } catch (error) {
-        await sock.sendMessage(m.from, { text: `❌ Error fetching banned users: ${error.message}` });
+        await m.reply(`❌ Error fetching banned users: ${error.message}`);
       }
     }
+  },
 
-    // Add admin
-    else if (command === 'addadmin') {
-      let targetUser = null;
-
-      // Check if there's a quoted message
-      if (m.quoted && m.quoted.sender) {
-        targetUser = m.quoted.sender.replace('@s.whatsapp.net', '');
-      } 
-      // Check if phone number is provided as argument
-      else if (args[1]) {
-        targetUser = args[1].replace('@s.whatsapp.net', '');
-      }
-
-      if (!targetUser) {
-        await sock.sendMessage(m.from, { 
-          text: `❌ Usage: ${config.PREFIX}addadmin <phone-number>\n\n💡 *Tip:* You can also reply to a message and use \`${config.PREFIX}addadmin\`` 
-        });
-        return;
-      }
-
-      // Don't allow adding owner as admin (they already have full access)
-      if (targetUser === config.OWNER_NUMBER) {
-        await sock.sendMessage(m.from, { text: '❌ Owner already has full access!' });
-        return;
-      }
+  addadmin: {
+    name: 'addadmin',
+    description: 'Add admin by phone number',
+    usage: '<phone-number>',
+    minArgs: 1,
+    execute: async (m, sock, args, config) => {
+      const targetUser = getTargetUser(m, args);
+      if (!targetUser) return m.reply(`❌ Usage: ${config.PREFIX}addadmin <phone-number>\n\n💡 *Tip:* You can also reply to a message and use \`${config.PREFIX}addadmin\``);
+      if (targetUser === config.OWNER_NUMBER) return m.reply('❌ Owner already has full access!');
 
       try {
-        // Check if already admin
-        const isAlreadyAdmin = await OwnerHelpers.isUserAdmin(targetUser);
-        if (isAlreadyAdmin) {
-          await sock.sendMessage(m.from, { text: `❌ User *${targetUser}* is already an admin.` });
-          return;
-        }
-
+        if (await OwnerHelpers.isUserAdmin(targetUser)) return m.reply(`❌ User *${targetUser}* is already an admin.`);
+        
         await OwnerHelpers.addAdmin(targetUser);
-        
         const adminMessage = `👑 User *${targetUser}* has been added as admin.\n👤 *Added by:* ${m.sender.replace('@s.whatsapp.net', '')}`;
-        
-        // If in a group, mention the new admin
-        if (m.isGroup && m.quoted) {
-          await sock.sendMessage(m.from, { 
-            text: adminMessage,
-            mentions: [m.quoted.sender]
-          });
-        } else {
-          await sock.sendMessage(m.from, { text: adminMessage });
-        }
+        await sock.sendMessage(m.from, { text: adminMessage, mentions: m.quoted ? [m.quoted.sender] : [] });
       } catch (error) {
-        await sock.sendMessage(m.from, { text: `❌ Error adding admin: ${error.message}` });
+        await m.reply(`❌ Error adding admin: ${error.message}`);
       }
     }
+  },
 
-    // Remove admin
-    else if (command === 'removeadmin') {
-      let targetUser = null;
-
-      // Check if there's a quoted message
-      if (m.quoted && m.quoted.sender) {
-        targetUser = m.quoted.sender.replace('@s.whatsapp.net', '');
-      } 
-      // Check if phone number is provided as argument
-      else if (args[1]) {
-        targetUser = args[1].replace('@s.whatsapp.net', '');
-      }
-
-      if (!targetUser) {
-        await sock.sendMessage(m.from, { 
-          text: `❌ Usage: ${config.PREFIX}removeadmin <phone-number>\n\n💡 *Tip:* You can also reply to a message and use \`${config.PREFIX}removeadmin\`` 
-        });
-        return;
-      }
-
-      // Don't allow removing owner
-      if (targetUser === config.OWNER_NUMBER) {
-        await sock.sendMessage(m.from, { text: '❌ Cannot remove owner privileges!' });
-        return;
-      }
+  removeadmin: {
+    name: 'removeadmin',
+    description: 'Remove admin by phone number',
+    usage: '<phone-number>',
+    minArgs: 1,
+    execute: async (m, sock, args, config) => {
+      const targetUser = getTargetUser(m, args);
+      if (!targetUser) return m.reply(`❌ Usage: ${config.PREFIX}removeadmin <phone-number>\n\n💡 *Tip:* You can also reply to a message and use \`${config.PREFIX}removeadmin\``);
+      if (targetUser === config.OWNER_NUMBER) return m.reply('❌ Cannot remove owner privileges!');
 
       try {
         const success = await OwnerHelpers.removeAdmin(targetUser);
-        
         if (success) {
           const removeMessage = `❌ User *${targetUser}* has been removed from admin.\n👤 *Removed by:* ${m.sender.replace('@s.whatsapp.net', '')}`;
-          
-          // If in a group, mention the removed admin
-          if (m.isGroup && m.quoted) {
-            await sock.sendMessage(m.from, { 
-              text: removeMessage,
-              mentions: [m.quoted.sender]
-            });
-          } else {
-            await sock.sendMessage(m.from, { text: removeMessage });
-          }
+          await sock.sendMessage(m.from, { text: removeMessage, mentions: m.quoted ? [m.quoted.sender] : [] });
         } else {
-          await sock.sendMessage(m.from, { text: `❌ User *${targetUser}* was not found in the admin list.` });
+          await m.reply(`❌ User *${targetUser}* was not found in the admin list.`);
         }
       } catch (error) {
-        await sock.sendMessage(m.from, { text: `❌ Error removing admin: ${error.message}` });
+        await m.reply(`❌ Error removing admin: ${error.message}`);
       }
     }
+  },
 
-    // List admins
-    else if (command === 'admins') {
+  admins: {
+    name: 'admins',
+    description: 'List all admins',
+    execute: async (m, sock) => {
       try {
         const list = await OwnerHelpers.getAdmins();
-        
-        if (list.length === 0) {
-          await sock.sendMessage(m.from, { text: '❌ No admin users.' });
-          return;
-        }
+        if (list.length === 0) return m.reply('❌ No admin users.');
 
         let message = `👑 *Admin Users (${list.length}):*\n\n`;
-        
         list.forEach((user, i) => {
           const addedDate = user.addedAt ? new Date(user.addedAt).toLocaleDateString() : 'Unknown';
           message += `${i + 1}. *${user.phone}*\n   📅 Added: ${addedDate}\n\n`;
         });
-        
-        message += `💡 *Tip:* Reply to a message and use \`${config.PREFIX}removeadmin\` to remove admin quickly.`;
-        
-        await sock.sendMessage(m.from, { text: message });
+        message += `💡 *Tip:* Reply to a message and use \`.removeadmin\` to remove admin quickly.`;
+        await m.reply(message);
       } catch (error) {
-        await sock.sendMessage(m.from, { text: `❌ Error fetching admins: ${error.message}` });
+        await m.reply(`❌ Error fetching admins: ${error.message}`);
       }
     }
+  },
 
-    // Change bot mode
-    else if (command === 'mode') {
-      const mode = args[1];
-      if (!mode || !['public', 'private'].includes(mode.toLowerCase())) {
-        const currentMode = await OwnerHelpers.getBotMode();
-        await sock.sendMessage(m.from, { 
-          text: `❌ Usage: ${config.PREFIX}mode <public|private>\n\n📊 Current mode: *${currentMode}*` 
-        });
-        return;
-      }
-      
-      await OwnerHelpers.setBotMode(mode.toLowerCase());
-      await sock.sendMessage(m.from, { 
-        text: `🔧 Bot mode changed to *${mode.toLowerCase()}*.\n\n${mode.toLowerCase() === 'private' ? '🔒 Bot will only respond to owner and admins.' : '🌐 Bot will respond to everyone.'}` 
-      });
-    }
-
-    // Broadcast message
-    else if (command === 'broadcast') {
+  broadcast: {
+    name: 'broadcast',
+    description: 'Send message to all chats',
+    usage: '<message>',
+    minArgs: 1,
+    execute: async (m, sock, args) => {
       const message = args.slice(1).join(' ');
-      if (!message) {
-        await sock.sendMessage(m.from, { text: `❌ Usage: ${config.PREFIX}broadcast <message>` });
-        return;
-      }
-      
-      await sock.sendMessage(m.from, { text: `📢 Broadcasting message to all chats...` });
-      // Implementation depends on how you store chat information
-    }
+      try {
+        const chats = await sock.groupFetchAllParticipating();
+        const chatIds = Object.keys(chats);
 
-    // Change bot profile name
-    else if (command === 'setname') {
+        if (chatIds.length === 0) {
+          return m.reply('❌ No chats found to broadcast to.');
+        }
+
+        await m.reply(`📢 Broadcasting to ${chatIds.length} chats...`);
+        let successCount = 0;
+        let errorCount = 0;
+
+        for (const chatId of chatIds) {
+          try {
+            await sock.sendMessage(chatId, { text: message });
+            successCount++;
+            // Delay to avoid spam detection
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } catch (e) {
+            errorCount++;
+            console.error(`Failed to send broadcast to ${chatId}:`, e);
+          }
+        }
+        await m.reply(`✅ Broadcast complete.\n\nSent: ${successCount}\nFailed: ${errorCount}`);
+      } catch (error) {
+        console.error('Error fetching chats for broadcast:', error);
+        await m.reply(`❌ An error occurred during broadcast: ${error.message}`);
+      }
+    }
+  },
+
+  setname: {
+    name: 'setname',
+    description: 'Change bot profile name',
+    usage: '<new-name>',
+    minArgs: 1,
+    execute: async (m, sock, args) => {
       const name = args.slice(1).join(' ');
-      if (!name) {
-        await sock.sendMessage(m.from, { text: `❌ Usage: ${config.PREFIX}setname <new-name>` });
-        return;
-      }
-      
       await sock.updateProfileName(name);
-      await sock.sendMessage(m.from, { text: `✅ Bot profile name changed to *${name}*.` });
+      await m.reply(`✅ Bot profile name changed to *${name}*.`);
     }
+  },
 
-    // Change bot profile status
-    else if (command === 'setstatus') {
+  setstatus: {
+    name: 'setstatus',
+    description: 'Change bot profile status',
+    usage: '<new-status>',
+    minArgs: 1,
+    execute: async (m, sock, args) => {
       const status = args.slice(1).join(' ');
-      if (!status) {
-        await sock.sendMessage(m.from, { text: `❌ Usage: ${config.PREFIX}setstatus <new-status>` });
-        return;
-      }
-      
       await sock.updateProfileStatus(status);
-      await sock.sendMessage(m.from, { text: `✅ Bot profile status changed.` });
+      await m.reply(`✅ Bot profile status changed.`);
     }
+  },
 
-    // Shutdown bot
-    else if (command === 'shutdown') {
-      await sock.sendMessage(m.from, { text: '🛑 Shutting down bot...' });
-      setTimeout(() => process.exit(0), 1000);
+  shutdown: {
+    name: 'shutdown',
+    description: 'Shutdown bot',
+    execute: async (m, sock, args, config, bot) => {
+      await m.reply('🛑 Shutting down bot...');
+      bot.emit('shutdown');
     }
+  },
 
-    // Restart bot
-    else if (command === 'restart') {
-      await sock.sendMessage(m.from, { text: '🔄 Restarting bot...' });
-      setTimeout(() => process.exit(1), 1000);
+  restart: {
+    name: 'restart',
+    description: 'Restart bot',
+    execute: async (m, sock, args, config, bot) => {
+      await m.reply('🔄 Restarting bot...');
+      bot.emit('restart');
     }
+  },
 
-  } catch (error) {
-    console.error('Owner plugin error:', error);
-    await sock.sendMessage(m.from, { text: `❌ An error occurred: ${error.message}` });
+  help: {
+    name: 'help',
+    description: 'Show this help message',
+    execute: async (m, sock, args, config) => {
+      let helpText = `*${info.name} v${info.version}*\n${info.description}\n\n*Commands:*\n`;
+
+      for (const cmd of info.commands) {
+        helpText += `\n• *${config.PREFIX}${cmd.name}*`;
+        if (cmd.aliases && cmd.aliases.length > 0) {
+          helpText += ` (aliases: ${cmd.aliases.map(a => `*${a}*`).join(', ')})`;
+        }
+        helpText += `\n  - ${cmd.description}`;
+      }
+
+      await m.reply(helpText);
+    }
   }
+};
+
+// --- Main Handler ---
+
+export default async function ownerHandler(m, sock, config, bot) {
+  if (!m.body || !m.body.startsWith(config.PREFIX)) return;
+
+  const args = m.body.slice(config.PREFIX.length).trim().split(' ');
+  const commandName = args[0].toLowerCase();
+
+  const command = Object.values(commands).find(cmd => cmd.name === commandName || (cmd.aliases && cmd.aliases.includes(commandName)));
+
+  if (!command) return;
+
+  const isOwner = m.sender === config.OWNER_NUMBER + '@s.whatsapp.net';
+
+  // Define permission levels for commands
+  const commandPermissions = {
+    owner: ['reload', 'stats', 'enable', 'disable', 'mode', 'broadcast', 'setname', 'setstatus', 'shutdown', 'restart'],
+    admin: ['ban', 'unban', 'banned', 'addadmin', 'removeadmin', 'admins'],
+    all: ['help']
+  };
+
+  // Default to owner-only access
+  let requiredPermission = 'owner';
+
+  // Check if the command is in the admin list
+  if (commandPermissions.admin.includes(command.name)) {
+    requiredPermission = 'admin';
+  } else if (commandPermissions.all.includes(command.name)) {
+    requiredPermission = 'all';
+  }
+
+  // Authorize user
+  if (requiredPermission === 'owner' && !isOwner) {
+    return m.reply('❌ You are not the owner. This command is restricted.');
+  }
+
+  if (requiredPermission === 'admin' && !isOwner) {
+    try {
+      const isAdmin = await OwnerHelpers.isUserAdmin(m.sender.replace('@s.whatsapp.net', ''));
+      if (!isAdmin) return m.reply('❌ You are not authorized to use this command.');
+    } catch (error) {
+      console.error('Error checking admin status:', error);
+      return m.reply('❌ Error checking authorization.');
     }
+  }
+
+  try {
+    await command.execute(m, sock, args, config, bot);
+  } catch (error) {
+    console.error(`Error executing owner command '${command.name}':`, error);
+    await m.reply(`❌ An error occurred while executing the command: ${error.message}`);
+  }
+}
