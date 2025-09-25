@@ -403,7 +403,14 @@ export default async function ownerHandler(m, sock, config, bot) {
     try {
       const senderPhone = m.sender.replace('@s.whatsapp.net', '');
       const isDbAdmin = await OwnerHelpers.isUserAdmin(senderPhone);
-      const configAdmins = (config.ADMIN_NUMBERS || '').split(',').map(num => num.trim());
+
+      let configAdmins = [];
+      if (Array.isArray(config.ADMIN_NUMBERS)) {
+        configAdmins = config.ADMIN_NUMBERS.map(num => String(num).trim());
+      } else if (typeof config.ADMIN_NUMBERS === 'string') {
+        configAdmins = config.ADMIN_NUMBERS.split(',').map(num => num.trim());
+      }
+
       const isConfigAdmin = configAdmins.includes(senderPhone);
 
       if (!isDbAdmin && !isConfigAdmin) {
