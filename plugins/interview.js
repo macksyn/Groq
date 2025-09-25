@@ -280,10 +280,17 @@ class GroupSettings {
     this.sessionAttempts = new Map();
   }
 
-  toDB() { return { ...this }; }
+  toDB() {
+    const obj = { ...this };
+    obj.sessionAttempts = Object.fromEntries(this.sessionAttempts); // Convert Map to object
+    return obj;
+  }
+
   static fromDB(obj) {
     const settings = new GroupSettings(obj.groupId);
     Object.assign(settings, obj);
+    // Ensure sessionAttempts is a Map, converting from object if needed
+    settings.sessionAttempts = new Map(Object.entries(obj.sessionAttempts || {}));
     return settings;
   }
 }
