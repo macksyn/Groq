@@ -1,6 +1,7 @@
 // plugins/birthday.js - Birthday plugin compatible with PluginManager
 // ✅ REFACTORED: Removed direct MongoClient import
 import moment from 'moment-timezone';
+import cron from 'node-cron';
 // ✅ REFACTORED: Import the new helper for database access
 import { getCollection } from '../lib/pluginIntegration.js';
 
@@ -444,70 +445,73 @@ async function cleanupReminderRecords() {
 }
 
 // Birthday scheduler class (UNCHANGED)
+// ✅ REFACTORED: Birthday scheduler now uses node-cron for precision
 class BirthdayScheduler {
   constructor(sock) {
     this.sock = sock;
-    this.intervals = [];
+    this.tasks = [];
     this.running = false;
   }
-  
+
   start() {
-    if (this.running) return;
+    if (this.running) {
+      console.log('🎂 Birthday scheduler is already running.');
+      return;
+    }
     this.running = true;
-    console.log('🎂 Birthday scheduler started');
-    this.scheduleNextWish();
-    this.scheduleNextReminder();
-    this.scheduleNextCleanup();
-  }
+    console.log('🎂 Starting birthday scheduler with node-cron...');
 
-  scheduleNextWish() {
-    const now = moment.tz('Africa/Lagos');
-    let wishTime = moment.tz(birthdaySettings.wishTime, 'HH:mm', 'Africa/Lagos');
-    if (now.isAfter(wishTime)) {
-      wishTime.add(1, 'day');
-    }
-    const delay = wishTime.diff(now);
-    this.intervals.push(setTimeout(async () => {
+    // Schedule birthday wishes
+    const [wishMinute, wishHour] = birthdaySettings.wishTime.split(':');
+    const wishTask = cron.schedule(`${wishMinute} ${wishHour} * * *`, async () => {
+      console.log(`[cron] Running birthday wishes task at ${new Date()}`);
       await sendBirthdayWishes(this.sock);
-      this.scheduleNextWish();
-    }, delay));
-    console.log(`Next birthday wish check scheduled for: ${wishTime.format('YYYY-MM-DD HH:mm')}`);
-  }
+    }, {
+      scheduled: true,
+      timezone: "Africa/Lagos"
+    });
+    this.tasks.push(wishTask);
 
-  scheduleNextReminder() {
-    const now = moment.tz('Africa/Lagos');
-    let reminderTime = moment.tz(birthdaySettings.reminderTime, 'HH:mm', 'Africa/Lagos');
-    if (now.isAfter(reminderTime)) {
-      reminderTime.add(1, 'day');
-    }
-    const delay = reminderTime.diff(now);
-    this.intervals.push(setTimeout(async () => {
+    // Schedule birthday reminders
+    const [reminderMinute, reminderHour] = birthdaySettings.reminderTime.split(':');
+    const reminderTask = cron.schedule(`${reminderMinute} ${reminderHour} * * *`, async () => {
+      console.log(`[cron] Running birthday reminders task at ${new Date()}`);
       await sendBirthdayReminders(this.sock);
-      this.scheduleNextReminder();
-    }, delay));
-    console.log(`Next birthday reminder check scheduled for: ${reminderTime.format('YYYY-MM-DD HH:mm')}`);
+    }, {
+      scheduled: true,
+      timezone: "Africa/Lagos"
+    });
+    this.tasks.push(reminderTask);
+
+    // Schedule daily cleanup at midnight
+    const cleanupTask = cron.schedule('0 0 * * *', async () => {
+      console.log(`[cron] Running daily cleanup task at ${new Date()}`);
+      await cleanupReminderRecords();
+    }, {
+      scheduled: true,
+      timezone: "Africa/Lagos"
+    });
+    this.tasks.push(cleanupTask);
+
+    console.log(`🎂 Birthday scheduler started with ${this.tasks.length} tasks.`);
+    // Immediately run checks on startup in case the bot was down during the scheduled time
+    console.log('Running initial checks on startup...');
+    sendBirthdayWishes(this.sock).catch(console.error);
+    sendBirthdayReminders(this.sock).catch(console.error);
   }
 
-  scheduleNextCleanup() {
-    const now = moment.tz('Africa/Lagos');
-    let cleanupTime = moment.tz('00:00', 'HH:mm', 'Africa/Lagos').add(1, 'day');
-    const delay = cleanupTime.diff(now);
-    this.intervals.push(setTimeout(async () => {
-      await cleanupReminderRecords();
-      this.scheduleNextCleanup();
-    }, delay));
-    console.log(`Next cleanup scheduled for: ${cleanupTime.format('YYYY-MM-DD HH:mm')}`);
-  }
-  
   stop() {
+    if (!this.running) return;
+    console.log('🎂 Stopping birthday scheduler...');
+    this.tasks.forEach(task => task.stop());
+    this.tasks = [];
     this.running = false;
-    this.intervals.forEach(timeout => clearTimeout(timeout));
-    this.intervals = [];
-    console.log('🎂 Birthday scheduler stopped');
+    console.log('🎂 Birthday scheduler stopped.');
   }
-  
+
   restart() {
     this.stop();
+    // A small delay to ensure all tasks are stopped before restarting
     setTimeout(() => this.start(), 1000);
   }
 }
