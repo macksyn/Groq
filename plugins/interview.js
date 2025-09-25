@@ -64,12 +64,15 @@ SCORING:
 - 40-59: Average candidate (REVIEW - provide specific feedback)
 - 0-39: Poor candidate (REJECT)
 
-Provide:
-1. DECISION: APPROVE/REJECT/REVIEW
-2. SCORE: [0-100]
-3. FEEDBACK: Brief explanation (max 100 words)
+Provide your response as a JSON object with three keys: "decision" (string: "APPROVE", "REJECT", or "REVIEW"), "score" (integer: 0-100), and "feedback" (string, max 100 words).
 
-Format: DECISION|SCORE|FEEDBACK`;
+Example:
+{
+  "decision": "APPROVE",
+  "score": 85,
+  "feedback": "Excellent candidate with a positive attitude."
+}
+`;
 
 // Gist HQ Rules (unchanged)
 const GHQ_RULES = `--++-- Welcome to Gist Headquarters! --++--
@@ -112,12 +115,14 @@ const DEFAULT_QUESTIONS = [
     id: 2,
     question: "Please upload a photo of yourself (mandatory for verification—send an image in this chat now!)",
     required: true,
+    type: "photo",
     category: "personal"
   },
   {
     id: 3,
     question: "What's your date of birth? (Please provide day and month, e.g., 8/12 or 8th Dec. Year is optional.)",
     required: true,
+    type: "dob",
     category: "personal"
   },
   {
@@ -266,7 +271,7 @@ class GroupSettings {
     this.responseTimeoutMinutes = 10;
     this.reminderTimeoutMinutes = 5;
     this.maxReminders = 2;
-    this.minRequiredQuestions = 13; // Updated for mandatory photo
+    this.minRequiredQuestions = 0; // Deprecated, will be calculated dynamically
     this.aiFollowUpEnabled = true;
     this.autoRemoveEnabled = true;
     this.adminIds = [];
@@ -429,17 +434,21 @@ User: ${userName}`
 
       if (response.data?.choices?.[0]?.message?.content) {
         const result = response.data.choices[0].message.content.trim();
-        const decisionMatch = result.match(/DECISION:\s*([A-Z]+)/i);
-        const scoreMatch = result.match(/SCORE:\s*(\d+)/i);
-        const feedbackMatch = result.split('FEEDBACK:')[1]?.trim() || 'No feedback provided';
-        
-        return {
-          decision: (decisionMatch?.[1] || 'REVIEW').toUpperCase(),
-          score: parseInt(scoreMatch?.[1]) || 50,
-          feedback: feedbackMatch.substring(0, 100)
-        };
+        try {
+          // Attempt to find JSON block if markdown is used
+          const jsonMatch = result.match(/```json\n([\s\S]*?)\n```/);
+          const jsonString = jsonMatch ? jsonMatch[1] : result;
+          const evalResult = JSON.parse(jsonString);
+          return {
+            decision: (evalResult.decision || 'REVIEW').toUpperCase(),
+            score: parseInt(evalResult.score) || 50,
+            feedback: (evalResult.feedback || 'No feedback provided').substring(0, 150)
+          };
+        } catch (e) {
+          console.error('Failed to parse AI evaluation JSON:', e);
+          return { decision: 'REVIEW', score: 50, feedback: 'AI evaluation parsing failed' };
+        }
       }
-      
       return { decision: 'REVIEW', score: 50, feedback: 'AI evaluation failed' };
 
     } catch (error) {
@@ -661,8 +670,8 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
     return;
   }
 
-  // Handle photo question (Q2, mandatory)
-  if (currentQ.id === 2) {
+  // Handle photo question (mandatory)
+  if (currentQ.type === 'photo') {
     if (isImage) {
       session.photo = { mimetype: imageData.mimetype, url: imageData.url || 'uploaded' };
       await saveSession(session);
@@ -675,8 +684,8 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
     }
   }
 
-  // Handle DOB question (now Q3)
-  if (currentQ.id === 3 && !isImage) {
+  // Handle DOB question
+  if (currentQ.type === 'dob' && !isImage) {
     const dobResult = await aiEngine.parseDOB(userMessage, session.displayName);
     if (dobResult.day && dobResult.month) {
       session.dob = { day: dobResult.day, month: dobResult.month, year: dobResult.year };
@@ -701,11 +710,11 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
   });
   await saveSession(session);
 
-  // AI follow-up logic (skip for photo and DOB)
-  if (currentQ.id !== 2 && currentQ.id !== 3 && !isImage) {
-    const shouldFollowUp = session.aiFollowUps < 2 && 
-                          settings.aiFollowUpEnabled && 
-                          userMessage.length > 10 && 
+  // AI follow-up logic (skip for special types)
+  if (currentQ.type !== 'photo' && currentQ.type !== 'dob' && !isImage) {
+    const shouldFollowUp = session.aiFollowUps < 2 &&
+                          settings.aiFollowUpEnabled &&
+                          userMessage.length > 10 &&
                           Math.random() > 0.5;
 
     if (shouldFollowUp) {
@@ -850,7 +859,7 @@ I'm now evaluating your responses... This will take just a moment! ⏳`;
     } else {
       session.status = 'pending_review';
       await saveSession(session);
-      await updateStats(session.groupId, { pendingReviews: 1 });
+      await updateStats(session.groupId, { pendingReviews: 1 }, session);
       await requestManualReview(session, evaluation, sock);
     }
 
@@ -867,7 +876,7 @@ async function approveUser(session, evaluation, sock) {
   await saveSession(session);
   const settings = groupSettings.get(session.groupId);
   
-  await updateStats(session.groupId, { approved: 1 });
+  await updateStats(session.groupId, { approved: 1 }, session);
 
   const personalName = session.displayName || session.userName;
   const approvalMsg = `🎉 *CONGRATULATIONS!* 🎉
@@ -897,7 +906,7 @@ async function rejectUser(session, evaluation, sock) {
   session.status = 'rejected';
   await saveSession(session);
   
-  await updateStats(session.groupId, { rejected: 1 });
+  await updateStats(session.groupId, { rejected: 1 }, session);
 
   const personalName = session.displayName || session.userName;
   const rejectionMsg = `❌ *Interview Result* 
@@ -943,7 +952,7 @@ async function removeUserFromInterview(session, reason, sock) {
   session.status = 'failed';
   await saveSession(session);
   
-  await updateStats(session.groupId, { autoRemoved: 1 });
+  await updateStats(session.groupId, { autoRemoved: 1 }, session);
 
   const personalName = session.displayName || session.userName;
   const removalMsg = `⚠️ *Interview Timeout*
@@ -967,7 +976,7 @@ You're welcome to rejoin and restart the interview anytime! 🔄 No wahala.`;
   }
 }
 
-async function updateStats(groupId, updates) {
+async function updateStats(groupId, updates, session) {
   const stats = interviewStats.get(groupId);
   if (!stats) return;
 
@@ -976,12 +985,11 @@ async function updateStats(groupId, updates) {
   });
   stats.totalInterviews++;
 
-  if ('score' in updates || true) {
-    stats.averageScore = ((stats.averageScore * (stats.totalInterviews - 1)) + (session?.score || 50)) / stats.totalInterviews;
+  if (session) {
+    stats.averageScore = ((stats.averageScore * (stats.totalInterviews - 1)) + (session.score || 0)) / stats.totalInterviews;
+    const duration = (new Date() - new Date(session.startTime)) / (1000 * 60);
+    stats.averageDuration = ((stats.averageDuration * (stats.totalInterviews - 1)) + duration) / stats.totalInterviews;
   }
-  
-  const duration = (new Date() - session.startTime) / (1000 * 60);
-  stats.averageDuration = ((stats.averageDuration * (stats.totalInterviews - 1)) + duration) / stats.totalInterviews;
 
   interviewStats.set(groupId, stats);
   await saveStats(groupId, stats);
@@ -1094,7 +1102,7 @@ export default async function autoInterviewHandler(m, sock, config) {
 
       if (m.message?.imageMessage && session.currentQuestion < interviewQuestions.get(groupId).length) {
         const currentQ = interviewQuestions.get(groupId)[session.currentQuestion];
-        if (currentQ.id === 2) { // Photo now Q2
+        if (currentQ.type === 'photo') {
           await handleInterviewResponse(session, '[Image]', sock, true, {
             mimetype: m.message.imageMessage.mimetype,
             url: m.message.imageMessage.url
