@@ -1,13 +1,12 @@
-// plugins/autoInterview.js - Enhanced with MongoDB persistence, admin tools, mandatory photo after name, flexible DOB
 import axios from 'axios';
+import { v4 as uuidv4 } from 'uuid';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
-import { PermissionHelpers } from '../lib/helpers.js';
 
 export const info = {
   name: 'autoInterview',
-  version: '2.3.0',
+  version: '2.4.0',
   author: 'Alex Macksyn',
-  description: 'Intelligent AI-powered interview system for Gist HQ group screening 🎯🤖 - Enhanced with mandatory photo, DOB flexibility, and conflict assessment',
+  description: 'Enhanced AI-powered interview system for Gist HQ with MongoDB persistence, admin tools, mandatory photo, flexible DOB, and conflict assessment',
   commands: [
     { name: 'interview', aliases: ['startinterview'], description: 'Manually start interview process' },
     { name: 'addquestion', description: 'Add new interview question (Admin only)' },
@@ -22,8 +21,7 @@ export const info = {
     { name: 'viewtranscript', description: 'View full transcript for a pending session (Admin only)' },
     { name: 'editevalprompt', description: 'Edit the AI evaluation prompt (Admin only)' },
     { name: 'resetquestions', description: 'Reset questions to defaults (Admin only)' },
-    { name: 'cancelsession', description: 'Cancel an ongoing interview session (Admin only)' },
-    { name: 'activateinterview', description: 'Activates auto-interview for new members in this group' }
+    { name: 'cancelsession', description: 'Cancel an ongoing interview session (Admin only)' }
   ]
 };
 
@@ -31,10 +29,12 @@ export const info = {
 const GROQ_CONFIG = {
   API_KEY: process.env.GROQ_API_KEY || '',
   BASE_URL: 'https://api.groq.com/openai/v1/chat/completions',
-  MODEL: 'llama-3.3-70b-versatile'
+  MODEL: 'llama-3.3-70b-versatile',
+  RETRY_ATTEMPTS: 3,
+  RETRY_DELAY_MS: 1000
 };
 
-// Updated evaluation prompt (removed bonus for photo since mandatory)
+// Updated evaluation prompt
 const DEFAULT_EVAL_PROMPT = `You are evaluating a candidate for "Gist HQ", a fun Nigerian WhatsApp community group focused on sharing good vibes, making friends, and helping each other.
 
 INTERVIEW RESPONSES:
@@ -45,9 +45,9 @@ EVALUATION CRITERIA:
 2. Genuine interest in community participation (20 points)
 3. Respectful communication style (15 points)
 4. Clear understanding of group purpose (15 points)
-5. Likelihood to follow group rules (e.g., no spam, respect privacy) (15 points)
+5. Likelihood to follow group rules (15 points)
 6. Conflict resolution skills and non-violent temperament (15 points)
-7. Age appropriateness (reasonable day/month, adult-like responses) (10 points)
+7. Age appropriateness (adult-like responses) (10 points)
 8. Activity level and commitment to tasks/attendance (10 points)
 
 RED FLAGS (automatic rejection):
@@ -55,10 +55,10 @@ RED FLAGS (automatic rejection):
 - Spam/promotional intent
 - Inappropriate or offensive content
 - Signs of aggression, violence, or hostility
-- Likely underage (based on DOB or immature responses)
-- Clear intent to break rules (e.g., spamming, DMing without consent)
+- Likely underage (based on responses)
+- Clear intent to break rules
 - Unresponsive or evasive answers
-- No photo provided (mandatory for verification)
+- No photo provided (mandatory)
 
 SCORING:
 - 80-100: Excellent candidate (APPROVE)
@@ -66,145 +66,60 @@ SCORING:
 - 40-59: Average candidate (REVIEW - provide specific feedback)
 - 0-39: Poor candidate (REJECT)
 
-Provide your response as a JSON object with three keys: "decision" (string: "APPROVE", "REJECT", or "REVIEW"), "score" (integer: 0-100), and "feedback" (string, max 100 words).
-
-Example:
+Return JSON:
 {
-  "decision": "APPROVE",
-  "score": 85,
-  "feedback": "Excellent candidate with a positive attitude."
-}
-`;
+  "decision": "APPROVE|REJECT|REVIEW",
+  "score": 0-100,
+  "feedback": "string (max 100 words)"
+}`;
 
-// Gist HQ Rules (unchanged)
+// Gist HQ Rules
 const GHQ_RULES = `--++-- Welcome to Gist Headquarters! --++--
 This group is A ꜰᴜɴ ᴘʟᴀᴄᴇ ᴛᴏ ꜱʜᴀʀᴇ ɢᴏᴏᴅ ᴠɪʙᴇꜱ, ᴍᴀᴋᴇ Nᴇᴡ Fʀɪᴇɴᴅꜱ ᴀɴᴅ ʜᴇʟᴘ ᴇᴀᴄʜ ᴏᴛʜᴇʀ.
 
 *GHQ Rules*
-1. *Respect and courtesy*: Treat others respectfully and kindly, even when disagreeing or arguing.
-2. *Stay on topic*: Keep conversations relevant to the groups purpose and topic(s).
-3. *No spamming or Link-promotion*: Refrain from sharing unsolicited links, ads, or promoting personal interests without an admin's approval.
-4. *No explicit or offensive content*: Avoid sharing explicit, graphic, or offensive material. It's only allowed on Freaky Fridays.
-5. *No harassment or bullying*: Do not harass, bully, bodyshame or intimidate other group members.
-6. *Respect Members' Privacy*: Please always ask for consent before you DM a member. Do not private chat a member here without their permission.
-7. *No Fighting & Insulting*: Fighting and throwing insults or abusive words or cursing another member is strongly prohibited. 🚫 
-8. *Marking of Attendance*: Marking your daily attendance shows you are actively involved in the group. Skipping 3 days of attendance without stating your reasons to an admin beforehand is a violation.
-9. *Do your Tasks*: Always do your daily tasks the admins assign. Failure to do your tasks for 3 days in a row is a violation.
-10. *Admin decisions are final*: Admins reserve the right to make decisions regarding group management and member conduct. Respect their decisions, no insults or foul words to them will be tolerated.
+1. *Respect and courtesy*: Treat others respectfully and kindly.
+2. *Stay on topic*: Keep conversations relevant to the group's purpose.
+3. *No spamming or Link-promotion*: No unsolicited links or ads without admin approval.
+4. *No explicit or offensive content*: Avoid explicit material except on Freaky Fridays.
+5. *No harassment or bullying*: Do not harass or intimidate members.
+6. *Respect Members' Privacy*: Ask for consent before DMing.
+7. *No Fighting & Insulting*: No insults or abusive words.
+8. *Marking of Attendance*: Mark daily attendance or inform admins of absences.
+9. *Do your Tasks*: Complete assigned tasks or face violation.
+10. *Admin decisions are final*: Respect admin decisions.
 
-*Consequences of Rule Violations*
-1. *First offense*: Warning from an admin.
-2. *Second offence*: Temporary removal from the group (1-3 days depending).
-3. *Third offense*: Permanent removal from the group.
+*Consequences*
+1. First offense: Warning
+2. Second offense: Temporary removal (1-3 days)
+3. Third offense: Permanent removal
 
 *Reporting Issues*
-If you witness or experience any privacy violations, disrespect, or insults, please report them to an admin immediately.
+Report violations to admins immediately.
 
 *Admin Contact*
-For any questions, concerns, or issues, please reach out to the *Admins*.
+Contact *Admins* for concerns.
 
-> By joining this group, you acknowledge that you have read, understood, and agree to abide by these rules and regulations. 🖋️`;
+> By joining, you agree to these rules. 🖋️`;
 
-// Updated default questions with photo as Q2 (mandatory)
+// Default questions
 const DEFAULT_QUESTIONS = [
-  {
-    id: 1,
-    question: "What's your name and where are you from? Tell us a bit about yourself! 😊",
-    required: true,
-    category: "personal"
-  },
-  {
-    id: 2,
-    question: "Please upload a photo of yourself (mandatory for verification—send an image in this chat now!)",
-    required: true,
-    type: "photo",
-    category: "personal"
-  },
-  {
-    id: 3,
-    question: "What's your date of birth? (Please provide day and month, e.g., 8/12 or 8th Dec. Year is optional.)",
-    required: true,
-    type: "dob",
-    category: "personal"
-  },
-  {
-    id: 4,
-    question: "How did you hear about Gist HQ and what made you want to join our community?",
-    required: true,
-    category: "motivation"
-  },
-  {
-    id: 5,
-    question: "What kind of gist (discussions/topics) are you most interested in? Entertainment, business, tech, lifestyle, etc?",
-    required: true,
-    category: "interests"
-  },
-  {
-    id: 6,
-    question: "Are you here to share gist, learn from others, or just catch up on what's happening?",
-    required: true,
-    category: "purpose"
-  },
-  {
-    id: 7,
-    question: "What's one interesting thing about yourself that you'd like the community to know?",
-    required: false,
-    category: "personal"
-  },
-  {
-    id: 8,
-    question: "How do you plan to contribute positively to our Gist HQ family?",
-    required: true,
-    category: "contribution"
-  },
-  {
-    id: 9,
-    question: "Imagine a group member disagrees with your opinion strongly and starts arguing—how would you handle the situation to keep things respectful?",
-    required: true,
-    category: "conflict"
-  },
-  {
-    id: 10,
-    question: "Have you ever been in a situation where a group chat got heated? What did you do, and what would you do differently now to prevent escalation?",
-  required: true,
-    category: "conflict"
-  },
-  {
-    id: 11,
-    question: "On a scale of 1-10, how patient are you in dealing with differing views, and can you give an example of resolving a conflict peacefully?",
-    required: true,
-    category: "conflict"
-  },
-  {
-    id: 12,
-    question: "What time zone are you in, and how often do you think you'll be active in the group (e.g., daily, a few times a week)?",
-    required: true,
-    category: "activity"
-  },
-  {
-    id: 13,
-    question: "Have you been part of other WhatsApp groups before? What did you like or dislike about them, and how will that influence your participation here?",
-    required: false,
-    category: "experience"
-  },
-  {
-    id: 14,
-    question: "How do you feel about group rules like no spamming, respecting privacy (e.g., asking before DMing), and marking daily attendance? Are there any you might find challenging?",
-    required: true,
-    category: "rules"
-  },
-  {
-    id: 15,
-    question: "What’s your preferred way to communicate in groups—text, voice notes, memes, or polls? And how do you ensure your messages add value without overwhelming others?",
-    required: false,
-    category: "communication"
-  },
-  {
-    id: 16,
-    question: "If you notice someone breaking a rule (e.g., sharing offensive content), would you report it to an admin, ignore it, or confront them directly? Why?",
-    required: true,
-    category: "responsibility"
-  }
+  { id: 1, question: "What's your name and where are you from? Tell us a bit about yourself! 😊", required: true, category: "personal" },
+  { id: 2, question: "Please upload a photo of yourself (mandatory for verification—send an image now!)", required: true, type: "photo", category: "personal" },
+  { id: 3, question: "What's your date of birth? (Please provide day and month, e.g., 8/12 or 8th Dec. Year is optional.)", required: true, type: "dob", category: "personal" },
+  { id: 4, question: "How did you hear about Gist HQ and what made you want to join?", required: true, category: "motivation" },
+  { id: 5, question: "What kind of gist are you most interested in? Entertainment, business, tech, lifestyle, etc?", required: true, category: "interests" },
+  { id: 6, question: "Are you here to share gist, learn, or just catch up?", required: true, category: "purpose" },
+  { id: 7, question: "What's one interesting thing about yourself you'd like us to know?", required: false, category: "personal" },
+  { id: 8, question: "How do you plan to contribute positively to Gist HQ?", required: true, category: "contribution" },
+  { id: 9, question: "If a group member disagrees strongly, how would you handle it respectfully?", required: true, category: "conflict" },
+  { id: 10, question: "Ever been in a heated group chat? What did you do, and what would you do differently?", required: true, category: "conflict" },
+  { id: 11, question: "On a scale of 1-10, how patient are you with differing views? Give an example.", required: true, category: "conflict" },
+  { id: 12, question: "What time zone are you in, and how often will you be active?", required: true, category: "activity" },
+  { id: 13, question: "Been in other WhatsApp groups? What did you like/dislike, and how will it influence you here?", required: false, category: "experience" },
+  { id: 14, question: "How do you feel about rules like no spamming or daily attendance?", required: true, category: "rules" },
+  { id: 15, question: "Preferred way to communicate in groups—text, voice, memes, polls?", required: false, category: "communication" },
+  { id: 16, question: "If someone breaks a rule, would you report, ignore, or confront? Why?", required: true, category: "responsibility" }
 ];
 
 // MongoDB Collections
@@ -216,49 +131,12 @@ const COLLECTIONS = {
   evalPrompts: 'evaluationPrompts'
 };
 
-// Interview storage
+// In-memory storage
 const interviewSessions = new Map();
 const interviewQuestions = new Map();
 const groupSettings = new Map();
 const interviewStats = new Map();
 const evalPrompts = new Map();
-
-let isRecoveryCheckDone = false;
-
-async function runSessionRecovery(sock) {
-  try {
-    console.log('🤖 Running interview session recovery check...');
-    const activeSessions = await PluginHelpers.safeDBOperation(async (db, collection) => {
-      return await collection.find({ status: 'active' }).toArray();
-    }, COLLECTIONS.sessions);
-
-    if (activeSessions.length === 0) {
-      console.log('✅ No active sessions found. Recovery check complete.');
-      return;
-    }
-
-    console.log(`🔍 Found ${activeSessions.length} active session(s) to terminate.`);
-
-    for (const sessionData of activeSessions) {
-      const session = InterviewSession.fromDB(sessionData);
-      try {
-        await sock.sendMessage(session.groupId, {
-          text: `Hello ${session.userName}, the interview session was terminated because the bot restarted. Please start a new interview.`
-        });
-        session.status = 'failed';
-        await saveSession(session);
-        console.log(`✅ Terminated session for ${session.userName} in group ${session.groupId}`);
-      } catch (error) {
-        console.error(`❌ Failed to terminate session for ${session.userName}:`, error.message);
-        session.status = 'failed';
-        await saveSession(session);
-      }
-    }
-    console.log('✅ Session recovery check finished.');
-  } catch (error) {
-    console.error('❌ An error occurred during interview session recovery:', error);
-  }
-}
 
 // Interview session structure
 class InterviewSession {
@@ -267,8 +145,8 @@ class InterviewSession {
     this.groupId = groupId;
     this.userName = userName;
     this.displayName = '';
-    this.dob = { day: null, month: null, year: null }; // Store parsed DOB
-    this.photo = null; // Store photo metadata (mandatory)
+    this.dob = { day: null, month: null, year: null };
+    this.photo = null;
     this.startTime = new Date();
     this.currentQuestion = 0;
     this.responses = [];
@@ -285,10 +163,12 @@ class InterviewSession {
   }
 
   toDB() {
-    const obj = { ...this };
-    obj.startTime = this.startTime.toISOString();
-    obj.lastResponseTime = this.lastResponseTime.toISOString();
-    return obj;
+    return {
+      ...this,
+      startTime: this.startTime.toISOString(),
+      lastResponseTime: this.lastResponseTime.toISOString(),
+      conversationHistory: this.conversationHistory.slice(-10) // Limit history
+    };
   }
 
   static fromDB(obj) {
@@ -310,26 +190,25 @@ class GroupSettings {
     this.responseTimeoutMinutes = 10;
     this.reminderTimeoutMinutes = 5;
     this.maxReminders = 2;
-    this.minRequiredQuestions = 0; // Deprecated, will be calculated dynamically
     this.aiFollowUpEnabled = true;
     this.autoRemoveEnabled = true;
     this.adminIds = [];
     this.isActive = true;
-    this.autoInterviewActive = false;
     this.maxSessionAttempts = 3;
     this.sessionAttempts = new Map();
+    this.rateLimits = { aiFollowUp: { calls: 5, windowMs: 60000 }, evaluation: { calls: 10, windowMs: 60000 } };
   }
 
   toDB() {
-    const obj = { ...this };
-    obj.sessionAttempts = Object.fromEntries(this.sessionAttempts); // Convert Map to object
-    return obj;
+    return {
+      ...this,
+      sessionAttempts: Object.fromEntries(this.sessionAttempts)
+    };
   }
 
   static fromDB(obj) {
     const settings = new GroupSettings(obj.groupId);
     Object.assign(settings, obj);
-    // Ensure sessionAttempts is a Map, converting from object if needed
     settings.sessionAttempts = new Map(Object.entries(obj.sessionAttempts || {}));
     return settings;
   }
@@ -341,31 +220,44 @@ class AIInterviewEngine {
     this.rateLimits = new Map();
   }
 
-  isRateLimited(userId) {
+  isRateLimited(userId, type = 'aiFollowUp', groupId) {
+    const settings = groupSettings.get(groupId);
+    const limitConfig = settings?.rateLimits[type] || { calls: 5, windowMs: 60000 };
     const now = Date.now();
-    const limit = this.rateLimits.get(userId) || { calls: 0, resetTime: now + 60000 };
+    const limit = this.rateLimits.get(`${userId}_${type}`) || { calls: 0, resetTime: now + limitConfig.windowMs };
     if (now > limit.resetTime) {
       limit.calls = 0;
-      limit.resetTime = now + 60000;
+      limit.resetTime = now + limitConfig.windowMs;
     }
-    if (limit.calls >= 5) return true;
+    if (limit.calls >= limitConfig.calls) return true;
     limit.calls++;
-    this.rateLimits.set(userId, limit);
+    this.rateLimits.set(`${userId}_${type}`, limit);
     return false;
   }
 
-  async generateFollowUp(question, userResponse, conversationHistory, userName = '') {
-    if (this.isRateLimited('ai')) return null;
+  async retryAxiosRequest(config, retries = GROQ_CONFIG.RETRY_ATTEMPTS) {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await axios(config);
+      } catch (error) {
+        if (i === retries - 1) throw error;
+        await new Promise(resolve => setTimeout(resolve, GROQ_CONFIG.RETRY_DELAY_MS));
+      }
+    }
+  }
+
+  async generateFollowUp(question, userResponse, conversationHistory, userName, groupId) {
+    if (this.isRateLimited('ai', 'aiFollowUp', groupId)) return null;
 
     try {
       const messages = [
         {
           role: 'system',
-          content: `You are an intelligent interviewer for "Gist HQ". Ask thoughtful follow-up questions to get to know the candidate better.
+          content: `You are an intelligent interviewer for "Gist HQ". Ask thoughtful follow-up questions.
 
 Rules:
-1. Keep it conversational, friendly, use ${userName}'s name
-2. Use Nigerian expressions like "Ehen", "Omo" sparingly
+1. Conversational, friendly, use ${userName}'s name
+2. Use Nigerian expressions sparingly
 3. ONE question, <100 characters
 4. Relevant to response
 5. Curious about background/interests
@@ -379,26 +271,24 @@ User: ${userName}`
         { role: 'user', content: `Generate a follow-up question based on: "${userResponse}"` }
       ];
 
-      const response = await axios.post(
-        GROQ_CONFIG.BASE_URL,
-        {
+      const response = await this.retryAxiosRequest({
+        method: 'post',
+        url: GROQ_CONFIG.BASE_URL,
+        data: {
           model: GROQ_CONFIG.MODEL,
-          messages: messages,
+          messages,
           temperature: 0.8,
           max_tokens: 100,
           top_p: 0.9
         },
-        {
-          headers: {
-            'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 15000
-        }
-      );
+        headers: {
+          'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000
+      });
 
       return response.data?.choices?.[0]?.message?.content?.trim() || null;
-
     } catch (error) {
       console.error('AI Follow-up Error:', error);
       return null;
@@ -406,46 +296,49 @@ User: ${userName}`
   }
 
   async parseDOB(userResponse, userName) {
+    // Regex fallback for common DOB formats
+    const dobRegex = /(?:(\d{1,2})[\/\-\s](?:\d{1,2}|\w+)(?:[\/\-\s](\d{4}))?)/i;
+    const match = userResponse.match(dobRegex);
+    if (match) {
+      const [_, day, month, year] = match;
+      const monthNum = isNaN(month) ? new Date(`${month} 1, 2000`).getMonth() + 1 : parseInt(month);
+      if (day >= 1 && day <= 31 && monthNum >= 1 && monthNum <= 12) {
+        return { day: parseInt(day), month: monthNum, year: year ? parseInt(year) : null };
+      }
+    }
+
+    // AI-based parsing
     try {
       const messages = [
         {
           role: 'system',
-          content: `Parse a date of birth from a user's response. The user may provide day and month (year optional) in formats like "8/12", "8th Dec", "December 8", or "Dec 8". Return JSON with day, month (1-12), and year (null if not provided). If ambiguous or invalid, return null and a clarification question.`
+          content: `Parse DOB from user response (day/month, year optional, e.g., "8/12", "8th Dec"). Return JSON: { day, month, year (null if not provided), clarification (if needed) }`
         },
-        {
-          role: 'user',
-          content: `User: ${userName}\nResponse: "${userResponse}"`
-        }
+        { role: 'user', content: `User: ${userName}\nResponse: "${userResponse}"` }
       ];
 
-      const response = await axios.post(
-        GROQ_CONFIG.BASE_URL,
-        {
+      const response = await this.retryAxiosRequest({
+        method: 'post',
+        url: GROQ_CONFIG.BASE_URL,
+        data: {
           model: GROQ_CONFIG.MODEL,
-          messages: messages,
+          messages,
           temperature: 0.3,
           max_tokens: 150
         },
-        {
-          headers: {
-            'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 10000
-        }
-      );
+        headers: {
+          'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      });
 
-      const result = response.data?.choices?.[0]?.message?.content?.trim();
-      try {
-        const parsed = JSON.parse(result);
-        if (parsed.day && parsed.month) return parsed;
-        return { day: null, month: null, year: null, clarification: parsed.clarification || 'Please provide your DOB as day/month, e.g., 8/12 or 8th Dec.' };
-      } catch {
-        return { day: null, month: null, year: null, clarification: 'Please provide your DOB as day/month, e.g., 8/12 or 8th Dec.' };
-      }
+      const result = JSON.parse(response.data?.choices?.[0]?.message?.content?.trim() || '{}');
+      if (result.day && result.month) return result;
+      return { day: null, month: null, year: null, clarification: result.clarification || 'Please provide DOB as day/month, e.g., 8/12 or 8th Dec.' };
     } catch (error) {
       console.error('DOB Parse Error:', error);
-      return { day: null, month: null, year: null, clarification: 'Please provide your DOB as day/month, e.g., 8/12 or 8th Dec.' };
+      return { day: null, month: null, year: null, clarification: 'Please provide DOB as day/month, e.g., 8/12 or 8th Dec.' };
     }
   }
 
@@ -453,8 +346,8 @@ User: ${userName}`
     try {
       const responses = session.responses.map(r => `Q: ${r.question}\nA: ${r.answer}`).join('\n\n');
       const followUps = session.followUpResponses.map(f => `Follow-up: ${f.question}\nA: ${f.answer}`).join('\n\n');
-      const photoInfo = session.photo ? `Photo provided: Yes` : `Photo provided: No (mandatory - potential red flag)`;
-      
+      const photoInfo = session.photo ? `Photo provided: Yes` : `Photo provided: No (mandatory - red flag)`;
+
       const prompt = customPrompt || DEFAULT_EVAL_PROMPT.replace('${responses}', responses + (followUps ? '\n\n' + followUps : '') + `\n\n${photoInfo}`);
 
       const messages = [
@@ -462,42 +355,30 @@ User: ${userName}`
         { role: 'user', content: prompt }
       ];
 
-      const response = await axios.post(
-        GROQ_CONFIG.BASE_URL,
-        {
+      const response = await this.retryAxiosRequest({
+        method: 'post',
+        url: GROQ_CONFIG.BASE_URL,
+        data: {
           model: GROQ_CONFIG.MODEL,
-          messages: messages,
+          messages,
           temperature: 0.3,
           max_tokens: 200
         },
-        {
-          headers: {
-            'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 20000
-        }
-      );
+        headers: {
+          'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 20000
+      });
 
-      if (response.data?.choices?.[0]?.message?.content) {
-        const result = response.data.choices[0].message.content.trim();
-        try {
-          // Attempt to find JSON block if markdown is used
-          const jsonMatch = result.match(/```json\n([\s\S]*?)\n```/);
-          const jsonString = jsonMatch ? jsonMatch[1] : result;
-          const evalResult = JSON.parse(jsonString);
-          return {
-            decision: (evalResult.decision || 'REVIEW').toUpperCase(),
-            score: parseInt(evalResult.score) || 50,
-            feedback: (evalResult.feedback || 'No feedback provided').substring(0, 150)
-          };
-        } catch (e) {
-          console.error('Failed to parse AI evaluation JSON:', e);
-          return { decision: 'REVIEW', score: 50, feedback: 'AI evaluation parsing failed' };
-        }
-      }
-      return { decision: 'REVIEW', score: 50, feedback: 'AI evaluation failed' };
-
+      const result = response.data?.choices?.[0]?.message?.content?.trim() || '{}';
+      const jsonMatch = result.match(/```json\n([\s\S]*?)\n```/) || [null, result];
+      const evalResult = JSON.parse(jsonMatch[1] || result);
+      return {
+        decision: (evalResult.decision || 'REVIEW').toUpperCase(),
+        score: parseInt(evalResult.score) || 50,
+        feedback: (evalResult.feedback || 'No feedback provided').substring(0, 150)
+      };
     } catch (error) {
       console.error('AI Evaluation Error:', error);
       return { decision: 'REVIEW', score: 50, feedback: 'Technical evaluation error' };
@@ -507,7 +388,7 @@ User: ${userName}`
 
 const aiEngine = new AIInterviewEngine();
 
-// Timer management (unchanged)
+// Timer management
 const responseTimers = new Map();
 const reminderTimers = new Map();
 
@@ -535,7 +416,7 @@ function clearReminderTimer(userId) {
   }
 }
 
-// MongoDB Helper Functions (unchanged)
+// MongoDB Helper Functions
 async function saveSession(session) {
   await PluginHelpers.safeDBOperation(async (db, collection) => {
     await collection.replaceOne({ userId: session.userId }, session.toDB(), { upsert: true });
@@ -611,6 +492,11 @@ async function initGroupSettings(groupId) {
   }
   evalPrompts.set(groupId, prompt.prompt);
 
+  // Cleanup stale sessions
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.deleteMany({ groupId, startTime: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } });
+  }, COLLECTIONS.sessions);
+
   return settings;
 }
 
@@ -652,12 +538,15 @@ async function getActiveSessions(groupId) {
 
 async function startInterview(userId, groupId, userName, sock) {
   const settings = await initGroupSettings(groupId);
-  if (!settings.isActive) return;
+  if (!settings.isActive) {
+    await sock.sendMessage(groupId, { text: `⚠️ Interviews are currently disabled for this group.` });
+    return;
+  }
 
   const attemptsKey = `${groupId}_${userId}`;
   const attempts = settings.sessionAttempts.get(attemptsKey) || 0;
   if (attempts >= settings.maxSessionAttempts) {
-    await sock.sendMessage(groupId, { text: `⚠️ ${userName}, you've reached the max interview attempts. Contact an admin if needed!` });
+    await sock.sendMessage(groupId, { text: `⚠️ ${userName}, you've reached the max interview attempts. Contact an admin!` });
     return;
   }
   settings.sessionAttempts.set(attemptsKey, attempts + 1);
@@ -675,11 +564,11 @@ async function startInterview(userId, groupId, userName, sock) {
 
   const welcomeMsg = `🎉 *Welcome to Gist HQ Interview, ${userName}!* 🎉
 
-Ehen, ${userName}! 👋 I'm your friendly AI interviewer, here to gist with you before you join our main Gist HQ fam! 
+Ehen, ${userName}! 👋 I'm your friendly AI interviewer, here to gist with you before you join our main Gist HQ fam!
 
 This na just 10-15 minutes. Ready? Omo, let's start! 🚀
 
-*Question 1:* What's your name and where are you from? Tell us a bit about yourself! 😊`;
+*Question 1/${interviewQuestions.get(groupId).length}:* What's your name and where are you from? Tell us a bit about yourself! 😊`;
 
   await sock.sendMessage(groupId, { text: welcomeMsg });
 
@@ -704,7 +593,6 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
     timestamp: new Date()
   });
 
-  // Extract display name from Q1
   if (session.currentQuestion === 0 && !session.displayName && !isImage) {
     const nameMatch = userMessage.match(/name\s*(is|called)?\s*([A-Za-z\s]+)/i);
     session.displayName = nameMatch ? nameMatch[2].trim() : session.userName;
@@ -717,32 +605,29 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
     return;
   }
 
-  // Handle photo question (mandatory)
+  // Validate photo
   if (currentQ.type === 'photo') {
-    if (isImage) {
+    if (isImage && imageData?.mimetype?.startsWith('image/')) {
       session.photo = { mimetype: imageData.mimetype, url: imageData.url || 'uploaded' };
       await saveSession(session);
     } else {
-      const clarificationMsg = `${session.displayName}, photo is mandatory for verification! Please send an image in this chat now. No wahala, just upload it! 📸`;
+      const clarificationMsg = `${session.displayName}, please send a valid image (JPEG/PNG) for verification! 📸`;
       await sock.sendMessage(session.groupId, { text: clarificationMsg });
-      const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
-      setResponseTimer(session.userId, timeoutMs, () => handleResponseTimeout(session.userId, sock));
+      setResponseTimer(session.userId, settings.responseTimeoutMinutes * 60 * 1000, () => handleResponseTimeout(session.userId, sock));
       return;
     }
   }
 
-  // Handle DOB question
+  // Handle DOB
   if (currentQ.type === 'dob' && !isImage) {
-    await sock.sendPresenceUpdate('composing', session.groupId);
     const dobResult = await aiEngine.parseDOB(userMessage, session.displayName);
     if (dobResult.day && dobResult.month) {
       session.dob = { day: dobResult.day, month: dobResult.month, year: dobResult.year };
     } else {
-      const clarificationMsg = `${session.displayName}, ${dobResult.clarification} Try again, no wahala! 😊`;
+      const clarificationMsg = `${session.displayName}, ${dobResult.clarification} Try again! 😊`;
       await sock.sendMessage(session.groupId, { text: clarificationMsg });
       await saveSession(session);
-      const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
-      setResponseTimer(session.userId, timeoutMs, () => handleResponseTimeout(session.userId, sock));
+      setResponseTimer(session.userId, settings.responseTimeoutMinutes * 60 * 1000, () => handleResponseTimeout(session.userId, sock));
       return;
     }
   }
@@ -758,31 +643,18 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
   });
   await saveSession(session);
 
-  // AI follow-up logic (skip for special types)
+  // AI follow-up logic
   if (currentQ.type !== 'photo' && currentQ.type !== 'dob' && !isImage) {
-    const shouldFollowUp = session.aiFollowUps < 2 &&
-                          settings.aiFollowUpEnabled &&
-                          userMessage.length > 10 &&
-                          Math.random() > 0.5;
-
+    const shouldFollowUp = session.aiFollowUps < 2 && settings.aiFollowUpEnabled && userMessage.length > 10 && Math.random() > 0.5;
     if (shouldFollowUp) {
-      await sock.sendPresenceUpdate('composing', session.groupId);
-      const followUp = await aiEngine.generateFollowUp(
-        currentQ.question,
-        userMessage,
-        session.conversationHistory,
-        session.displayName
-      );
-
+      const followUp = await aiEngine.generateFollowUp(currentQ.question, userMessage, session.conversationHistory, session.displayName, session.groupId);
       if (followUp) {
         const followUpMsg = `${session.displayName}, ${followUp} Wetin you think? 😊`;
         await sock.sendMessage(session.groupId, { text: followUpMsg });
         session.aiFollowUps++;
         session.currentQuestion += 0.1;
         await saveSession(session);
-
-        const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
-        setResponseTimer(session.userId, timeoutMs, () => handleResponseTimeout(session.userId, sock));
+        setResponseTimer(session.userId, settings.responseTimeoutMinutes * 60 * 1000, () => handleResponseTimeout(session.userId, sock));
         return;
       }
     }
@@ -804,11 +676,9 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
   const nextQuestion = questions[session.currentQuestion];
   if (nextQuestion) {
     const personalName = session.displayName || 'friend';
-    const questionMsg = `*Question ${session.currentQuestion + 1}/${questions.length}:* ${nextQuestion.question}\n\nTake your time, ${personalName}! No wahala. 😊`;
+    const questionMsg = `*Question ${session.currentQuestion + 1}/${questions.length}:* ${nextQuestion.question}\n\nTake your time, ${personalName}! No wahala. 😊${nextQuestion.required ? '' : ' (Optional)'}`;
     await sock.sendMessage(session.groupId, { text: questionMsg });
-
-    const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
-    setResponseTimer(session.userId, timeoutMs, () => handleResponseTimeout(session.userId, sock));
+    setResponseTimer(session.userId, settings.responseTimeoutMinutes * 60 * 1000, () => handleResponseTimeout(session.userId, sock));
   }
 }
 
@@ -819,34 +689,25 @@ async function showRulesAndGuidelines(session, sock) {
 📝 *Please confirm, ${personalName}:* Do you understand and agree to follow all these rules? (Reply with "Yes, I agree" or similar)`;
 
   await sock.sendMessage(session.groupId, { text: rulesMsg });
-
-  const settings = groupSettings.get(session.groupId);
-  const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
-  setResponseTimer(session.userId, timeoutMs, () => handleResponseTimeout(session.userId, sock));
+  setResponseTimer(session.userId, groupSettings.get(session.groupId).responseTimeoutMinutes * 60 * 1000, () => handleResponseTimeout(session.userId, sock));
 }
 
 async function handleRulesAck(session, response, sock) {
   session.rulesAckAttempts++;
-  const maxAttempts = 3;
-  if (session.rulesAckAttempts >= maxAttempts) {
+  if (session.rulesAckAttempts >= 3) {
     await removeUserFromInterview(session, 'Failed to acknowledge rules after multiple attempts', sock);
     return;
   }
 
-  const lowerResponse = response.toLowerCase();
-  if (lowerResponse.includes('yes') && lowerResponse.includes('agree')) {
+  if (response.toLowerCase().includes('yes') && response.toLowerCase().includes('agree')) {
     session.rulesAcknowledged = true;
     await saveSession(session);
     const personalName = session.displayName || session.userName;
-    await sock.sendMessage(session.groupId, { 
-      text: `✅ Perfect! Thanks for agreeing, ${personalName}! Ehen, now let me evaluate your responses... ⏳` 
-    });
+    await sock.sendMessage(session.groupId, { text: `✅ Thanks for agreeing, ${personalName}! Evaluating your responses... ⏳` });
     await finishInterview(session, sock);
   } else {
     await sock.sendMessage(session.groupId, {
-      text: `❌ ${session.displayName || 'Hey'}, I need you to explicitly agree to our rules to proceed. Please reply with "Yes, I agree" or similar. 
-
-If you don't want to, no wahala, but you won't be able to join the main group. 🤷‍♀️ (Attempt ${session.rulesAckAttempts + 1}/${maxAttempts})`
+      text: `❌ ${session.displayName || 'Hey'}, please reply with "Yes, I agree" to proceed. (Attempt ${session.rulesAckAttempts + 1}/3)`
     });
   }
 }
@@ -860,47 +721,35 @@ async function handleResponseTimeout(userId, sock) {
 
   if (session.remindersSent <= settings.maxReminders) {
     const personalName = session.displayName || session.userName;
-    const reminderMsg = session.remindersSent === 1 
-      ? `⏰ Hey ${personalName}! I'm still waiting for your response to continue the interview. Please reply when you're ready! No wahala 😊`
-      : `⏰ Last reminder! Please respond to continue your Gist HQ interview, or you'll be automatically removed. 🙏`;
+    const reminderMsg = session.remindersSent === 1
+      ? `⏰ Hey ${personalName}! I'm waiting for your response. Reply to continue! 😊`
+      : `⏰ Last reminder! Please respond or you'll be removed. 🙏`;
 
     await sock.sendMessage(session.groupId, { text: reminderMsg });
-
-    const reminderMs = settings.reminderTimeoutMinutes * 60 * 1000;
-    setReminderTimer(userId, reminderMs, () => handleResponseTimeout(userId, sock));
+    setReminderTimer(userId, settings.reminderTimeoutMinutes * 60 * 1000, () => handleResponseTimeout(userId, sock));
   } else {
     await removeUserFromInterview(session, 'No response after reminders', sock);
   }
 }
 
 async function finishInterview(session, sock) {
-  // Check if photo was provided (mandatory)
   if (!session.photo) {
-    await sock.sendMessage(session.groupId, { text: `❌ ${session.displayName || session.userName}, photo is mandatory! Please upload it to continue.` });
-    return; // Don't proceed to evaluation
+    await sock.sendMessage(session.groupId, { text: `❌ ${session.displayName || session.userName}, photo is mandatory! Please upload it.` });
+    return;
   }
 
   session.status = 'completed';
   await saveSession(session);
-  
+
   const personalName = session.displayName || session.userName;
-  const evaluationMsg = `✅ *Interview Complete!* 
-
-Thanks ${personalName} for taking the time to answer all questions! 🙏
-
-I'm now evaluating your responses... This will take just a moment! ⏳`;
-
-  await sock.sendMessage(session.groupId, { text: evaluationMsg });
+  await sock.sendMessage(session.groupId, { text: `✅ *Interview Complete!* Thanks ${personalName}! Evaluating responses... ⏳` });
 
   try {
-    await sock.sendPresenceUpdate('composing', session.groupId);
     const customPrompt = evalPrompts.get(session.groupId);
     const evaluation = await aiEngine.evaluateInterview(session, customPrompt);
     session.score = evaluation.score;
     session.feedback = evaluation.feedback;
     await saveSession(session);
-
-    console.log(`Interview evaluation for ${session.userName}: ${evaluation.decision} (${evaluation.score}/100)`);
 
     if (evaluation.decision === 'APPROVE' && evaluation.score >= 60) {
       await approveUser(session, evaluation, sock);
@@ -912,12 +761,12 @@ I'm now evaluating your responses... This will take just a moment! ⏳`;
       await updateStats(session.groupId, { pendingReviews: 1 }, session);
       await requestManualReview(session, evaluation, sock);
     }
-
   } catch (error) {
-    console.error('Interview evaluation failed:', error);
+    console.error('Evaluation error:', error);
     session.status = 'pending_review';
     await saveSession(session);
     await requestManualReview(session, { score: 50, feedback: 'Technical evaluation error' }, sock);
+    await sock.sendMessage(session.groupId, { text: `⚠️ An error occurred during evaluation. Admins have been notified for manual review.` });
   }
 }
 
@@ -925,52 +774,42 @@ async function approveUser(session, evaluation, sock) {
   session.status = 'approved';
   await saveSession(session);
   const settings = groupSettings.get(session.groupId);
-  
   await updateStats(session.groupId, { approved: 1 }, session);
 
   const personalName = session.displayName || session.userName;
   const approvalMsg = `🎉 *CONGRATULATIONS!* 🎉
 
-Welcome to the Gist HQ family, ${personalName}! 🥳 Opor!
+Welcome to Gist HQ, ${personalName}! 🥳
 
-You've successfully passed the interview! Here's your link to join our main group:
+You've passed the interview! Join our main group:
 
 ${settings.mainGroupLink || 'Link will be provided by admin'}
 
-⚠️ *Important:* This link will expire in ${settings.linkExpiryMinutes} minutes for security reasons.
+⚠️ Link expires in ${settings.linkExpiryMinutes} minutes.
 
-Can't wait to see you in the main group, ${personalName}! 🚀✨`;
+Can't wait to see you, ${personalName}! 🚀`;
 
   await sock.sendMessage(session.groupId, { text: approvalMsg });
-
-  if (settings.mainGroupLink) {
-    setTimeout(() => {
-      console.log(`Link expired for approved user: ${session.userName}`);
-    }, settings.linkExpiryMinutes * 60 * 1000);
-  }
-
   setTimeout(() => deleteSession(session.userId), 10 * 60 * 1000);
 }
 
 async function rejectUser(session, evaluation, sock) {
   session.status = 'rejected';
   await saveSession(session);
-  
   await updateStats(session.groupId, { rejected: 1 }, session);
 
   const personalName = session.displayName || session.userName;
-  const rejectionMsg = `❌ *Interview Result* 
+  const rejectionMsg = `❌ *Interview Result*
 
-Thanks for your interest in Gist HQ, ${personalName}.
+Thanks for your interest, ${personalName}.
 
-Unfortunately, we won't be moving forward with your application at this time. 
+We won't be moving forward at this time.
 
 ${evaluation.feedback ? `Feedback: ${evaluation.feedback}` : ''}
 
-You're welcome to reapply in the future! Best wishes! 🙏`;
+Reapply later! Best wishes! 🙏`;
 
   await sock.sendMessage(session.groupId, { text: rejectionMsg });
-
   setTimeout(async () => {
     try {
       await sock.groupParticipantsUpdate(session.groupId, [session.userId], 'remove');
@@ -986,30 +825,27 @@ async function requestManualReview(session, evaluation, sock) {
   const personalName = session.displayName || session.userName;
   const reviewMsg = `🔍 *Manual Review Required*
 
-Thanks ${personalName}! Your interview has been submitted for admin review.
+Thanks ${personalName}! Your interview needs admin review.
 
 Score: ${evaluation.score}/100
 ${evaluation.feedback ? `Feedback: ${evaluation.feedback}` : ''}
 
-An admin will review your application and get back to you soon! Please wait patiently. ⏳`;
+Please wait for admin response. ⏳`;
 
   await sock.sendMessage(session.groupId, { text: reviewMsg });
-
-  console.log(`Manual review requested for ${session.userName} - Score: ${evaluation.score}`);
 }
 
 async function removeUserFromInterview(session, reason, sock) {
   session.status = 'failed';
   await saveSession(session);
-  
   await updateStats(session.groupId, { autoRemoved: 1 }, session);
 
   const personalName = session.displayName || session.userName;
   const removalMsg = `⚠️ *Interview Timeout*
 
-Sorry ${personalName}, you've been removed from the interview process due to: ${reason}
+Sorry ${personalName}, removed due to: ${reason}
 
-You're welcome to rejoin and restart the interview anytime! 🔄 No wahala.`;
+Rejoin to restart! 🔄`;
 
   await sock.sendMessage(session.groupId, { text: removalMsg });
 
@@ -1027,8 +863,16 @@ You're welcome to rejoin and restart the interview anytime! 🔄 No wahala.`;
 }
 
 async function updateStats(groupId, updates, session) {
-  const stats = interviewStats.get(groupId);
-  if (!stats) return;
+  const stats = interviewStats.get(groupId) || {
+    groupId,
+    totalInterviews: 0,
+    approved: 0,
+    rejected: 0,
+    autoRemoved: 0,
+    pendingReviews: 0,
+    averageScore: 0,
+    averageDuration: 0
+  };
 
   Object.keys(updates).forEach(key => {
     stats[key] = (stats[key] || 0) + updates[key];
@@ -1045,25 +889,190 @@ async function updateStats(groupId, updates, session) {
   await saveStats(groupId, stats);
 }
 
+function isAdmin(userId, groupId, config) {
+  try {
+    if (!userId || typeof userId !== 'string') return false;
+    const cleanUserId = userId.replace('@s.whatsapp.net', '');
+
+    if (config.OWNER_NUMBER && cleanUserId === config.OWNER_NUMBER.replace('@s.whatsapp.net', '')) return true;
+
+    if (config.ADMIN_NUMBERS) {
+      const adminNumbers = Array.isArray(config.ADMIN_NUMBERS)
+        ? config.ADMIN_NUMBERS.map(num => String(num).replace('@s.whatsapp.net', ''))
+        : config.ADMIN_NUMBERS.split(',').map(num => num.trim().replace('@s.whatsapp.net', ''));
+      if (adminNumbers.includes(cleanUserId)) return true;
+    }
+
+    if (config.MODS && Array.isArray(config.MODS)) {
+      const cleanMods = config.MODS.map(mod => String(mod).replace('@s.whatsapp.net', ''));
+      if (cleanMods.includes(cleanUserId)) return true;
+    }
+
+    const settings = groupSettings.get(groupId);
+    if (settings?.adminIds?.length > 0) {
+      const cleanGroupAdmins = settings.adminIds.map(admin => String(admin).replace('@s.whatsapp.net', ''));
+      if (cleanGroupAdmins.includes(cleanUserId)) return true;
+    }
+
+    return false;
+  } catch (error) {
+    console.error('isAdmin error:', error);
+    return false;
+  }
+}
+
 async function handleAdminCommand(command, args, m, sock, config, groupId) {
   const userId = m.sender;
-  if (!m.isAdmin()) {
-    await sock.sendMessage(groupId, { text: `❌ This command is only available to admins! 👮‍♀️` }, { quoted: m });
+  if (!isAdmin(userId, groupId, config)) {
+    await sock.sendMessage(groupId, { text: `❌ This command is for admins only! 👮‍♀️` }, { quoted: m });
     return;
   }
 
   await initGroupSettings(groupId);
+  const settings = groupSettings.get(groupId);
+  const questions = interviewQuestions.get(groupId) || DEFAULT_QUESTIONS;
 
-  switch (command) {
-    case 'activateinterview':
-      const settings = groupSettings.get(groupId);
-      settings.autoInterviewActive = !settings.autoInterviewActive;
-      await saveSettings(groupId, settings);
-      await sock.sendMessage(groupId, { text: `✅ Auto-interview for new members is now ${settings.autoInterviewActive ? 'ON' : 'OFF'}.` }, { quoted: m });
+  switch (command.toLowerCase()) {
+    case 'addquestion': {
+      if (args.length < 3) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}addquestion <category> <required:yes/no> <question>` }, { quoted: m });
+        return;
+      }
+      const category = args[1].toLowerCase();
+      const required = args[2].toLowerCase() === 'yes';
+      const questionText = args.slice(3).join(' ');
+      const newQuestion = { id: questions.length + 1, question: questionText, required, category };
+      questions.push(newQuestion);
+      await saveQuestions(groupId, questions);
+      await sock.sendMessage(groupId, { text: `✅ Added question: "${questionText}" (ID: ${newQuestion.id})` }, { quoted: m });
       break;
-    // ... (other cases unchanged, omitted for brevity)
-    case 'viewtranscript':
-      // Updated to include photo info
+    }
+
+    case 'removequestion': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}removequestion <question_id>` }, { quoted: m });
+        return;
+      }
+      const id = parseInt(args[1]);
+      const index = questions.findIndex(q => q.id === id);
+      if (index === -1) {
+        await sock.sendMessage(groupId, { text: `❌ Question ID ${id} not found!` }, { quoted: m });
+        return;
+      }
+      const removed = questions.splice(index, 1)[0];
+      await saveQuestions(groupId, questions);
+      await sock.sendMessage(groupId, { text: `✅ Removed question ID ${id}: "${removed.question}"` }, { quoted: m });
+      break;
+    }
+
+    case 'listquestions': {
+      const questionList = questions.map(q => `ID: ${q.id} | ${q.question} | Required: ${q.required} | Category: ${q.category}`).join('\n');
+      await sock.sendMessage(groupId, { text: `📋 *Questions*\n\n${questionList || 'No questions set.'}` }, { quoted: m });
+      break;
+    }
+
+    case 'interviewsettings': {
+      if (args.length < 3 || !['linkExpiry', 'responseTimeout', 'reminderTimeout', 'maxReminders', 'aiFollowUp', 'autoRemove'].includes(args[1])) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}interviewsettings <setting> <value>\nOptions: linkExpiry, responseTimeout, reminderTimeout, maxReminders, aiFollowUp (on/off), autoRemove (on/off)` }, { quoted: m });
+        return;
+      }
+      const setting = args[1];
+      const value = args[2].toLowerCase();
+      if (['linkExpiry', 'responseTimeout', 'reminderTimeout', 'maxReminders'].includes(setting)) {
+        const num = parseInt(value);
+        if (isNaN(num) || num < 1) {
+          await sock.sendMessage(groupId, { text: `❌ Invalid number for ${setting}!` }, { quoted: m });
+          return;
+        }
+        settings[`${setting}Minutes`] = num;
+      } else {
+        settings[setting + 'Enabled'] = value === 'on';
+      }
+      await saveSettings(groupId, settings);
+      await sock.sendMessage(groupId, { text: `✅ Updated ${setting} to ${value}` }, { quoted: m });
+      break;
+    }
+
+    case 'interviewstats': {
+      const stats = interviewStats.get(groupId);
+      const statsMsg = `📊 *Interview Stats*
+Total Interviews: ${stats.totalInterviews}
+Approved: ${stats.approved}
+Rejected: ${stats.rejected}
+Auto-Removed: ${stats.autoRemoved}
+Pending Reviews: ${stats.pendingReviews}
+Average Score: ${stats.averageScore.toFixed(2)}/100
+Average Duration: ${stats.averageDuration.toFixed(2)} mins`;
+      await sock.sendMessage(groupId, { text: statsMsg }, { quoted: m });
+      break;
+    }
+
+    case 'approveuser': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}approveuser <user_id>` }, { quoted: m });
+        return;
+      }
+      const targetUserId = args[1].includes('@') ? args[1] : `${args[1]}@s.whatsapp.net`;
+      const targetSession = await loadSession(targetUserId);
+      if (!targetSession || targetSession.status !== 'pending_review') {
+        await sock.sendMessage(groupId, { text: `❌ No pending session for user ${args[1]}!` }, { quoted: m });
+        return;
+      }
+      await approveUser(targetSession, { score: targetSession.score, feedback: 'Manually approved by admin' }, sock);
+      await sock.sendMessage(groupId, { text: `✅ Approved user ${targetSession.userName}` }, { quoted: m });
+      break;
+    }
+
+    case 'rejectuser': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}rejectuser <user_id>` }, { quoted: m });
+        return;
+      }
+      const targetUserId = args[1].includes('@') ? args[1] : `${args[1]}@s.whatsapp.net`;
+      const targetSession = await loadSession(targetUserId);
+      if (!targetSession || targetSession.status !== 'pending_review') {
+        await sock.sendMessage(groupId, { text: `❌ No pending session for user ${args[1]}!` }, { quoted: m });
+        return;
+      }
+      await rejectUser(targetSession, { score: targetSession.score, feedback: 'Manually rejected by admin' }, sock);
+      await sock.sendMessage(groupId, { text: `✅ Rejected user ${targetSession.userName}` }, { quoted: m });
+      break;
+    }
+
+    case 'setmaingroup': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}setmaingroup <link>` }, { quoted: m });
+        return;
+      }
+      const link = args[1];
+      if (!link.match(/^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9]+$/)) {
+        await sock.sendMessage(groupId, { text: `❌ Invalid WhatsApp group link!` }, { quoted: m });
+        return;
+      }
+      settings.mainGroupLink = link;
+      await saveSettings(groupId, settings);
+      await sock.sendMessage(groupId, { text: `✅ Main group link set to: ${link}` }, { quoted: m });
+      break;
+    }
+
+    case 'pendingreviews': {
+      const pending = await getPendingSessions(groupId);
+      const pendingList = pending.map(s => `${s.userName} (${s.userId}): Score ${s.score}/100`).join('\n');
+      await sock.sendMessage(groupId, { text: `🔍 *Pending Reviews*\n\n${pendingList || 'No pending reviews.'}` }, { quoted: m });
+      break;
+    }
+
+    case 'viewtranscript': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}viewtranscript <user_id>` }, { quoted: m });
+        return;
+      }
+      const targetUserId = args[1].includes('@') ? args[1] : `${args[1]}@s.whatsapp.net`;
+      const targetSession = await loadSession(targetUserId);
+      if (!targetSession) {
+        await sock.sendMessage(groupId, { text: `❌ No session for user ${args[1]}!` }, { quoted: m });
+        return;
+      }
       let transcript = `📄 *Transcript for ${targetSession.userName}*\n\n`;
       targetSession.responses.forEach(r => {
         transcript += `Q${r.questionId}: ${r.question}\nA: ${r.answer}\n\n`;
@@ -1072,106 +1081,120 @@ async function handleAdminCommand(command, args, m, sock, config, groupId) {
         transcript += `FU: ${f.question}\nA: ${f.answer}\n\n`;
       });
       transcript += `Score: ${targetSession.score}/100\nFeedback: ${targetSession.feedback}\nPhoto: ${targetSession.photo ? 'Provided' : 'Not provided'}\nDOB: ${targetSession.dob.day}/${targetSession.dob.month || 'N/A'}/${targetSession.dob.year || 'N/A'}`;
-
       await sock.sendMessage(groupId, { text: transcript }, { quoted: m });
       break;
-    // ... (rest unchanged)
-  }
-}
-
-export async function handleNewMember(sock, groupId, newMemberId, config) {
-  try {
-    const settings = await initGroupSettings(groupId);
-    if (!settings.autoInterviewActive) {
-      return;
     }
 
-    if (newMemberId === sock.user.id || PermissionHelpers.isPlatformAdmin(newMemberId, config)) {
-      return;
+    case 'editevalprompt': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}editevalprompt <new_prompt>` }, { quoted: m });
+        return;
+      }
+      const newPrompt = args.slice(1).join(' ');
+      await saveEvalPrompt(groupId, newPrompt);
+      evalPrompts.set(groupId, newPrompt);
+      await sock.sendMessage(groupId, { text: `✅ Evaluation prompt updated.` }, { quoted: m });
+      break;
     }
 
-    const memberName = newMemberId.split('@')[0];
-    console.log(`🎯 Auto-interview triggered for new member: ${memberName} in group ${groupId}`);
+    case 'resetquestions': {
+      await saveQuestions(groupId, [...DEFAULT_QUESTIONS]);
+      interviewQuestions.set(groupId, [...DEFAULT_QUESTIONS]);
+      await sock.sendMessage(groupId, { text: `✅ Questions reset to defaults.` }, { quoted: m });
+      break;
+    }
 
-    // Use a short delay to allow welcome messages to appear first
-    setTimeout(() => startInterview(newMemberId, groupId, memberName, sock), 3000);
-  } catch (error) {
-    console.error('Interview plugin: Error handling new member:', error);
+    case 'cancelsession': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}cancelsession <user_id>` }, { quoted: m });
+        return;
+      }
+      const targetUserId = args[1].includes('@') ? args[1] : `${args[1]}@s.whatsapp.net`;
+      const targetSession = await loadSession(targetUserId);
+      if (!targetSession || targetSession.status !== 'active') {
+        await sock.sendMessage(groupId, { text: `❌ No active session for user ${args[1]}!` }, { quoted: m });
+        return;
+      }
+      await removeUserFromInterview(targetSession, 'Session cancelled by admin', sock);
+      await sock.sendMessage(groupId, { text: `✅ Cancelled session for ${targetSession.userName}` }, { quoted: m });
+      break;
+    }
+
+    default:
+      await sock.sendMessage(groupId, { text: `❌ Unknown admin command: ${command}` }, { quoted: m });
   }
 }
 
 export default async function autoInterviewHandler(m, sock, config) {
   try {
-    if (!isRecoveryCheckDone) {
-      await runSessionRecovery(sock);
-      isRecoveryCheckDone = true;
-    }
-
-    const isGroupChat = m.key.remoteJid.endsWith('@g.us');
-    if (!isGroupChat) return;
+    if (!m.key.remoteJid.endsWith('@g.us')) return;
 
     const userId = m.key.participant || m.sender;
     const groupId = m.key.remoteJid;
     const userName = m.pushName || userId.split('@')[0];
-    
+
     await initGroupSettings(groupId);
     const settings = groupSettings.get(groupId);
+
+    if (m.key.fromMe === false && m.messageStubType === 26) {
+      const newMembers = [userId];
+      for (const newMember of newMembers) {
+        if (newMember === sock.user.id || isAdmin(newMember, groupId, config)) continue;
+        const memberName = newMember.split('@')[0];
+        console.log(`🎯 New member: ${memberName} in group ${groupId}`);
+        setTimeout(() => startInterview(newMember, groupId, memberName, sock), 2000);
+      }
+      return;
+    }
 
     let session = interviewSessions.get(userId) || await loadSession(userId);
     if (session && session.status === 'active') {
       if (m.message?.conversation) {
-        const userMessage = m.message.conversation;
-
+        const userMessage = m.message.conversation.trim();
         if (!session.rulesAcknowledged && session.currentQuestion >= interviewQuestions.get(groupId).length) {
           await handleRulesAck(session, userMessage, sock);
           return;
         }
-
         await handleInterviewResponse(session, userMessage, sock);
         return;
       }
 
-      if (m.type === 'imageMessage' && session.currentQuestion < interviewQuestions.get(groupId).length) {
+      if (m.message?.imageMessage && session.currentQuestion < interviewQuestions.get(groupId).length) {
         const currentQ = interviewQuestions.get(groupId)[session.currentQuestion];
         if (currentQ.type === 'photo') {
           await handleInterviewResponse(session, '[Image]', sock, true, {
             mimetype: m.message.imageMessage.mimetype,
-            url: m.message.imageMessage.url,
+            url: m.message.imageMessage.url
           });
           return;
         }
       }
     }
 
-    if (m.message?.conversation && m.message.conversation.startsWith(config.PREFIX)) {
-      const args = m.message.conversation.slice(config.PREFIX.length).trim().split(' ');
-      const command = args[0].toLowerCase();
+    if (m.message?.conversation?.startsWith(config.PREFIX)) {
+      const [command, ...args] = m.message.conversation.slice(config.PREFIX.length).trim().split(/\s+/);
+      const cmd = command.toLowerCase();
+      const validCommands = info.commands.map(c => c.name).concat(info.commands.flatMap(c => c.aliases || []));
 
-      if (command === 'interview' || command === 'startinterview') {
+      if (cmd === 'interview' || cmd === 'startinterview') {
         session = interviewSessions.get(userId) || await loadSession(userId);
         if (session) {
-          await sock.sendMessage(groupId, { text: `⚠️ You already have an active interview session! Please complete it first. \n\nCurrent question: ${session.currentQuestion + 1}/${interviewQuestions.get(groupId).length}` }, { quoted: m });
+          await sock.sendMessage(groupId, { text: `⚠️ Active interview session exists! Current: Question ${session.currentQuestion + 1}/${interviewQuestions.get(groupId).length}` }, { quoted: m });
           return;
         }
-
         await startInterview(userId, groupId, userName, sock);
         return;
       }
 
-      const adminOnlyCommands = ['addquestion', 'removequestion', 'listquestions', 'interviewsettings', 'interviewstats', 'approveuser', 'rejectuser', 'setmaingroup', 'pendingreviews', 'viewtranscript', 'editevalprompt', 'resetquestions', 'cancelsession'];
-      if (adminOnlyCommands.includes(command)) {
-        await handleAdminCommand(command, args, m, sock, config, groupId);
+      if (validCommands.includes(cmd)) {
+        await handleAdminCommand(cmd, args, m, sock, config, groupId);
         return;
       }
     }
-
   } catch (error) {
-    console.error('Auto Interview Plugin Error:', error);
-    
-    const session = interviewSessions.get(m.key.participant || m.sender);
-    if (session) {
-      clearResponseTimer(m.key.participant || m.sender);
-      clearReminderTimer(m.key.participant || m.sender);
-    }
+    console.error('Auto Interview Error:', error);
+    await sock.sendMessage(groupId, { text: `⚠️ An error occurred. Admins have been notified.` });
+    clearResponseTimer(userId);
+    clearReminderTimer(userId);
   }
 }
