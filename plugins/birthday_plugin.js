@@ -1,7 +1,6 @@
 // plugins/birthday.js - Birthday plugin compatible with PluginManager
 // ✅ REFACTORED: Removed direct MongoClient import
 import moment from 'moment-timezone';
-import cron from 'node-cron';
 // ✅ REFACTORED: Import the new helper for database access
 import { getCollection } from '../lib/pluginIntegration.js';
 
@@ -89,44 +88,22 @@ async function saveSettings() {
   }
 }
 
-// ✅ ADDED: New connection health check
-function isConnectionHealthy(sock) {
-  // Basic check: Ensure sock and user attributes are present
-  if (!sock || !sock.user || !sock.user.id) {
-    return false;
-  }
-  // More advanced checks can be added here if the socket library provides connection status
-  // For now, we assume if sock.user is populated, the connection is likely active.
-  return true;
-}
-
-// ✅ REFACTORED: More efficient authorization check
+// Check if user is authorized (UNCHANGED)
 function isAuthorized(senderId) {
-  const userId = senderId.split('@')[0];
-  
-  const adminSet = new Set([
-    ...birthdaySettings.adminNumbers.map(num => num.split('@')[0]),
-    ...(process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : []),
-    process.env.OWNER_NUMBER || ''
-  ]);
-
-  adminSet.delete(''); // Remove empty string if OWNER_NUMBER is not set
-
-  return adminSet.has(userId);
-}
-
-// ✅ ADDED: New safe message sending function
-async function safeSend(sock, recipient, message) {
-  try {
-    if (!isConnectionHealthy(sock)) {
-      console.log(`❌ Connection unhealthy, skipping message to ${recipient}`);
-      return;
-    }
-    await sock.sendMessage(recipient, message);
-  } catch (error) {
-    console.error(`❌ Failed to send message to ${recipient}:`, error.message);
-    // Optional: Add more robust error handling, like retries or notifications
+  // Check if user is in admin list
+  if (birthdaySettings.adminNumbers.includes(senderId.split('@')[0])) {
+    return true;
   }
+  
+  // Check owner/admin from environment
+  const ownerNumber = process.env.OWNER_NUMBER || '';
+  const adminNumbers = process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : [];
+
+  if (senderId.split('@')[0] === ownerNumber || adminNumbers.includes(senderId.split('@')[0])) {
+    return true;
+  }
+
+  return false;
 }
 
 // ✅ REFACTORED: Uses getCollection for safe, shared database access.
@@ -257,12 +234,6 @@ async function sendBirthdayWishes(sock) {
     return;
   }
   
-  // Check connection first
-  if (!isConnectionHealthy(sock)) {
-    console.log('❌ Connection not healthy, skipping birthday wishes');
-    return;
-  }
-
   const todaysBirthdays = await getTodaysBirthdays();
   if (todaysBirthdays.length === 0) return;
   
@@ -287,12 +258,6 @@ async function sendBirthdayWishes(sock) {
         break;
       }
       
-      // Double-check connection before each person
-      if (!isConnectionHealthy(sock)) {
-        console.log('❌ Connection lost during birthday processing');
-        break;
-      }
-
       const wishMessage = getBirthdayWishMessage(birthdayPerson);
       let successfulSends = 0;
     
@@ -391,8 +356,6 @@ async function sendBirthdayReminders(sock) {
         if (birthdaySettings.enableGroupReminders && birthdaySettings.reminderGroups.length > 0) {
           for (const groupId of birthdaySettings.reminderGroups) {
             try {
-            if (!isConnectionHealthy(sock)) break;
-
               await sock.sendMessage(groupId, {
                 text: reminderMessage,
                 mentions: [birthdayPerson.userId]
@@ -445,73 +408,63 @@ async function cleanupReminderRecords() {
 }
 
 // Birthday scheduler class (UNCHANGED)
-// ✅ REFACTORED: Birthday scheduler now uses node-cron for precision
 class BirthdayScheduler {
   constructor(sock) {
     this.sock = sock;
-    this.tasks = [];
+    this.intervals = [];
     this.running = false;
   }
 
   start() {
-    if (this.running) {
-      console.log('🎂 Birthday scheduler is already running.');
-      return;
-    }
+    if (this.running) return;
     this.running = true;
-    console.log('🎂 Starting birthday scheduler with node-cron...');
 
-    // Schedule birthday wishes
-    const [wishMinute, wishHour] = birthdaySettings.wishTime.split(':');
-    const wishTask = cron.schedule(`${wishMinute} ${wishHour} * * *`, async () => {
-      console.log(`[cron] Running birthday wishes task at ${new Date()}`);
-      await sendBirthdayWishes(this.sock);
-    }, {
-      scheduled: true,
-      timezone: "Africa/Lagos"
-    });
-    this.tasks.push(wishTask);
+    console.log('🎂 Birthday scheduler started');
 
-    // Schedule birthday reminders
-    const [reminderMinute, reminderHour] = birthdaySettings.reminderTime.split(':');
-    const reminderTask = cron.schedule(`${reminderMinute} ${reminderHour} * * *`, async () => {
-      console.log(`[cron] Running birthday reminders task at ${new Date()}`);
-      await sendBirthdayReminders(this.sock);
-    }, {
-      scheduled: true,
-      timezone: "Africa/Lagos"
-    });
-    this.tasks.push(reminderTask);
+    // Check for birthdays every minute
+    const birthdayInterval = setInterval(async () => {
+      const now = moment.tz('Africa/Lagos');
 
-    // Schedule daily cleanup at midnight
-    const cleanupTask = cron.schedule('0 0 * * *', async () => {
-      console.log(`[cron] Running daily cleanup task at ${new Date()}`);
-      await cleanupReminderRecords();
-    }, {
-      scheduled: true,
-      timezone: "Africa/Lagos"
-    });
-    this.tasks.push(cleanupTask);
+      // Send birthday wishes at the specified time
+      if (now.format('HH:mm') === birthdaySettings.wishTime) {
+        await sendBirthdayWishes(this.sock);
+      }
 
-    console.log(`🎂 Birthday scheduler started with ${this.tasks.length} tasks.`);
-    // Immediately run checks on startup in case the bot was down during the scheduled time
-    console.log('Running initial checks on startup...');
-    sendBirthdayWishes(this.sock).catch(console.error);
-    sendBirthdayReminders(this.sock).catch(console.error);
+      // Send reminders at the specified time
+      if (now.format('HH:mm') === birthdaySettings.reminderTime) {
+        await sendBirthdayReminders(this.sock);
+      }
+
+      // Clean up old records once a day at midnight
+      if (now.format('HH:mm') === '00:00') {
+        await cleanupReminderRecords();
+      }
+
+    }, 60000); // Check every minute
+
+    this.intervals.push(birthdayInterval);
+
+    // Also check immediately on start
+    setTimeout(async () => {
+      const now = moment.tz('Africa/Lagos');
+      if (now.format('HH:mm') === birthdaySettings.wishTime) {
+        await sendBirthdayWishes(this.sock);
+      }
+      if (now.format('HH:mm') === birthdaySettings.reminderTime) {
+        await sendBirthdayReminders(this.sock);
+      }
+    }, 5000);
   }
 
   stop() {
-    if (!this.running) return;
-    console.log('🎂 Stopping birthday scheduler...');
-    this.tasks.forEach(task => task.stop());
-    this.tasks = [];
     this.running = false;
-    console.log('🎂 Birthday scheduler stopped.');
+    this.intervals.forEach(interval => clearInterval(interval));
+    this.intervals = [];
+    console.log('🎂 Birthday scheduler stopped');
   }
 
   restart() {
     this.stop();
-    // A small delay to ensure all tasks are stopped before restarting
     setTimeout(() => this.start(), 1000);
   }
 }

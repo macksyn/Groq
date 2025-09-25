@@ -268,8 +268,8 @@ class GroupSettings {
     this.interviewGroupId = groupId;
     this.mainGroupLink = '';
     this.linkExpiryMinutes = 30;
-    this.responseTimeoutMinutes = 10;
-    this.reminderTimeoutMinutes = 5;
+    this.responseTimeoutMinutes = 5;
+    this.reminderTimeoutMinutes = 2;
     this.maxReminders = 2;
     this.minRequiredQuestions = 0; // Deprecated, will be calculated dynamically
     this.aiFollowUpEnabled = true;
@@ -321,19 +321,22 @@ class AIInterviewEngine {
       const messages = [
         {
           role: 'system',
-          content: `You are an intelligent interviewer for "Gist HQ". Ask thoughtful follow-up questions to get to know the candidate better.
+          content: `You are an intelligent and professional interviewer for "Gist HQ". Your goal is to ask insightful follow-up questions to better understand the candidate.
 
-Rules:
-1. Keep it conversational, friendly, use ${userName}'s name
-2. Use Nigerian expressions like "Ehen", "Omo" sparingly
-3. ONE question, <100 characters
-4. Relevant to response
-5. Curious about background/interests
-6. Avoid repetition
+**Personality Guidelines:**
+*   **Tone:** Sound like an urban, educated Nigerian. Be articulate, friendly, and professional.
+*   **Language:** Use standard Nigerian English. Avoid heavy slang or overly casual expressions like "Ehen," "Omo," etc.
+*   **Style:** Be conversational and engaging, but maintain a professional demeanor.
 
-Original: "${question}"
-Response: "${userResponse}"
-User: ${userName}`
+**Task:**
+*   Ask **one** relevant follow-up question based on the user's response.
+*   Keep the question under 150 characters.
+*   Address the user by their name, ${userName}.
+*   Do not repeat previous questions.
+
+**Context:**
+*   **Original Question:** "${question}"
+*   **User's Response:** "${userResponse}"`
         },
         ...conversationHistory.slice(-4),
         { role: 'user', content: `Generate a follow-up question based on: "${userResponse}"` }
@@ -471,10 +474,18 @@ User: ${userName}`
       const messages = [
         {
           role: 'system',
-          content: `You are an AI interviewer for "Gist HQ". Your task is to rephrase a standard interview question to sound more natural, friendly, and conversational. Use the user's name, ${userName}, to make it personal. Use Nigerian slang and expressions like "Ehen!", "Oya", "Wetin dey?", "No wahala" sparingly and appropriately. The rephrased question should be engaging and feel like a real chat.
+          content: `You are a professional and friendly AI interviewer for "Gist HQ". Your task is to rephrase a standard interview question to sound more natural and conversational, while maintaining a polished and educated tone.
 
-Original Question: "${question}"
-Rephrase this question for ${userName}. Keep it under 150 characters.`
+**Personality Guidelines:**
+*   **Tone:** Sound like an urban, educated Nigerian. Be articulate and professional.
+*   **Language:** Use standard Nigerian English. Avoid heavy slang.
+*   **Style:** Be engaging and personal by using the candidate's name, ${userName}.
+
+**Task:**
+*   Rephrase the following question to be more conversational.
+*   Keep the rephrased question under 150 characters.
+
+**Original Question:** "${question}"`
         },
         { role: 'user', content: `Rephrase: "${question}"` }
       ];
@@ -672,13 +683,13 @@ async function startInterview(userId, groupId, userName, sock) {
   interviewSessions.set(userId, session);
   await saveSession(session);
 
-  const welcomeMsg = `🎉 *Welcome to Gist HQ Interview, ${userName}!* 🎉
+  const welcomeMsg = `🎉 *Welcome to the Gist HQ Interview, ${userName}!* 🎉
 
-Ehen, ${userName}! 👋 I'm your friendly AI interviewer, here to gist with you before you join our main Gist HQ fam! 
+Hello, ${userName}! I'm your friendly AI interviewer. I'm here to have a short chat with you before you join the Gist HQ community.
 
-This na just 10-15 minutes. Ready? Omo, let's start! 🚀
+The interview will take about 10-15 minutes. Shall we begin?
 
-*Question 1:* What's your name and where are you from? Tell us a bit about yourself! 😊`;
+**Question 1:** To start, could you please tell me your name and where you're from? It would be great to know a little about you! 😊`;
 
   await sock.sendPresenceUpdate('composing', groupId);
   await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate typing
@@ -802,17 +813,21 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
   }
 
   const nextQuestion = questions[session.currentQuestion];
+  const nextQuestion = questions[session.currentQuestion];
   if (nextQuestion) {
     await sock.sendPresenceUpdate('composing', session.groupId);
     await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate typing
 
     const personalName = session.displayName || 'friend';
-    let questionMsg = `*Question ${session.currentQuestion + 1}/${questions.length}:* ${nextQuestion.question}\n\nTake your time, ${personalName}! No wahala. 😊`;
+    let questionMsg;
 
     // Try to generate a dynamic question
     const dynamicQuestion = await aiEngine.generateDynamicQuestion(nextQuestion.question, personalName);
     if (dynamicQuestion) {
       questionMsg = dynamicQuestion;
+    } else {
+      // Fallback to a standard, polite question format
+      questionMsg = `Great, thank you. Here is the next question:\n\n*Question ${session.currentQuestion + 1}/${questions.length}:* ${nextQuestion.question}`;
     }
 
     await sock.sendMessage(session.groupId, { text: questionMsg });
@@ -922,7 +937,7 @@ I'm now evaluating your responses... This will take just a moment! ⏳`;
     } else {
       session.status = 'pending_review';
       await saveSession(session);
-      await updateStats(session.groupId, { pendingReviews: 1 }, session);
+      await updateStats(session.groupId, { pendingReviews: 1 }, session, evaluation);
       await requestManualReview(session, evaluation, sock);
     }
 
@@ -939,7 +954,7 @@ async function approveUser(session, evaluation, sock) {
   await saveSession(session);
   const settings = groupSettings.get(session.groupId);
   
-  await updateStats(session.groupId, { approved: 1 }, session);
+  await updateStats(session.groupId, { approved: 1 }, session, evaluation);
 
   const personalName = session.displayName || session.userName;
   const approvalMsg = `🎉 *CONGRATULATIONS!* 🎉
@@ -969,7 +984,7 @@ async function rejectUser(session, evaluation, sock) {
   session.status = 'rejected';
   await saveSession(session);
   
-  await updateStats(session.groupId, { rejected: 1 }, session);
+  await updateStats(session.groupId, { rejected: 1 }, session, evaluation);
 
   const personalName = session.displayName || session.userName;
   const rejectionMsg = `❌ *Interview Result* 
@@ -1039,7 +1054,7 @@ You're welcome to rejoin and restart the interview anytime! 🔄 No wahala.`;
   }
 }
 
-async function updateStats(groupId, updates, session) {
+async function updateStats(groupId, updates, session, evaluation) {
   const stats = interviewStats.get(groupId);
   if (!stats) return;
 
@@ -1049,7 +1064,8 @@ async function updateStats(groupId, updates, session) {
   stats.totalInterviews++;
 
   if (session) {
-    stats.averageScore = ((stats.averageScore * (stats.totalInterviews - 1)) + (session.score || 0)) / stats.totalInterviews;
+    const score = evaluation ? evaluation.score : session.score;
+    stats.averageScore = ((stats.averageScore * (stats.totalInterviews - 1)) + (score || 0)) / stats.totalInterviews;
     const duration = (new Date() - new Date(session.startTime)) / (1000 * 60);
     stats.averageDuration = ((stats.averageDuration * (stats.totalInterviews - 1)) + duration) / stats.totalInterviews;
   }
@@ -1151,28 +1167,36 @@ export default async function autoInterviewHandler(m, sock, config) {
 
     let session = interviewSessions.get(userId) || await loadSession(userId);
     if (session && session.status === 'active') {
-      if (m.message?.conversation) {
-        const userMessage = m.message.conversation;
+        const currentQ = interviewQuestions.get(groupId)?.[session.currentQuestion];
 
-        if (!session.rulesAcknowledged && session.currentQuestion >= interviewQuestions.get(groupId).length) {
-          await handleRulesAck(session, userMessage, sock);
-          return;
+        // Prioritize image check for photo question
+        if (currentQ?.type === 'photo') {
+            if (m.message?.imageMessage) {
+                await handleInterviewResponse(session, '[Image]', sock, true, {
+                    mimetype: m.message.imageMessage.mimetype,
+                    url: m.message.imageMessage.url,
+                });
+                return;
+            }
         }
 
-        await handleInterviewResponse(session, userMessage, sock);
-        return;
-      }
-
-      if (m.message?.imageMessage && session.currentQuestion < interviewQuestions.get(groupId).length) {
-        const currentQ = interviewQuestions.get(groupId)[session.currentQuestion];
-        if (currentQ.type === 'photo') {
-          await handleInterviewResponse(session, '[Image]', sock, true, {
-            mimetype: m.message.imageMessage.mimetype,
-            url: m.message.imageMessage.url
-          });
-          return;
+        // Handle text-based responses
+        const userMessage = m.message?.conversation || m.message?.extendedTextMessage?.text || m.message?.imageMessage?.caption;
+        if (userMessage) {
+            if (!session.rulesAcknowledged && session.currentQuestion >= interviewQuestions.get(groupId).length) {
+                await handleRulesAck(session, userMessage, sock);
+            } else {
+                await handleInterviewResponse(session, userMessage, sock);
+            }
+            return;
         }
-      }
+
+        // If it's a photo question and we haven't received an image yet, but some other message type, remind the user.
+        if (currentQ?.type === 'photo' && !m.message?.imageMessage) {
+             const clarificationMsg = `${session.displayName || session.userName}, I'm waiting for your photo. Please send an image to continue. 📸`;
+             await sock.sendMessage(session.groupId, { text: clarificationMsg });
+             return;
+        }
     }
 
     if (m.message?.conversation && m.message.conversation.startsWith(config.PREFIX)) {
