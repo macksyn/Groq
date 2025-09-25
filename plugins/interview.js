@@ -456,6 +456,45 @@ User: ${userName}`
       return { decision: 'REVIEW', score: 50, feedback: 'Technical evaluation error' };
     }
   }
+
+  async generateDynamicQuestion(question, userName) {
+    if (this.isRateLimited('ai')) return null;
+
+    try {
+      const messages = [
+        {
+          role: 'system',
+          content: `You are an AI interviewer for "Gist HQ". Your task is to rephrase a standard interview question to sound more natural, friendly, and conversational. Use the user's name, ${userName}, to make it personal. Use Nigerian slang and expressions like "Ehen!", "Oya", "Wetin dey?", "No wahala" sparingly and appropriately. The rephrased question should be engaging and feel like a real chat.
+
+Original Question: "${question}"
+Rephrase this question for ${userName}. Keep it under 150 characters.`
+        },
+        { role: 'user', content: `Rephrase: "${question}"` }
+      ];
+
+      const response = await axios.post(
+        GROQ_CONFIG.BASE_URL,
+        {
+          model: GROQ_CONFIG.MODEL,
+          messages: messages,
+          temperature: 0.9,
+          max_tokens: 100
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        }
+      );
+
+      return response.data?.choices?.[0]?.message?.content?.trim() || null;
+    } catch (error) {
+      console.error('Dynamic Question Generation Error:', error);
+      return null;
+    }
+  }
 }
 
 const aiEngine = new AIInterviewEngine();
@@ -634,6 +673,9 @@ This na just 10-15 minutes. Ready? Omo, let's start! 🚀
 
 *Question 1:* What's your name and where are you from? Tell us a bit about yourself! 😊`;
 
+  await sock.sendPresenceUpdate('composing', groupId);
+  await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate typing
+  await sock.sendPresenceUpdate('paused', groupId);
   await sock.sendMessage(groupId, { text: welcomeMsg });
 
   const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
@@ -754,9 +796,20 @@ async function handleInterviewResponse(session, userMessage, sock, isImage = fal
 
   const nextQuestion = questions[session.currentQuestion];
   if (nextQuestion) {
+    await sock.sendPresenceUpdate('composing', session.groupId);
+    await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate typing
+
     const personalName = session.displayName || 'friend';
-    const questionMsg = `*Question ${session.currentQuestion + 1}/${questions.length}:* ${nextQuestion.question}\n\nTake your time, ${personalName}! No wahala. 😊`;
+    let questionMsg = `*Question ${session.currentQuestion + 1}/${questions.length}:* ${nextQuestion.question}\n\nTake your time, ${personalName}! No wahala. 😊`;
+
+    // Try to generate a dynamic question
+    const dynamicQuestion = await aiEngine.generateDynamicQuestion(nextQuestion.question, personalName);
+    if (dynamicQuestion) {
+      questionMsg = dynamicQuestion;
+    }
+
     await sock.sendMessage(session.groupId, { text: questionMsg });
+    await sock.sendPresenceUpdate('paused', session.groupId);
 
     const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
     setResponseTimer(session.userId, timeoutMs, () => handleResponseTimeout(session.userId, sock));
@@ -841,6 +894,9 @@ Thanks ${personalName} for taking the time to answer all questions! 🙏
 
 I'm now evaluating your responses... This will take just a moment! ⏳`;
 
+  await sock.sendPresenceUpdate('composing', session.groupId);
+  await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate typing
+  await sock.sendPresenceUpdate('paused', session.groupId);
   await sock.sendMessage(session.groupId, { text: evaluationMsg });
 
   try {
