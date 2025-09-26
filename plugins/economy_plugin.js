@@ -1560,17 +1560,15 @@ async function handleWork(context) {
 
 // Enhanced Daily Command with streaks and bonuses
 async function handleDaily(context) {
-  const { reply, senderId } = context;
-  
   try {
+    const { reply, senderId } = context;
     // Check if account is frozen
     const freezeCheck = await checkAccountFrozen(senderId);
     if (freezeCheck.isFrozen) {
       await reply(freezeCheck.message);
       return;
     }
-  
-  try {
+
     const currentDate = getCurrentDate();
     const userData = await getUserData(senderId);
     
@@ -1631,7 +1629,7 @@ async function handleDaily(context) {
     
     await reply(rewardText);
   } catch (error) {
-    await reply('❌ *Error claiming daily reward. Please try again.*');
+    await context.reply('❌ *Error claiming daily reward. Please try again.*');
     console.error('Daily error:', error);
   }
 }
@@ -2458,17 +2456,15 @@ async function handleWithdraw(context, args) {
 
 // Enhanced handleRob with protection items and wanted level
 async function handleRob(context, args) {
-  const { reply, senderId, sock, m, from } = context;
-  
   try {
+    const { reply, senderId, sock, m, from } = context;
     // Check if robber's account is frozen
     const freezeCheck = await checkAccountFrozen(senderId);
     if (freezeCheck.isFrozen) {
       await reply(freezeCheck.message);
       return;
     }
-  
-  try {
+
     // **MODIFIED LOGIC TO FIND TARGET**
     const targetUser = getTargetUser(m, args.join(' '));
 
@@ -2574,7 +2570,7 @@ async function handleRob(context, args) {
       }, { quoted: m });
     }
   } catch (error) {
-    await reply('❌ *Error processing robbery. Please try again.*');
+    await context.reply('❌ *Error processing robbery. Please try again.*');
     console.error('Rob error:', error);
   }
 }
