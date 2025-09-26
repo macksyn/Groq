@@ -47,7 +47,7 @@ export const info = {
 
     // Admin
     { name: 'freeze', description: 'Freeze a user\'s account (Admin only)', aliases: [] },
-    { name: 'unfreeze', description: 'Unfreeze a user\'s account (Admin only)', aliases: [] }
+    { name: 'unfreeze', description: 'Unfreeze a user\'s account (Admin only)', aliases: [] },
 
     // Freeze and Unfreeze
     { name: 'freeze', description: 'Freeze a user\'s account (Admin only)', aliases: [] },
