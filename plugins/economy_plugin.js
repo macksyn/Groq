@@ -226,18 +226,6 @@ async function initUser(userId) {
       // Backward compatibility - add missing fields (UNCHANGED LOGIC)
       const updates = {};
       let needsUpdate = false;
-
-      // FIX: Check for and correct NaN balances
-      if (isNaN(existingUser.balance)) {
-        updates.balance = 0;
-        needsUpdate = true;
-        console.warn(`Corrected NaN balance for user ${userId}`);
-      }
-      if (isNaN(existingUser.bank)) {
-        updates.bank = 0;
-        needsUpdate = true;
-        console.warn(`Corrected NaN bank balance for user ${userId}`);
-      }
       
       const requiredFields = {
         activeEffects: {},
@@ -611,13 +599,12 @@ async function updateUserData(userId, data) {
 // ✅ REFACTORED: Money functions now use getCollection for direct, safe access.
 // We keep the custom logic for effects, but replace the DB interaction.
 async function addMoney(userId, amount, reason = 'Unknown', applyEffects = true) {
-  // FIX: Failsafe to prevent non-finite numbers from being added
-  if (!Number.isFinite(amount)) {
-    console.error(`Attempted to add invalid amount: ${amount} for user ${userId}`);
-    throw new Error('Invalid amount provided to addMoney');
-  }
   try {
     const user = await getUserData(userId);
+    if (user.frozen) {
+      console.warn(`Attempted transaction on frozen account: ${userId}. Operation blocked.`);
+      return user.balance;
+    }
     let finalAmount = amount;
     
     // Apply active effects if enabled (UNCHANGED LOGIC)
@@ -665,13 +652,12 @@ async function addMoney(userId, amount, reason = 'Unknown', applyEffects = true)
 }
 
 async function removeMoney(userId, amount, reason = 'Unknown') {
-  // FIX: Failsafe to prevent non-finite numbers from being removed
-  if (!Number.isFinite(amount)) {
-    console.error(`Attempted to remove invalid amount: ${amount} for user ${userId}`);
-    throw new Error('Invalid amount provided to removeMoney');
-  }
   try {
     const user = await getUserData(userId);
+    if (user.frozen) {
+      console.warn(`Attempted transaction on frozen account: ${userId}. Operation blocked.`);
+      return false;
+    }
     if (user.balance >= amount) {
       const newBalance = user.balance - amount;
       
@@ -1212,12 +1198,6 @@ async function handleStocks(context, args) {
         
         const buySymbol = args[1].toUpperCase();
         const buyAmount = parseInt(args[2]);
-
-        // FIX: Add robust input validation
-        if (isNaN(buyAmount) || buyAmount <= 0) {
-          await reply('⚠️ *Please provide a valid, positive number for the amount.*');
-          return;
-        }
         
         if (!stocks[buySymbol]) {
           await reply('❌ *Invalid stock symbol*');
@@ -1251,12 +1231,6 @@ async function handleStocks(context, args) {
         
         const sellSymbol = args[1].toUpperCase();
         const sellAmount = parseInt(args[2]);
-
-        // FIX: Add robust input validation
-        if (isNaN(sellAmount) || sellAmount <= 0) {
-            await reply('⚠️ *Please provide a valid, positive number for the amount.*');
-            return;
-        }
         
         if (!stocks[sellSymbol]) {
           await reply('❌ *Invalid stock symbol*');
@@ -2454,12 +2428,6 @@ async function handleCrypto(context, args) {
         
         const buySymbol = args[1].toUpperCase();
         const buyAmount = parseFloat(args[2]);
-
-        // FIX: Add robust input validation
-        if (isNaN(buyAmount) || buyAmount <= 0) {
-          await reply('⚠️ *Please provide a valid, positive number for the amount.*');
-          return;
-        }
         
         if (!cryptoData[buySymbol]) {
           await reply('❌ *Invalid cryptocurrency symbol*');
@@ -2493,12 +2461,6 @@ async function handleCrypto(context, args) {
         
         const sellSymbol = args[1].toUpperCase();
         const sellAmount = parseFloat(args[2]);
-
-        // FIX: Add robust input validation
-        if (isNaN(sellAmount) || sellAmount <= 0) {
-          await reply('⚠️ *Please provide a valid, positive number for the amount.*');
-          return;
-        }
         
         if (!cryptoData[sellSymbol]) {
           await reply('❌ *Invalid cryptocurrency symbol*');
