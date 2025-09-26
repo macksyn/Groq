@@ -48,6 +48,10 @@ export const info = {
     // Admin
     { name: 'freeze', description: 'Freeze a user\'s account (Admin only)', aliases: [] },
     { name: 'unfreeze', description: 'Unfreeze a user\'s account (Admin only)', aliases: [] }
+
+    // Freeze and Unfreeze
+    { name: 'freeze', description: 'Freeze a user\'s account (Admin only)', aliases: [] },
+    { name: 'unfreeze', description: 'Unfreeze a user\'s account (Admin only)', aliases: [] }
   ]
 };
 
@@ -182,7 +186,7 @@ async function initUser(userId) {
         // Basic Economy
         balance: ecoSettings.startingBalance,
         bank: ecoSettings.startingBankBalance,
-        frozen: false,
+        frozen: false, // ✅ ENHANCED: Explicitly set to false for new users
         
         // Inventory & Items
         inventory: [],
@@ -228,11 +232,12 @@ async function initUser(userId) {
       await checkAchievements(userId, 'registration');
       return newUser;
     } else {
-      // Backward compatibility - add missing fields (UNCHANGED LOGIC)
+      // ✅ ENHANCED: Ensure ALL existing users have the frozen field
       const updates = {};
       let needsUpdate = false;
       
       const requiredFields = {
+        frozen: false, // ✅ Add frozen field to required fields
         activeEffects: {},
         customTitle: null,
         stats: {
@@ -250,8 +255,7 @@ async function initUser(userId) {
           stocks: {},
           crypto: {},
           businesses: []
-        },
-        frozen: false
+        }
       };
       
       for (const [field, defaultValue] of Object.entries(requiredFields)) {
@@ -262,6 +266,7 @@ async function initUser(userId) {
       }
       
       if (needsUpdate) {
+        updates.updatedAt = new Date();
         await usersCollection.updateOne(
           { userId },
           { $set: updates }
@@ -603,14 +608,16 @@ async function updateUserData(userId, data) {
 }
 
 // ✅ REFACTORED: Money functions now use getCollection for direct, safe access.
-// We keep the custom logic for effects, but replace the DB interaction.
 async function addMoney(userId, amount, reason = 'Unknown', applyEffects = true) {
   try {
-    const user = await getUserData(userId);
-    if (user.frozen) {
-      console.warn(`Attempted transaction on frozen account: ${userId}. Operation blocked.`);
-      return user.balance;
+    // ✅ ENHANCED: Check if account is frozen first
+    const freezeCheck = await checkAccountFrozen(userId);
+    if (freezeCheck.isFrozen) {
+      console.warn(`Blocked transaction (add money) on frozen account: ${userId}. Reason: ${reason}`);
+      return { success: false, message: freezeCheck.message, balance: null };
     }
+
+    const user = await getUserData(userId);
     let finalAmount = amount;
     
     // Apply active effects if enabled (UNCHANGED LOGIC)
@@ -632,7 +639,8 @@ async function addMoney(userId, amount, reason = 'Unknown', applyEffects = true)
     // REFACTORED DB CALL
     await updateUserData(userId, { 
       balance: newBalance,
-      'stats.totalEarned': (user.stats?.totalEarned || 0) + finalAmount
+      'stats.totalEarned': (user.stats?.totalEarned || 0) + finalAmount,
+      updatedAt: new Date()
     });
     
     // REFACTORED DB CALL
@@ -650,27 +658,31 @@ async function addMoney(userId, amount, reason = 'Unknown', applyEffects = true)
     // Check achievements (UNCHANGED LOGIC)
     await checkAchievements(userId, 'money', { amount: finalAmount, total: user.stats?.totalEarned || 0 + finalAmount });
     
-    return newBalance;
+    return { success: true, balance: newBalance };
   } catch (error) {
     console.error('Error adding money:', error);
-    throw error;
+    return { success: false, message: 'Transaction failed', balance: null };
   }
 }
 
 async function removeMoney(userId, amount, reason = 'Unknown') {
   try {
-    const user = await getUserData(userId);
-    if (user.frozen) {
-      console.warn(`Attempted transaction on frozen account: ${userId}. Operation blocked.`);
-      return false;
+    // ✅ ENHANCED: Check if account is frozen first
+    const freezeCheck = await checkAccountFrozen(userId);
+    if (freezeCheck.isFrozen) {
+      console.warn(`Blocked transaction (remove money) on frozen account: ${userId}. Reason: ${reason}`);
+      return { success: false, message: freezeCheck.message };
     }
+
+    const user = await getUserData(userId);
     if (user.balance >= amount) {
       const newBalance = user.balance - amount;
       
       // REFACTORED DB CALL
       await updateUserData(userId, { 
         balance: newBalance,
-        'stats.totalSpent': (user.stats?.totalSpent || 0) + amount
+        'stats.totalSpent': (user.stats?.totalSpent || 0) + amount,
+        updatedAt: new Date()
       });
       
       // REFACTORED DB CALL
@@ -685,15 +697,14 @@ async function removeMoney(userId, amount, reason = 'Unknown') {
         timestamp: new Date()
       });
       
-      return true;
+      return { success: true };
     }
-    return false;
+    return { success: false, message: 'Insufficient funds' };
   } catch (error) {
     console.error('Error removing money:', error);
-    throw error;
+    return { success: false, message: 'Transaction failed' };
   }
 }
-
 
 // Achievement checking system (UNCHANGED - relies on refactored functions)
 async function checkAchievements(userId, type, data = {}) {
@@ -920,6 +931,23 @@ async function cleanupExpiredEffects(userId) {
   }
 }
 
+// ✅ NEW FUNCTION: Add this after cleanupExpiredEffects function
+async function checkAccountFrozen(userId) {
+  try {
+    const userData = await getUserData(userId);
+    if (userData.frozen) {
+      return {
+        isFrozen: true,
+        message: '🥶 *Your account is frozen and under review.*\n\n❌ *All transactions are blocked until further notice.*\n\n📞 *Contact an administrator for more details.*'
+      };
+    }
+    return { isFrozen: false };
+  } catch (error) {
+    console.error('Error checking freeze status:', error);
+    return { isFrozen: false };
+  }
+}
+
 // Main plugin handler (UNCHANGED for the most part)
 export default async function economyHandler(m, sock, config) {
   try {
@@ -1100,7 +1128,7 @@ async function showEconomyMenu(reply, prefix) {
   }
 }
 
-// Balance Command without vault (UNCHANGED - relies on refactored functions)
+// Balance Command 
 async function handleBalance(context, args) {
   const { reply, senderId, m, sock, from } = context;
   
@@ -1115,9 +1143,18 @@ async function handleBalance(context, args) {
     const userNumber = targetUser.split('@')[0];
     
     let balanceText = `💰 *${isOwnBalance ? 'YOUR BALANCE' : `@${userNumber}'S BALANCE`}*\n\n`;
+    
+    // ✅ Show freeze status prominently
+    if (userData.frozen) {
+      balanceText += `🥶 *ACCOUNT STATUS: FROZEN* ❄️\n`;
+      if (isOwnBalance) {
+        balanceText += `⚠️ *All transactions are blocked*\n`;
+      }
+      balanceText += '\n';
+    }
+    
     balanceText += `💵 *Wallet:* ${ecoSettings.currency}${userData.balance.toLocaleString()}\n`;
     balanceText += `🏦 *Bank:* ${ecoSettings.currency}${userData.bank.toLocaleString()}\n`;
-    
     balanceText += `💎 *Total Wealth:* ${ecoSettings.currency}${totalWealth.toLocaleString()}\n`;
     
     if (isOwnBalance && userData.activeEffects) {
@@ -1458,6 +1495,13 @@ async function handleWork(context) {
   const now = new Date();
   
   try {
+    // Check if account is frozen
+    const freezeCheck = await checkAccountFrozen(senderId);
+    if (freezeCheck.isFrozen) {
+      await reply(freezeCheck.message);
+      return;
+    }
+
     const userData = await getUserData(senderId);
     
     // Check cooldown
@@ -1508,7 +1552,7 @@ async function handleWork(context) {
     
     const updatedData = await getUserData(senderId);
     await reply(`💼 *WORK COMPLETE!* 💼\n\n🔨 *Job:* ${randomJob.name}\n📖 *Event:* ${randomEvent.text}\n💰 *Earned:* ${ecoSettings.currency}${finalEarnings.toLocaleString()}\n💵 *New Balance:* ${ecoSettings.currency}${updatedData.balance.toLocaleString()}\n\n⏱️ *Next work available in ${ecoSettings.workCooldownMinutes} minutes*\n📊 *Total jobs completed:* ${updatedData.stats?.workCount || 1}`);
-  } catch (error) {
+   } catch (error) {
     await reply('❌ *Error processing work. Please try again.*');
     console.error('Work error:', error);
   }
@@ -1517,6 +1561,14 @@ async function handleWork(context) {
 // Enhanced Daily Command with streaks and bonuses
 async function handleDaily(context) {
   const { reply, senderId } = context;
+  
+  try {
+    // Check if account is frozen
+    const freezeCheck = await checkAccountFrozen(senderId);
+    if (freezeCheck.isFrozen) {
+      await reply(freezeCheck.message);
+      return;
+    }
   
   try {
     const currentDate = getCurrentDate();
@@ -1806,13 +1858,48 @@ async function handleLeaderboard(context, args) {
 // ... All remaining functions like handleAdminSettings, handleSubCommand, etc., remain UNCHANGED.
 // They already use the refactored helper functions.
 
-async function setFreezeStatus(userId, freeze) {
+async function setFreezeStatus(userId, freeze, adminId = null) {
   try {
     await initUser(userId);
-    await updateUserData(userId, { frozen: freeze });
+    
+    const updates = {
+      frozen: freeze,
+      updatedAt: new Date()
+    };
+    
+    // Add freeze/unfreeze metadata
+    if (freeze) {
+      updates.freezeInfo = {
+        frozenAt: new Date(),
+        frozenBy: adminId,
+        reason: 'Account frozen by administrator'
+      };
+    } else {
+      updates.unfreezeInfo = {
+        unfrozenAt: new Date(),
+        unfrozenBy: adminId
+      };
+      // Remove freeze info when unfreezing
+      updates.$unset = { freezeInfo: "" };
+    }
+    
+    await updateUserData(userId, updates);
+    
+    // Log the freeze/unfreeze action
+    const transactionsCollection = await getCollection(COLLECTIONS.TRANSACTIONS);
+    await transactionsCollection.insertOne({
+      userId,
+      type: freeze ? 'account_frozen' : 'account_unfrozen',
+      amount: 0,
+      reason: `Account ${freeze ? 'frozen' : 'unfrozen'} by admin`,
+      adminId: adminId,
+      timestamp: new Date()
+    });
+    
+    return { success: true };
   } catch (error) {
     console.error(`Error setting freeze status for ${userId}:`, error);
-    throw new Error('Could not update user freeze status.');
+    return { success: false, message: 'Could not update account status' };
   }
 }
 
@@ -2003,40 +2090,84 @@ async function handleAdminSettings(context, args) {
         await reply(`🔄 *Successfully reset @${resetTarget.split('@')[0]}'s economy data*`);
         break;
 
-      case 'freeze':
-        if (args.length < 2) {
-          await reply('⚠️ *Usage: eco admin freeze @user*');
-          return;
-        }
-        const freezeTarget = getTargetUser(context.m, args[1]);
-        if (!freezeTarget) {
-          await reply('⚠️ *Invalid user*');
-          return;
-        }
-        try {
-          await setFreezeStatus(freezeTarget, true);
-          await reply(`🥶 *Successfully froze @${freezeTarget.split('@')[0]}'s account.*`);
-        } catch (error) {
-          await reply(`❌ *Error freezing account.*`);
-        }
-        break;
+// 7. ENHANCED ADMIN FREEZE/UNFREEZE COMMANDS
+async function handleAdminFreeze(context, args) {
+  const { reply, senderId, sock, from, m } = context;
+  
+  try {
+    if (!isAdmin(senderId) && !isOwner(senderId)) {
+      await reply('🚫 *Only administrators can freeze accounts*');
+      return;
+    }
 
-      case 'unfreeze':
-        if (args.length < 2) {
-          await reply('⚠️ *Usage: eco admin unfreeze @user*');
-          return;
-        }
-        const unfreezeTarget = getTargetUser(context.m, args[1]);
-        if (!unfreezeTarget) {
-          await reply('⚠️ *Invalid user*');
-          return;
-        }
-        try {
-          await setFreezeStatus(unfreezeTarget, false);
-          await reply(`✅ *Successfully unfroze @${unfreezeTarget.split('@')[0]}'s account.*`);
-        } catch (error) {
-          await reply(`❌ *Error unfreezing account.*`);
-        }
+    if (args.length < 1) {
+      await reply('⚠️ *Usage: freeze @user [reason]*');
+      return;
+    }
+    
+    const targetUser = getTargetUser(m, args.join(' '));
+    if (!targetUser) {
+      await reply('⚠️ *Please mention or reply to a user to freeze their account*');
+      return;
+    }
+
+    // Prevent freezing other admins (unless owner)
+    if (isAdmin(targetUser) && !isOwner(senderId)) {
+      await reply('🚫 *You cannot freeze another administrator\'s account*');
+      return;
+    }
+
+    const result = await setFreezeStatus(targetUser, true, senderId);
+    
+    if (result.success) {
+      await sock.sendMessage(from, {
+        text: `🥶 *Account Frozen Successfully*\n\n👤 *User:* @${targetUser.split('@')[0]}\n🔒 *Status:* Account Frozen\n👮 *Frozen by:* @${senderId.split('@')[0]}\n⏰ *Time:* ${new Date().toLocaleString()}\n\n⚠️ *The user's account is now frozen and all transactions are blocked.*`,
+        mentions: [targetUser, senderId]
+      }, { quoted: m });
+    } else {
+      await reply(`❌ *Error freezing account: ${result.message}*`);
+    }
+  } catch (error) {
+    await reply('❌ *Error processing freeze command*');
+    console.error('Freeze error:', error);
+  }
+}
+
+async function handleAdminUnfreeze(context, args) {
+  const { reply, senderId, sock, from, m } = context;
+  
+  try {
+    if (!isAdmin(senderId) && !isOwner(senderId)) {
+      await reply('🚫 *Only administrators can unfreeze accounts*');
+      return;
+    }
+
+    if (args.length < 1) {
+      await reply('⚠️ *Usage: unfreeze @user*');
+      return;
+    }
+    
+    const targetUser = getTargetUser(m, args.join(' '));
+    if (!targetUser) {
+      await reply('⚠️ *Please mention or reply to a user to unfreeze their account*');
+      return;
+    }
+
+    const result = await setFreezeStatus(targetUser, false, senderId);
+    
+    if (result.success) {
+      await sock.sendMessage(from, {
+        text: `✅ *Account Unfrozen Successfully*\n\n👤 *User:* @${targetUser.split('@')[0]}\n🔓 *Status:* Account Active\n👮 *Unfrozen by:* @${senderId.split('@')[0]}\n⏰ *Time:* ${new Date().toLocaleString()}\n\n🎉 *The user can now access all economy features again.*`,
+        mentions: [targetUser, senderId]
+      }, { quoted: m });
+    } else {
+      await reply(`❌ *Error unfreezing account: ${result.message}*`);
+    }
+  } catch (error) {
+    await reply('❌ *Error processing unfreeze command*');
+    console.error('Unfreeze error:', error);
+  }
+}
         break;
         
       case 'event':
@@ -2328,6 +2459,14 @@ async function handleWithdraw(context, args) {
 // Enhanced handleRob with protection items and wanted level
 async function handleRob(context, args) {
   const { reply, senderId, sock, m, from } = context;
+  
+  try {
+    // Check if robber's account is frozen
+    const freezeCheck = await checkAccountFrozen(senderId);
+    if (freezeCheck.isFrozen) {
+      await reply(freezeCheck.message);
+      return;
+    }
   
   try {
     // **MODIFIED LOGIC TO FIND TARGET**
