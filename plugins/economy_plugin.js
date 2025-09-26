@@ -43,7 +43,11 @@ export const info = {
     
     // Events & Admin
     { name: 'events', aliases: [], description: 'View active events' },
-    { name: 'bounty', aliases: [], description: 'Bounty hunting system' }
+    { name: 'bounty', aliases: [], description: 'Bounty hunting system' },
+
+    // Admin
+    { name: 'freeze', description: 'Freeze a user\'s account (Admin only)', aliases: [] },
+    { name: 'unfreeze', description: 'Unfreeze a user\'s account (Admin only)', aliases: [] }
   ]
 };
 
@@ -178,6 +182,7 @@ async function initUser(userId) {
         // Basic Economy
         balance: ecoSettings.startingBalance,
         bank: ecoSettings.startingBankBalance,
+        frozen: false,
         
         // Inventory & Items
         inventory: [],
@@ -245,7 +250,8 @@ async function initUser(userId) {
           stocks: {},
           crypto: {},
           businesses: []
-        }
+        },
+        frozen: false
       };
       
       for (const [field, defaultValue] of Object.entries(requiredFields)) {
@@ -1800,6 +1806,16 @@ async function handleLeaderboard(context, args) {
 // ... All remaining functions like handleAdminSettings, handleSubCommand, etc., remain UNCHANGED.
 // They already use the refactored helper functions.
 
+async function setFreezeStatus(userId, freeze) {
+  try {
+    await initUser(userId);
+    await updateUserData(userId, { frozen: freeze });
+  } catch (error) {
+    console.error(`Error setting freeze status for ${userId}:`, error);
+    throw new Error('Could not update user freeze status.');
+  }
+}
+
 async function handleAdminSettings(context, args) {
   const { reply, senderId } = context;
   
@@ -1837,6 +1853,8 @@ async function handleAdminSettings(context, args) {
       settingsText += `• *${context.config.PREFIX}eco admin give @user [amount]*\n`;
       settingsText += `• *${context.config.PREFIX}eco admin take @user [amount]*\n`;
       settingsText += `• *${context.config.PREFIX}eco admin reset @user*\n`;
+      settingsText += `• *${context.config.PREFIX}eco admin freeze @user*\n`;
+      settingsText += `• *${context.config.PREFIX}eco admin unfreeze @user*\n`;
       settingsText += `• *${context.config.PREFIX}eco admin event [type]*`;
       
       await reply(settingsText);
@@ -1983,6 +2001,42 @@ async function handleAdminSettings(context, args) {
         });
         
         await reply(`🔄 *Successfully reset @${resetTarget.split('@')[0]}'s economy data*`);
+        break;
+
+      case 'freeze':
+        if (args.length < 2) {
+          await reply('⚠️ *Usage: eco admin freeze @user*');
+          return;
+        }
+        const freezeTarget = getTargetUser(context.m, args[1]);
+        if (!freezeTarget) {
+          await reply('⚠️ *Invalid user*');
+          return;
+        }
+        try {
+          await setFreezeStatus(freezeTarget, true);
+          await reply(`🥶 *Successfully froze @${freezeTarget.split('@')[0]}'s account.*`);
+        } catch (error) {
+          await reply(`❌ *Error freezing account.*`);
+        }
+        break;
+
+      case 'unfreeze':
+        if (args.length < 2) {
+          await reply('⚠️ *Usage: eco admin unfreeze @user*');
+          return;
+        }
+        const unfreezeTarget = getTargetUser(context.m, args[1]);
+        if (!unfreezeTarget) {
+          await reply('⚠️ *Invalid user*');
+          return;
+        }
+        try {
+          await setFreezeStatus(unfreezeTarget, false);
+          await reply(`✅ *Successfully unfroze @${unfreezeTarget.split('@')[0]}'s account.*`);
+        } catch (error) {
+          await reply(`❌ *Error unfreezing account.*`);
+        }
         break;
         
       case 'event':
@@ -2157,6 +2211,10 @@ async function handleSend(context, args) {
     const totalCost = amount + fee;
     
     const senderData = await getUserData(senderId);
+    if (senderData.frozen) {
+      await reply('🚫 *Your account is frozen. You cannot send money.*');
+      return;
+    }
     if (senderData.balance < totalCost) {
       await reply(`🚫 *Insufficient balance*\n\n💵 *Your Balance:* ${ecoSettings.currency}${senderData.balance.toLocaleString()}\n💸 *Required:* ${ecoSettings.currency}${totalCost.toLocaleString()} (includes ${ecoSettings.currency}${fee} fee)`);
       return;
@@ -2197,6 +2255,10 @@ async function handleDeposit(context, args) {
     }
     
     const userData = await getUserData(senderId);
+    if (userData.frozen) {
+      await reply('🚫 *Your account is frozen. You cannot deposit money.*');
+      return;
+    }
     if (userData.balance < amount) {
       await reply('🚫 *Insufficient wallet balance*');
       return;
@@ -2236,6 +2298,10 @@ async function handleWithdraw(context, args) {
     }
     
     const userData = await getUserData(senderId);
+    if (userData.frozen) {
+      await reply('🚫 *Your account is frozen. You cannot withdraw money.*');
+      return;
+    }
     if (userData.bank < amount) {
       await reply('🚫 *Insufficient bank balance*');
       return;
