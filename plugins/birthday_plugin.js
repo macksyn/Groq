@@ -748,44 +748,56 @@ const birthdayPlugin = new BirthdayPlugin();
  */
 export default async function birthdayHandler(m, sock, config, bot) {
   try {
+    // Initialize plugin if not done
+    if (!birthdayPlugin.initialized) {
+      await birthdayPlugin.initializePlugin();
+    }
+    
     // Skip if not a text message
     if (!m.message?.conversation && !m.message?.extendedTextMessage?.text) return;
     
     const text = (m.message?.conversation || m.message?.extendedTextMessage?.text || '').trim();
-    const isCommand = text.startsWith(config.prefix);
+    const isCommand = text.startsWith(config.prefix || '.');
     
     if (!isCommand) return;
     
-    const args = text.slice(config.prefix.length).split(' ');
+    const args = text.slice((config.prefix || '.').length).split(' ').filter(arg => arg.length > 0);
     const command = args[0]?.toLowerCase();
     
     // Check if it's a birthday command
     if (!['birthday', 'bday', 'birthdays', 'mybirthday', 'mybday'].includes(command)) return;
     
+    console.log(chalk.blue(`🎂 Processing birthday command: ${command} from ${m.key.participant || m.key.remoteJid}`));
+    
     const userId = m.key.participant || m.key.remoteJid;
     
     // Handle mybirthday commands
     if (['mybirthday', 'mybday'].includes(command)) {
-      return await handleMyBirthdayCommand(m, sock, args, userId);
+      console.log(chalk.cyan(`🎂 Executing mybirthday command for ${userId}`));
+      return await handleMyBirthdayCommand(m, sock, args, userId, config);
     }
     
     // Handle main birthday commands
     const subCommand = args[1]?.toLowerCase();
+    console.log(chalk.cyan(`🎂 Birthday subcommand: ${subCommand || 'help'}`));
     
     // Admin commands
     if (['settings', 'groups', 'test', 'reload'].includes(subCommand)) {
       if (!birthdayPlugin.isAdmin(userId)) {
+        console.log(chalk.yellow(`❌ Admin command denied for ${userId}`));
         return await sock.sendMessage(m.key.remoteJid, { 
           text: '❌ This command requires admin privileges!' 
         });
       }
       
+      console.log(chalk.green(`👑 Executing admin command: ${subCommand}`));
       return await birthdayPlugin.handleAdminCommands(m, sock, args);
     }
     
     // Public commands
     switch (subCommand) {
       case 'today':
+        console.log(chalk.cyan('🎂 Fetching today\'s birthdays...'));
         const todaysBirthdays = await birthdayPlugin.getTodaysBirthdays();
         return await sock.sendMessage(m.key.remoteJid, { 
           text: birthdayPlugin.formatBirthdayList(todaysBirthdays, '🎂 **Today\'s Birthdays**') 
@@ -799,12 +811,14 @@ export default async function birthdayHandler(m, sock, config, bot) {
           });
         }
         
+        console.log(chalk.cyan(`🎂 Fetching upcoming birthdays for ${days} days...`));
         const upcoming = await birthdayPlugin.getUpcomingBirthdays(days);
         return await sock.sendMessage(m.key.remoteJid, { 
           text: birthdayPlugin.formatBirthdayList(upcoming, `🗓️ **Upcoming Birthdays (Next ${days} days)**`) 
         });
       
       case 'thismonth':
+        console.log(chalk.cyan('🎂 Fetching this month\'s birthdays...'));
         const thisMonth = await birthdayPlugin.getThisMonthsBirthdays();
         const monthName = moment.tz(TIMEZONE).format('MMMM YYYY');
         return await sock.sendMessage(m.key.remoteJid, { 
@@ -812,6 +826,7 @@ export default async function birthdayHandler(m, sock, config, bot) {
         });
       
       case 'all':
+        console.log(chalk.cyan('🎂 Fetching all birthdays...'));
         const allBirthdays = await birthdayPlugin.getAllBirthdays();
         const sortedBirthdays = allBirthdays.map(b => ({
           ...b,
@@ -826,9 +841,9 @@ export default async function birthdayHandler(m, sock, config, bot) {
           return await sock.sendMessage(m.key.remoteJid, { 
             text: `🎂 **All Birthdays (${sortedBirthdays.length} total)**\n\n` +
               `Too many birthdays to display. Use:\n` +
-              `• ${config.prefix}birthday today\n` +
-              `• ${config.prefix}birthday upcoming [days]\n` +
-              `• ${config.prefix}birthday thismonth` 
+              `• ${config.prefix || '.'}birthday today\n` +
+              `• ${config.prefix || '.'}birthday upcoming [days]\n` +
+              `• ${config.prefix || '.'}birthday thismonth` 
           });
         }
         
@@ -838,22 +853,36 @@ export default async function birthdayHandler(m, sock, config, bot) {
       
       case 'help':
       case undefined:
+      case null:
+        console.log(chalk.cyan('🎂 Showing birthday help...'));
         return await sock.sendMessage(m.key.remoteJid, { 
-          text: getBirthdayHelpText(config.prefix, birthdayPlugin.isAdmin(userId)) 
+          text: getBirthdayHelpText(config.prefix || '.', birthdayPlugin.isAdmin(userId)) 
         });
       
       default:
         return await sock.sendMessage(m.key.remoteJid, {
-          text: `❌ Unknown command: ${subCommand}\n\nUse ${config.prefix}birthday help for available commands`
+          text: `❌ Unknown command: ${subCommand}\n\nUse ${config.prefix || '.'}birthday help for available commands`
         });
     }
     
   } catch (error) {
     console.error(chalk.red('❌ Birthday plugin error:'), error.message);
+    console.error(chalk.red('❌ Stack trace:'), error.stack);
+    
+    // More detailed error information
+    console.error(chalk.red('❌ Error details:'), {
+      command: args?.[0],
+      subCommand: args?.[1],
+      userId: userId,
+      messageType: typeof m.message,
+      hasConversation: !!m.message?.conversation,
+      hasExtendedText: !!m.message?.extendedTextMessage?.text
+    });
     
     try {
       await sock.sendMessage(m.key.remoteJid, { 
-        text: '❌ An error occurred while processing your birthday command. Please try again later.' 
+        text: '❌ An error occurred while processing your birthday command. Please try again later.\n\n' +
+          `Error: ${error.message}` 
       });
     } catch (sendError) {
       console.error(chalk.red('❌ Failed to send error message:'), sendError.message);
@@ -864,12 +893,13 @@ export default async function birthdayHandler(m, sock, config, bot) {
 /**
  * Handle mybirthday commands
  */
-async function handleMyBirthdayCommand(m, sock, args, userId) {
+async function handleMyBirthdayCommand(m, sock, args, userId, config) {
   try {
     const action = args[1]?.toLowerCase();
     
     if (!action) {
       // Show user's birthday info
+      console.log(chalk.cyan(`🎂 Getting birthday data for ${userId}`));
       const birthdayData = await birthdayPlugin.getBirthdayData(userId);
       
       if (!birthdayData?.birthday) {
@@ -898,7 +928,7 @@ async function handleMyBirthdayCommand(m, sock, args, userId) {
     
     // Future: Could add manual birthday setting for admins
     return await sock.sendMessage(m.key.remoteJid, {
-      text: `❌ Unknown mybirthday command: ${action}\n\nUse ${config.prefix}mybirthday to view your birthday info.`
+      text: `❌ Unknown mybirthday command: ${action}\n\nUse ${config.prefix || '.'}mybirthday to view your birthday info.`
     });
     
   } catch (error) {
