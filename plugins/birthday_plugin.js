@@ -1320,7 +1320,7 @@ async function testTodayBirthdays(reply, sock) {
   await reply('🧪 *Testing today\'s birthdays...*');
   
   try {
-    await sendBirthdayWishes(sock);
+    await scheduledBirthdayWishes(sock);
     await reply('✅ Birthday wish test completed. Check logs for details.');
   } catch (error) {
     console.error('Test birthday wishes error:', error);
