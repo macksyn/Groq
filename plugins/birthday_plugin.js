@@ -1,1283 +1,1474 @@
-// plugins/birthday.js - Complete Birthday Management Plugin
+// plugins/birthday.js - Birthday plugin with scheduled tasks integration
 import moment from 'moment-timezone';
-import chalk from 'chalk';
-import { PluginHelpers } from '../lib/pluginIntegration.js';
+import { getCollection } from '../lib/pluginIntegration.js';
 
-// Plugin Configuration
-const TIMEZONE = 'Africa/Lagos';
-const BIRTHDAY_COLLECTION = 'birthday_data';
-const SETTINGS_COLLECTION = 'birthday_settings';
-const ADMIN_ENV_VARS = ['OWNER', 'MODS', 'PREMIUM'].map(v => process.env[v]?.split(',') || []).flat();
-
-// Default Settings
-const DEFAULT_SETTINGS = {
-  reminders: true,
-  wishes: true,
-  reminderTime: '09:00', // 9 AM
-  wishTime: '00:01', // Just after midnight
-  reminderDays: 1, // 1 day before
-  groupReminders: true,
-  privateReminders: true,
-  admins: ADMIN_ENV_VARS,
-  enabledGroups: [],
-  lastCleanup: null,
-  createdAt: new Date(),
-  updatedAt: new Date()
-};
-
-/**
- * Birthday Plugin Class
- */
-class BirthdayPlugin {
-  constructor() {
-    this.settings = null;
-    this.initialized = false;
-    this.adminNumbers = new Set();
-    
-    // Initialize on first load
-    this.initializePlugin();
-  }
-
-  /**
-   * Initialize plugin settings and admin numbers
-   */
-  async initializePlugin() {
-    try {
-      await this.loadSettings();
-      this.updateAdminNumbers();
-      this.initialized = true;
-      console.log(chalk.green('🎂 Birthday Plugin initialized successfully'));
-    } catch (error) {
-      console.error(chalk.red('❌ Birthday Plugin initialization failed:'), error.message);
-    }
-  }
-
-  /**
-   * Load settings from database
-   */
-  async loadSettings() {
-    try {
-      const collection = await PluginHelpers.getCollection(SETTINGS_COLLECTION);
-      let settings = await collection.findOne({ type: 'global' });
-      
-      if (!settings) {
-        // Create default settings
-        settings = { type: 'global', ...DEFAULT_SETTINGS };
-        await collection.insertOne(settings);
-        console.log(chalk.yellow('📝 Created default birthday settings'));
-      }
-      
-      this.settings = settings;
-      return settings;
-    } catch (error) {
-      console.error(chalk.red('❌ Error loading birthday settings:'), error.message);
-      this.settings = { type: 'global', ...DEFAULT_SETTINGS };
-      return this.settings;
-    }
-  }
-
-  /**
-   * Save settings to database
-   */
-  async saveSettings() {
-    try {
-      const collection = await PluginHelpers.getCollection(SETTINGS_COLLECTION);
-      this.settings.updatedAt = new Date();
-      
-      await collection.updateOne(
-        { type: 'global' },
-        { $set: this.settings },
-        { upsert: true }
-      );
-      
-      this.updateAdminNumbers();
-      console.log(chalk.green('💾 Birthday settings saved'));
-      return true;
-    } catch (error) {
-      console.error(chalk.red('❌ Error saving birthday settings:'), error.message);
-      return false;
-    }
-  }
-
-  /**
-   * Update admin numbers set
-   */
-  updateAdminNumbers() {
-    this.adminNumbers.clear();
-    if (this.settings?.admins) {
-      this.settings.admins.forEach(admin => {
-        if (admin && typeof admin === 'string') {
-          // Clean and normalize phone numbers
-          const cleaned = admin.replace(/[^\d]/g, '');
-          this.adminNumbers.add(cleaned);
-          this.adminNumbers.add(`${cleaned}@s.whatsapp.net`);
-        }
-      });
-    }
-  }
-
-  /**
-   * Check if user is admin
-   */
-  isAdmin(userId) {
-    if (!userId) return false;
-    
-    const cleaned = userId.replace(/[^\d]/g, '');
-    return this.adminNumbers.has(userId) || this.adminNumbers.has(cleaned);
-  }
-
-  /**
-   * Get or create birthday data for user
-   */
-  async getBirthdayData(userId) {
-    try {
-      const collection = await PluginHelpers.getCollection(BIRTHDAY_COLLECTION);
-      let data = await collection.findOne({ userId });
-      
-      if (!data) {
-        // Check attendance data for DOB
-        const user = await PluginHelpers.getUserData(userId);
-        let birthday = null;
-        
-        if (user?.birthdayData?.dob) {
-          birthday = moment(user.birthdayData.dob).format('YYYY-MM-DD');
-        }
-        
-        data = {
-          userId,
-          birthday,
-          remindersSent: [],
-          wishSent: null,
-          createdAt: new Date(),
-          updatedAt: new Date()
-        };
-        
-        await collection.insertOne(data);
-      }
-      
-      return data;
-    } catch (error) {
-      console.error(chalk.red(`❌ Error getting birthday data for ${userId}:`), error.message);
-      return null;
-    }
-  }
-
-  /**
-   * Update birthday data
-   */
-  async updateBirthdayData(userId, updates) {
-    try {
-      const collection = await PluginHelpers.getCollection(BIRTHDAY_COLLECTION);
-      
-      await collection.updateOne(
-        { userId },
-        { 
-          $set: { 
-            ...updates, 
-            updatedAt: new Date() 
-          } 
-        },
-        { upsert: true }
-      );
-      
-      return true;
-    } catch (error) {
-      console.error(chalk.red(`❌ Error updating birthday data for ${userId}:`), error.message);
-      return false;
-    }
-  }
-
-  /**
-   * Get all birthdays
-   */
-  async getAllBirthdays() {
-    try {
-      const collection = await PluginHelpers.getCollection(BIRTHDAY_COLLECTION);
-      const birthdays = await collection.find({ 
-        birthday: { $ne: null, $exists: true } 
-      }).toArray();
-      
-      return birthdays.filter(b => b.birthday && b.birthday !== '');
-    } catch (error) {
-      console.error(chalk.red('❌ Error getting all birthdays:'), error.message);
-      return [];
-    }
-  }
-
-  /**
-   * Get today's birthdays
-   */
-  async getTodaysBirthdays() {
-    try {
-      const today = moment.tz(TIMEZONE).format('MM-DD');
-      const birthdays = await this.getAllBirthdays();
-      
-      return birthdays.filter(b => {
-        const bday = moment(b.birthday).format('MM-DD');
-        return bday === today;
-      });
-    } catch (error) {
-      console.error(chalk.red('❌ Error getting today\'s birthdays:'), error.message);
-      return [];
-    }
-  }
-
-  /**
-   * Get upcoming birthdays
-   */
-  async getUpcomingBirthdays(days = 7) {
-    try {
-      const birthdays = await this.getAllBirthdays();
-      const upcoming = [];
-      
-      for (let i = 1; i <= days; i++) {
-        const date = moment.tz(TIMEZONE).add(i, 'days').format('MM-DD');
-        
-        birthdays.forEach(b => {
-          const bday = moment(b.birthday).format('MM-DD');
-          if (bday === date) {
-            const age = moment.tz(TIMEZONE).add(i, 'days').year() - moment(b.birthday).year();
-            upcoming.push({
-              ...b,
-              daysUntil: i,
-              age: age,
-              date: moment.tz(TIMEZONE).add(i, 'days').format('MMMM Do')
-            });
-          }
-        });
-      }
-      
-      return upcoming.sort((a, b) => a.daysUntil - b.daysUntil);
-    } catch (error) {
-      console.error(chalk.red('❌ Error getting upcoming birthdays:'), error.message);
-      return [];
-    }
-  }
-
-  /**
-   * Get this month's birthdays
-   */
-  async getThisMonthsBirthdays() {
-    try {
-      const currentMonth = moment.tz(TIMEZONE).format('MM');
-      const birthdays = await this.getAllBirthdays();
-      
-      return birthdays.filter(b => {
-        const month = moment(b.birthday).format('MM');
-        return month === currentMonth;
-      }).map(b => ({
-        ...b,
-        age: moment.tz(TIMEZONE).year() - moment(b.birthday).year(),
-        date: moment(b.birthday).format('MMMM Do')
-      })).sort((a, b) => {
-        const dayA = moment(a.birthday).date();
-        const dayB = moment(b.birthday).date();
-        return dayA - dayB;
-      });
-    } catch (error) {
-      console.error(chalk.red('❌ Error getting this month\'s birthdays:'), error.message);
-      return [];
-    }
-  }
-
-  /**
-   * Send birthday wishes
-   */
-  async sendBirthdayWishes(sock, bot) {
-    if (!this.settings?.wishes) return;
-    
-    try {
-      console.log(chalk.blue('🎂 Checking for birthday wishes to send...'));
-      
-      const todaysBirthdays = await this.getTodaysBirthdays();
-      const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
-      
-      for (const birthday of todaysBirthdays) {
-        // Skip if wish already sent today
-        if (birthday.wishSent === today) continue;
-        
-        const age = moment.tz(TIMEZONE).year() - moment(birthday.birthday).year();
-        const name = birthday.userId.split('@')[0];
-        
-        const wishes = [
-          `🎉🎂 Happy Birthday ${name}! 🎂🎉\n\nWishing you a fantastic ${age}th birthday filled with joy, laughter, and all your heart desires! 🎈✨`,
-          `🎊 Happy ${age}th Birthday, ${name}! 🎊\n\nMay this special day bring you happiness and may the year ahead be filled with blessings! 🎁🌟`,
-          `🎂✨ It's your special day, ${name}! ✨🎂\n\nHappy ${age}th Birthday! Hope your day is as amazing as you are! 🎉💖`,
-          `🎈🎉 Happy Birthday ${name}! 🎉🎈\n\nCelebrating ${age} wonderful years of you! May your birthday be the start of a year filled with good luck, good health and much happiness! 🍰🌺`
-        ];
-        
-        const randomWish = wishes[Math.floor(Math.random() * wishes.length)];
-        
-        try {
-          // Send private wish
-          if (this.settings.privateReminders) {
-            await sock.sendMessage(birthday.userId, { text: randomWish });
-            console.log(chalk.green(`🎂 Sent birthday wish to ${name} (private)`));
-          }
-          
-          // Send to enabled groups
-          if (this.settings.groupReminders && this.settings.enabledGroups?.length > 0) {
-            for (const groupId of this.settings.enabledGroups) {
-              try {
-                await sock.sendMessage(groupId, { 
-                  text: `${randomWish}\n\n_Birthday wishes from ${bot.name || 'Bot'}_` 
-                });
-                console.log(chalk.green(`🎂 Sent birthday wish for ${name} to group`));
-              } catch (groupError) {
-                console.warn(chalk.yellow(`⚠️ Failed to send birthday wish to group ${groupId}:`, groupError.message));
-              }
-            }
-          }
-          
-          // Mark as sent
-          await this.updateBirthdayData(birthday.userId, { wishSent: today });
-          
-        } catch (error) {
-          console.error(chalk.red(`❌ Failed to send birthday wish to ${name}:`), error.message);
-        }
-      }
-      
-      console.log(chalk.green(`✅ Processed ${todaysBirthdays.length} birthday wishes`));
-      
-    } catch (error) {
-      console.error(chalk.red('❌ Error sending birthday wishes:'), error.message);
-    }
-  }
-
-  /**
-   * Send birthday reminders
-   */
-  async sendBirthdayReminders(sock, bot) {
-    if (!this.settings?.reminders) return;
-    
-    try {
-      console.log(chalk.blue('🔔 Checking for birthday reminders to send...'));
-      
-      const reminderDays = this.settings.reminderDays || 1;
-      const upcoming = await this.getUpcomingBirthdays(reminderDays);
-      const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
-      
-      for (const birthday of upcoming) {
-        if (birthday.daysUntil !== reminderDays) continue;
-        
-        // Check if reminder already sent today
-        if (birthday.remindersSent?.includes(today)) continue;
-        
-        const name = birthday.userId.split('@')[0];
-        const reminderText = `🔔 Birthday Reminder! 🔔\n\n🎂 ${name}'s birthday is tomorrow (${birthday.date})!\n\nDon't forget to wish them a happy ${birthday.age}th birthday! 🎉`;
-        
-        try {
-          // Send private reminder
-          if (this.settings.privateReminders) {
-            await sock.sendMessage(birthday.userId, { text: reminderText });
-            console.log(chalk.green(`🔔 Sent birthday reminder for ${name} (private)`));
-          }
-          
-          // Send to enabled groups
-          if (this.settings.groupReminders && this.settings.enabledGroups?.length > 0) {
-            for (const groupId of this.settings.enabledGroups) {
-              try {
-                await sock.sendMessage(groupId, { 
-                  text: `${reminderText}\n\n_Reminder from ${bot.name || 'Bot'}_` 
-                });
-                console.log(chalk.green(`🔔 Sent birthday reminder for ${name} to group`));
-              } catch (groupError) {
-                console.warn(chalk.yellow(`⚠️ Failed to send birthday reminder to group ${groupId}:`, groupError.message));
-              }
-            }
-          }
-          
-          // Mark reminder as sent
-          const updatedReminders = birthday.remindersSent || [];
-          updatedReminders.push(today);
-          await this.updateBirthdayData(birthday.userId, { remindersSent: updatedReminders });
-          
-        } catch (error) {
-          console.error(chalk.red(`❌ Failed to send birthday reminder for ${name}:`), error.message);
-        }
-      }
-      
-      console.log(chalk.green(`✅ Processed ${upcoming.length} birthday reminders`));
-      
-    } catch (error) {
-      console.error(chalk.red('❌ Error sending birthday reminders:'), error.message);
-    }
-  }
-
-  /**
-   * Cleanup old birthday records
-   */
-  async cleanupOldRecords() {
-    try {
-      console.log(chalk.blue('🧹 Starting birthday records cleanup...'));
-      
-      const collection = await PluginHelpers.getCollection(BIRTHDAY_COLLECTION);
-      const sixMonthsAgo = moment.tz(TIMEZONE).subtract(6, 'months').toDate();
-      
-      // Remove old reminder records
-      const result = await collection.updateMany(
-        {},
-        { 
-          $pull: { 
-            remindersSent: { 
-              $lt: moment.tz(TIMEZONE).subtract(1, 'month').format('YYYY-MM-DD') 
-            } 
-          } 
-        }
-      );
-      
-      // Clear old wish records (older than 1 year)
-      const clearWishResult = await collection.updateMany(
-        { 
-          wishSent: { 
-            $lt: moment.tz(TIMEZONE).subtract(1, 'year').format('YYYY-MM-DD') 
-          } 
-        },
-        { $unset: { wishSent: "" } }
-      );
-      
-      await this.updateSettings({ lastCleanup: new Date() });
-      
-      console.log(chalk.green(`✅ Cleanup completed. Modified ${result.modifiedCount} records, cleared ${clearWishResult.modifiedCount} old wishes`));
-      
-      return { 
-        remindersCleared: result.modifiedCount, 
-        wishesCleared: clearWishResult.modifiedCount 
-      };
-      
-    } catch (error) {
-      console.error(chalk.red('❌ Error during birthday cleanup:'), error.message);
-      return { remindersCleared: 0, wishesCleared: 0 };
-    }
-  }
-
-  /**
-   * Update settings
-   */
-  async updateSettings(updates) {
-    Object.assign(this.settings, updates);
-    return await this.saveSettings();
-  }
-
-  /**
-   * Format birthday list
-   */
-  formatBirthdayList(birthdays, title) {
-    if (birthdays.length === 0) {
-      return `${title}\n\n❌ No birthdays found.`;
-    }
-    
-    let text = `${title}\n\n`;
-    
-    birthdays.forEach((b, index) => {
-      const name = b.userId.split('@')[0];
-      const date = moment(b.birthday).format('MMMM Do, YYYY');
-      const age = b.age || (moment.tz(TIMEZONE).year() - moment(b.birthday).year());
-      
-      if (b.daysUntil !== undefined) {
-        text += `${index + 1}. 🎂 ${name}\n   📅 ${b.date} (in ${b.daysUntil} day${b.daysUntil !== 1 ? 's' : ''})\n   🎈 Turning ${b.age}\n\n`;
-      } else {
-        text += `${index + 1}. 🎂 ${name}\n   📅 ${date}\n   🎈 Age: ${age}\n\n`;
-      }
-    });
-    
-    return text.trim();
-  }
-
-  /**
-   * Handle admin commands
-   */
-  async handleAdminCommands(m, sock, args) {
-    const command = args[1]?.toLowerCase();
-    
-    switch (command) {
-      case 'settings':
-        return await this.handleSettingsCommand(m, sock, args);
-      
-      case 'groups':
-        return await this.handleGroupsCommand(m, sock, args);
-      
-      case 'test':
-        return await this.handleTestCommand(m, sock, args);
-      
-      case 'reload':
-        await this.loadSettings();
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: '✅ Birthday settings reloaded successfully!' 
-        });
-      
-      default:
-        return await sock.sendMessage(m.key.remoteJid, {
-          text: `❌ Unknown admin command: ${command}\n\nAvailable: settings, groups, test, reload`
-        });
-    }
-  }
-
-  /**
-   * Handle settings commands
-   */
-  async handleSettingsCommand(m, sock, args) {
-    const setting = args[2]?.toLowerCase();
-    const value = args[3];
-    
-    if (!setting) {
-      const settings = `🎂 **Birthday Settings**\n\n` +
-        `🔔 Reminders: ${this.settings.reminders ? '✅' : '❌'}\n` +
-        `🎉 Wishes: ${this.settings.wishes ? '✅' : '❌'}\n` +
-        `⏰ Reminder Time: ${this.settings.reminderTime}\n` +
-        `🎂 Wish Time: ${this.settings.wishTime}\n` +
-        `📅 Reminder Days: ${this.settings.reminderDays}\n` +
-        `👥 Group Reminders: ${this.settings.groupReminders ? '✅' : '❌'}\n` +
-        `💬 Private Reminders: ${this.settings.privateReminders ? '✅' : '❌'}\n` +
-        `🏷️ Enabled Groups: ${this.settings.enabledGroups?.length || 0}\n` +
-        `👑 Admins: ${this.settings.admins?.length || 0}\n\n` +
-        `Use: birthday settings <setting> <value>`;
-      
-      return await sock.sendMessage(m.key.remoteJid, { text: settings });
-    }
-    
-    switch (setting) {
-      case 'reminders':
-        this.settings.reminders = value === 'true' || value === 'on';
-        break;
-      
-      case 'wishes':
-        this.settings.wishes = value === 'true' || value === 'on';
-        break;
-      
-      case 'remindertime':
-        if (!/^\d{2}:\d{2}$/.test(value)) {
-          return await sock.sendMessage(m.key.remoteJid, { 
-            text: '❌ Invalid time format. Use HH:MM (e.g., 09:00)' 
-          });
-        }
-        this.settings.reminderTime = value;
-        break;
-      
-      case 'wishtime':
-        if (!/^\d{2}:\d{2}$/.test(value)) {
-          return await sock.sendMessage(m.key.remoteJid, { 
-            text: '❌ Invalid time format. Use HH:MM (e.g., 00:01)' 
-          });
-        }
-        this.settings.wishTime = value;
-        break;
-      
-      case 'reminderdays':
-        const days = parseInt(value);
-        if (isNaN(days) || days < 0 || days > 30) {
-          return await sock.sendMessage(m.key.remoteJid, { 
-            text: '❌ Invalid days. Use 0-30' 
-          });
-        }
-        this.settings.reminderDays = days;
-        break;
-      
-      case 'groupreminders':
-        this.settings.groupReminders = value === 'true' || value === 'on';
-        break;
-      
-      case 'privatereminders':
-        this.settings.privateReminders = value === 'true' || value === 'on';
-        break;
-      
-      case 'addadmin':
-        if (!value) {
-          return await sock.sendMessage(m.key.remoteJid, { 
-            text: '❌ Provide admin number' 
-          });
-        }
-        
-        if (!this.settings.admins) this.settings.admins = [];
-        const cleanNumber = value.replace(/[^\d]/g, '');
-        
-        if (!this.settings.admins.includes(cleanNumber)) {
-          this.settings.admins.push(cleanNumber);
-        }
-        break;
-      
-      case 'removeadmin':
-        if (!value) {
-          return await sock.sendMessage(m.key.remoteJid, { 
-            text: '❌ Provide admin number' 
-          });
-        }
-        
-        const removeNumber = value.replace(/[^\d]/g, '');
-        this.settings.admins = this.settings.admins?.filter(a => a !== removeNumber) || [];
-        break;
-      
-      default:
-        return await sock.sendMessage(m.key.remoteJid, {
-          text: `❌ Unknown setting: ${setting}\n\nAvailable: reminders, wishes, remindertime, wishtime, reminderdays, groupreminders, privatereminders, addadmin, removeadmin`
-        });
-    }
-    
-    await this.saveSettings();
-    return await sock.sendMessage(m.key.remoteJid, { 
-      text: `✅ Setting updated: ${setting} = ${value}` 
-    });
-  }
-
-  /**
-   * Handle groups commands
-   */
-  async handleGroupsCommand(m, sock, args) {
-    const action = args[2]?.toLowerCase();
-    
-    switch (action) {
-      case 'add':
-        if (!this.settings.enabledGroups) this.settings.enabledGroups = [];
-        
-        if (!this.settings.enabledGroups.includes(m.key.remoteJid)) {
-          this.settings.enabledGroups.push(m.key.remoteJid);
-          await this.saveSettings();
-        }
-        
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: '✅ Birthday notifications enabled for this group!' 
-        });
-      
-      case 'remove':
-        if (this.settings.enabledGroups) {
-          this.settings.enabledGroups = this.settings.enabledGroups.filter(g => g !== m.key.remoteJid);
-          await this.saveSettings();
-        }
-        
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: '❌ Birthday notifications disabled for this group!' 
-        });
-      
-      case 'list':
-        const groups = this.settings.enabledGroups || [];
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: `🏷️ **Enabled Groups (${groups.length})**\n\n${groups.join('\n') || 'No groups enabled'}` 
-        });
-      
-      case 'clear':
-        this.settings.enabledGroups = [];
-        await this.saveSettings();
-        
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: '🗑️ All groups cleared from birthday notifications!' 
-        });
-      
-      default:
-        return await sock.sendMessage(m.key.remoteJid, {
-          text: `❌ Unknown groups command: ${action}\n\nAvailable: add, remove, list, clear`
-        });
-    }
-  }
-
-  /**
-   * Handle test commands
-   */
-  async handleTestCommand(m, sock, args) {
-    const test = args[2]?.toLowerCase();
-    
-    switch (test) {
-      case 'wish':
-        await this.sendBirthdayWishes(sock, { name: 'Test Bot' });
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: '✅ Test birthday wishes sent!' 
-        });
-      
-      case 'reminder':
-        await this.sendBirthdayReminders(sock, { name: 'Test Bot' });
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: '✅ Test birthday reminders sent!' 
-        });
-      
-      case 'today':
-        const todaysBirthdays = await this.getTodaysBirthdays();
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: this.formatBirthdayList(todaysBirthdays, '🎂 **Test - Today\'s Birthdays**') 
-        });
-      
-      case 'cleanup':
-        const cleanup = await this.cleanupOldRecords();
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: `✅ Test cleanup completed!\n\nReminders cleared: ${cleanup.remindersCleared}\nWishes cleared: ${cleanup.wishesCleared}` 
-        });
-      
-      case 'scheduler':
-        const health = await this.testScheduler();
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: `🔧 **Scheduler Test**\n\n${health.message}` 
-        });
-      
-      default:
-        return await sock.sendMessage(m.key.remoteJid, {
-          text: `❌ Unknown test command: ${test}\n\nAvailable: wish, reminder, today, cleanup, scheduler`
-        });
-    }
-  }
-
-  /**
-   * Test scheduler health
-   */
-  async testScheduler() {
-    try {
-      const now = moment.tz(TIMEZONE);
-      const wishTime = moment.tz(this.settings.wishTime, 'HH:mm', TIMEZONE);
-      const reminderTime = moment.tz(this.settings.reminderTime, 'HH:mm', TIMEZONE);
-      
-      return {
-        healthy: true,
-        message: `✅ Scheduler is healthy\n\n` +
-          `⏰ Current time: ${now.format('HH:mm')}\n` +
-          `🎂 Wish time: ${this.settings.wishTime}\n` +
-          `🔔 Reminder time: ${this.settings.reminderTime}\n` +
-          `📊 Settings loaded: ${this.initialized ? '✅' : '❌'}\n` +
-          `👥 Enabled groups: ${this.settings.enabledGroups?.length || 0}`
-      };
-    } catch (error) {
-      return {
-        healthy: false,
-        message: `❌ Scheduler error: ${error.message}`
-      };
-    }
-  }
-}
-
-// Create plugin instance
-const birthdayPlugin = new BirthdayPlugin();
-
-/**
- * Main plugin handler
- */
-export default async function birthdayHandler(m, sock, config, bot) {
-  try {
-    // Initialize plugin if not done
-    if (!birthdayPlugin.initialized) {
-      await birthdayPlugin.initializePlugin();
-    }
-    
-    // Skip if not a text message
-    if (!m.message?.conversation && !m.message?.extendedTextMessage?.text) return;
-    
-    const text = (m.message?.conversation || m.message?.extendedTextMessage?.text || '').trim();
-    const isCommand = text.startsWith(config.prefix || '.');
-    
-    if (!isCommand) return;
-    
-    const args = text.slice((config.prefix || '.').length).split(' ').filter(arg => arg.length > 0);
-    const command = args[0]?.toLowerCase();
-    
-    // Check if it's a birthday command
-    if (!['birthday', 'bday', 'birthdays', 'mybirthday', 'mybday'].includes(command)) return;
-    
-    console.log(chalk.blue(`🎂 Processing birthday command: ${command} from ${m.key.participant || m.key.remoteJid}`));
-    
-    const userId = m.key.participant || m.key.remoteJid;
-    
-    // Handle mybirthday commands
-    if (['mybirthday', 'mybday'].includes(command)) {
-      console.log(chalk.cyan(`🎂 Executing mybirthday command for ${userId}`));
-      return await handleMyBirthdayCommand(m, sock, args, userId, config);
-    }
-    
-    // Handle main birthday commands
-    const subCommand = args[1]?.toLowerCase();
-    console.log(chalk.cyan(`🎂 Birthday subcommand: ${subCommand || 'help'}`));
-    
-    // Admin commands
-    if (['settings', 'groups', 'test', 'reload'].includes(subCommand)) {
-      if (!birthdayPlugin.isAdmin(userId)) {
-        console.log(chalk.yellow(`❌ Admin command denied for ${userId}`));
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: '❌ This command requires admin privileges!' 
-        });
-      }
-      
-      console.log(chalk.green(`👑 Executing admin command: ${subCommand}`));
-      return await birthdayPlugin.handleAdminCommands(m, sock, args);
-    }
-    
-    // Public commands
-    switch (subCommand) {
-      case 'today':
-        console.log(chalk.cyan('🎂 Fetching today\'s birthdays...'));
-        const todaysBirthdays = await birthdayPlugin.getTodaysBirthdays();
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: birthdayPlugin.formatBirthdayList(todaysBirthdays, '🎂 **Today\'s Birthdays**') 
-        });
-      
-      case 'upcoming':
-        const days = parseInt(args[2]) || 7;
-        if (days < 1 || days > 30) {
-          return await sock.sendMessage(m.key.remoteJid, { 
-            text: '❌ Days must be between 1 and 30' 
-          });
-        }
-        
-        console.log(chalk.cyan(`🎂 Fetching upcoming birthdays for ${days} days...`));
-        const upcoming = await birthdayPlugin.getUpcomingBirthdays(days);
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: birthdayPlugin.formatBirthdayList(upcoming, `🗓️ **Upcoming Birthdays (Next ${days} days)**`) 
-        });
-      
-      case 'thismonth':
-        console.log(chalk.cyan('🎂 Fetching this month\'s birthdays...'));
-        const thisMonth = await birthdayPlugin.getThisMonthsBirthdays();
-        const monthName = moment.tz(TIMEZONE).format('MMMM YYYY');
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: birthdayPlugin.formatBirthdayList(thisMonth, `📅 **${monthName} Birthdays**`) 
-        });
-      
-      case 'all':
-        console.log(chalk.cyan('🎂 Fetching all birthdays...'));
-        const allBirthdays = await birthdayPlugin.getAllBirthdays();
-        const sortedBirthdays = allBirthdays.map(b => ({
-          ...b,
-          age: moment.tz(TIMEZONE).year() - moment(b.birthday).year()
-        })).sort((a, b) => {
-          const dateA = moment(a.birthday).format('MM-DD');
-          const dateB = moment(b.birthday).format('MM-DD');
-          return dateA.localeCompare(dateB);
-        });
-        
-        if (sortedBirthdays.length > 20) {
-          return await sock.sendMessage(m.key.remoteJid, { 
-            text: `🎂 **All Birthdays (${sortedBirthdays.length} total)**\n\n` +
-              `Too many birthdays to display. Use:\n` +
-              `• ${config.prefix || '.'}birthday today\n` +
-              `• ${config.prefix || '.'}birthday upcoming [days]\n` +
-              `• ${config.prefix || '.'}birthday thismonth` 
-          });
-        }
-        
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: birthdayPlugin.formatBirthdayList(sortedBirthdays, '🎂 **All Birthdays**') 
-        });
-      
-      case 'help':
-      case undefined:
-      case null:
-        console.log(chalk.cyan('🎂 Showing birthday help...'));
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: getBirthdayHelpText(config.prefix || '.', birthdayPlugin.isAdmin(userId)) 
-        });
-      
-      default:
-        return await sock.sendMessage(m.key.remoteJid, {
-          text: `❌ Unknown command: ${subCommand}\n\nUse ${config.prefix || '.'}birthday help for available commands`
-        });
-    }
-    
-  } catch (error) {
-    console.error(chalk.red('❌ Birthday plugin error:'), error.message);
-    console.error(chalk.red('❌ Stack trace:'), error.stack);
-    
-    // More detailed error information
-    console.error(chalk.red('❌ Error details:'), {
-      command: args?.[0],
-      subCommand: args?.[1],
-      userId: userId,
-      messageType: typeof m.message,
-      hasConversation: !!m.message?.conversation,
-      hasExtendedText: !!m.message?.extendedTextMessage?.text
-    });
-    
-    try {
-      await sock.sendMessage(m.key.remoteJid, { 
-        text: '❌ An error occurred while processing your birthday command. Please try again later.\n\n' +
-          `Error: ${error.message}` 
-      });
-    } catch (sendError) {
-      console.error(chalk.red('❌ Failed to send error message:'), sendError.message);
-    }
-  }
-}
-
-/**
- * Handle mybirthday commands
- */
-async function handleMyBirthdayCommand(m, sock, args, userId, config) {
-  try {
-    const action = args[1]?.toLowerCase();
-    
-    if (!action) {
-      // Show user's birthday info
-      console.log(chalk.cyan(`🎂 Getting birthday data for ${userId}`));
-      const birthdayData = await birthdayPlugin.getBirthdayData(userId);
-      
-      if (!birthdayData?.birthday) {
-        return await sock.sendMessage(m.key.remoteJid, { 
-          text: `🎂 **Your Birthday**\n\n❌ No birthday set.\n\nYour birthday will be automatically detected from your attendance DOB submission, or contact an admin to set it manually.` 
-        });
-      }
-      
-      const age = moment.tz(TIMEZONE).year() - moment(birthdayData.birthday).year();
-      const nextBirthday = moment(birthdayData.birthday).year(moment.tz(TIMEZONE).year());
-      
-      if (nextBirthday.isBefore(moment.tz(TIMEZONE))) {
-        nextBirthday.add(1, 'year');
-      }
-      
-      const daysUntil = nextBirthday.diff(moment.tz(TIMEZONE), 'days');
-      
-      return await sock.sendMessage(m.key.remoteJid, { 
-        text: `🎂 **Your Birthday**\n\n` +
-          `📅 Date: ${moment(birthdayData.birthday).format('MMMM Do, YYYY')}\n` +
-          `🎈 Current Age: ${age}\n` +
-          `⏳ Days until next birthday: ${daysUntil}\n` +
-          `🎯 Next birthday: ${nextBirthday.format('MMMM Do, YYYY')}` 
-      });
-    }
-    
-    // Future: Could add manual birthday setting for admins
-    return await sock.sendMessage(m.key.remoteJid, {
-      text: `❌ Unknown mybirthday command: ${action}\n\nUse ${config.prefix || '.'}mybirthday to view your birthday info.`
-    });
-    
-  } catch (error) {
-    console.error(chalk.red('❌ MyBirthday command error:'), error.message);
-    return await sock.sendMessage(m.key.remoteJid, { 
-      text: '❌ Error retrieving your birthday information.' 
-    });
-  }
-}
-
-/**
- * Get help text
- */
-function getBirthdayHelpText(prefix, isAdmin) {
-  let helpText = `🎂 **Birthday Commands Help**\n\n`;
-  
-  // Public commands
-  helpText += `**📋 Public Commands:**\n`;
-  helpText += `• ${prefix}birthday today - Today's birthdays\n`;
-  helpText += `• ${prefix}birthday upcoming [days] - Upcoming birthdays (default: 7 days)\n`;
-  helpText += `• ${prefix}birthday thismonth - This month's birthdays\n`;
-  helpText += `• ${prefix}birthday all - All birthdays (limited display)\n`;
-  helpText += `• ${prefix}mybirthday - Your birthday info\n`;
-  helpText += `• ${prefix}birthday help - This help message\n\n`;
-  
-  // Admin commands
-  if (isAdmin) {
-    helpText += `**🔧 Admin Commands:**\n`;
-    helpText += `• ${prefix}birthday settings - View/modify settings\n`;
-    helpText += `• ${prefix}birthday groups add/remove/list/clear - Manage groups\n`;
-    helpText += `• ${prefix}birthday test <command> - Test functions\n`;
-    helpText += `• ${prefix}birthday reload - Reload settings\n\n`;
-    
-    helpText += `**⚙️ Settings:**\n`;
-    helpText += `• reminders on/off - Enable/disable reminders\n`;
-    helpText += `• wishes on/off - Enable/disable birthday wishes\n`;
-    helpText += `• remindertime HH:MM - Set reminder time\n`;
-    helpText += `• wishtime HH:MM - Set wish time\n`;
-    helpText += `• reminderdays N - Days before birthday to remind\n`;
-    helpText += `• groupreminders on/off - Group notifications\n`;
-    helpText += `• privatereminders on/off - Private notifications\n`;
-    helpText += `• addadmin <number> - Add admin\n`;
-    helpText += `• removeadmin <number> - Remove admin\n\n`;
-    
-    helpText += `**🧪 Test Commands:**\n`;
-    helpText += `• wish, reminder, today, cleanup, scheduler\n\n`;
-  }
-  
-  helpText += `**ℹ️ Notes:**\n`;
-  helpText += `• Birthdays are detected from attendance DOB submissions\n`;
-  helpText += `• All times are in Africa/Lagos timezone\n`;
-  helpText += `• Automatic wishes sent at midnight\n`;
-  helpText += `• Reminders sent day before birthday`;
-  
-  return helpText;
-}
-
-/**
- * Scheduled task handlers for plugin manager
- */
-const birthdayWishTask = async () => {
-  try {
-    // This will be called by the plugin manager's cron system
-    console.log(chalk.blue('🎂 Birthday wish scheduled task triggered'));
-    
-    // We need access to sock and bot, but they're not available here
-    // The actual execution will happen in the main handler when conditions are met
-    
-  } catch (error) {
-    console.error(chalk.red('❌ Birthday wish scheduled task error:'), error.message);
-  }
-};
-
-const birthdayReminderTask = async () => {
-  try {
-    console.log(chalk.blue('🔔 Birthday reminder scheduled task triggered'));
-    
-    // Similar to wish task - actual execution handled in main flow
-    
-  } catch (error) {
-    console.error(chalk.red('❌ Birthday reminder scheduled task error:'), error.message);
-  }
-};
-
-const birthdayCleanupTask = async () => {
-  try {
-    console.log(chalk.blue('🧹 Birthday cleanup scheduled task triggered'));
-    
-    // This can run independently
-    await birthdayPlugin.cleanupOldRecords();
-    
-  } catch (error) {
-    console.error(chalk.red('❌ Birthday cleanup scheduled task error:'), error.message);
-  }
-};
-
-/**
- * Plugin info and scheduled tasks for plugin manager
- */
+// Plugin information with scheduled tasks
 export const info = {
-  name: 'Birthday Manager',
-  version: '2.0.0',
-  author: 'System',
-  description: 'Complete birthday management system with wishes, reminders, and admin controls',
-  category: 'utility',
+  name: 'Birthday System',
+  version: '3.0.0',
+  author: 'Bot Developer',
+  description: 'Advanced birthday system with automatic reminders and wishes using scheduled tasks',
+  category: 'social',
   commands: [
-    'birthday', 'bday', 'birthdays', 'mybirthday', 'mybday'
+    {
+      name: 'birthday',
+      aliases: ['bday', 'birthdays'],
+      description: 'Access the birthday system'
+    },
+    {
+      name: 'mybirthday',
+      aliases: ['mybday'],
+      description: 'View your birthday information'
+    }
   ],
   scheduledTasks: [
     {
       name: 'birthday_wishes',
-      schedule: '1 0 * * *', // Every day at 12:01 AM
-      handler: birthdayWishTask,
-      description: 'Send birthday wishes at midnight'
+      description: 'Send birthday wishes at midnight',
+      schedule: '1 0 * * *', // 00:01 every day
+      handler: () => scheduledBirthdayWishes()
     },
     {
-      name: 'birthday_reminders', 
-      schedule: '0 9 * * *', // Every day at 9:00 AM
-      handler: birthdayReminderTask,
-      description: 'Send birthday reminders in the morning'
+      name: 'birthday_reminders_7d',
+      description: 'Send 7-day birthday reminders',
+      schedule: '0 9 * * *', // 09:00 every day (7-day check)
+      handler: () => scheduledBirthdayReminders(7)
+    },
+    {
+      name: 'birthday_reminders_3d',
+      description: 'Send 3-day birthday reminders',
+      schedule: '0 9 * * *', // 09:00 every day (3-day check)
+      handler: () => scheduledBirthdayReminders(3)
+    },
+    {
+      name: 'birthday_reminders_1d',
+      description: 'Send 1-day birthday reminders',
+      schedule: '0 9 * * *', // 09:00 every day (1-day check)
+      handler: () => scheduledBirthdayReminders(1)
     },
     {
       name: 'birthday_cleanup',
-      schedule: '0 3 * * 0', // Every Sunday at 3:00 AM
-      handler: birthdayCleanupTask,
-      description: 'Clean up old birthday records weekly'
+      description: 'Clean up old birthday records',
+      schedule: '0 2 * * 0', // 02:00 every Sunday
+      handler: () => scheduledCleanup()
     }
-  ],
-  permissions: ['admin'],
-  dependencies: ['moment-timezone', 'pluginIntegration']
+  ]
 };
 
-/**
- * Initialize function for plugin manager
- */
-export const initialize = (config) => {
-  console.log(chalk.green('🎂 Birthday Plugin initializing...'));
-  
-  // Set up any configuration needed
-  if (config?.timezone) {
-    // Could override timezone if needed
-  }
-  
-  // Ensure plugin is ready
-  if (!birthdayPlugin.initialized) {
-    birthdayPlugin.initializePlugin();
-  }
-  
-  console.log(chalk.green('✅ Birthday Plugin initialized successfully'));
+// Collection names
+const COLLECTIONS = {
+  BIRTHDAYS: 'birthdays',
+  BIRTHDAY_SETTINGS: 'birthday_settings',
+  BIRTHDAY_WISHES: 'birthday_wishes',
+  BIRTHDAY_REMINDERS: 'birthday_reminders'
 };
 
-// =============================================
-// EXPORTED HELPER FUNCTIONS FOR OTHER PLUGINS
-// =============================================
+// Set Nigeria timezone
+moment.tz.setDefault('Africa/Lagos');
 
-/**
- * Get all birthdays - for use by other plugins
- */
-export async function getAllBirthdays() {
+// Default settings
+const defaultSettings = {
+  enableReminders: true,
+  enableAutoWishes: true,
+  reminderDays: [7, 3, 1],
+  reminderTime: '09:00',
+  wishTime: '00:01',
+  enableGroupReminders: true,
+  enablePrivateReminders: true,
+  reminderGroups: [],
+  adminNumbers: [],
+  maxRetries: 3,
+  retryDelay: 5000
+};
+
+// Global settings cache
+let birthdaySettings = { ...defaultSettings };
+
+// Global sock reference for scheduled tasks
+let globalSock = null;
+
+// Initialize plugin
+export function initialize(config) {
+  console.log('🎂 Birthday plugin initialized');
+  loadSettings();
+}
+
+// Load settings from database
+async function loadSettings() {
   try {
-    return await birthdayPlugin.getAllBirthdays();
+    const collection = await getCollection(COLLECTIONS.BIRTHDAY_SETTINGS);
+    const settings = await collection.findOne({ type: 'birthday' });
+    if (settings) {
+      birthdaySettings = { ...defaultSettings, ...settings.data };
+    }
   } catch (error) {
-    console.error(chalk.red('❌ Error in getAllBirthdays export:'), error.message);
-    return [];
+    console.error('❌ Error loading birthday settings:', error);
   }
 }
 
-/**
- * Get birthday data for specific user - for use by other plugins
- */
-export async function getBirthdayData(userId) {
+// Save settings to database
+async function saveSettings() {
   try {
-    return await birthdayPlugin.getBirthdayData(userId);
+    const collection = await getCollection(COLLECTIONS.BIRTHDAY_SETTINGS);
+    await collection.replaceOne(
+      { type: 'birthday' },
+      { type: 'birthday', data: birthdaySettings, updatedAt: new Date() },
+      { upsert: true }
+    );
   } catch (error) {
-    console.error(chalk.red(`❌ Error in getBirthdayData export for ${userId}:`), error.message);
+    console.error('❌ Error saving birthday settings:', error);
+  }
+}
+
+// Authorization check
+function isAuthorized(senderId) {
+  if (birthdaySettings.adminNumbers.includes(senderId.split('@')[0])) {
+    return true;
+  }
+  
+  const ownerNumber = process.env.OWNER_NUMBER || '';
+  const adminNumbers = process.env.ADMIN_NUMBERS ? process.env.ADMIN_NUMBERS.split(',') : [];
+
+  if (senderId.split('@')[0] === ownerNumber || adminNumbers.includes(senderId.split('@')[0])) {
+    return true;
+  }
+
+  return false;
+}
+
+// Safe message sending with retry logic
+async function safeSend(sock, jid, message, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await sock.sendMessage(jid, message);
+      return true;
+    } catch (error) {
+      console.error(`❌ Send attempt ${attempt}/${retries} failed to ${jid.split('@')[0]}:`, error.message);
+      
+      if (attempt < retries) {
+        await new Promise(resolve => setTimeout(resolve, birthdaySettings.retryDelay * attempt));
+      }
+    }
+  }
+  return false;
+}
+
+// Connection health check
+function isConnectionHealthy(sock) {
+  return sock && sock.user && sock.user.id && !sock.ws?.readyState !== 1;
+}
+
+// Get all birthdays
+async function getAllBirthdays() {
+  try {
+    const collection = await getCollection(COLLECTIONS.BIRTHDAYS);
+    const birthdays = await collection.find({}).toArray();
+    const formattedBirthdays = {};
+    
+    birthdays.forEach(entry => {
+      formattedBirthdays[entry.userId] = {
+        userId: entry.userId,
+        name: entry.name,
+        birthday: entry.birthday
+      };
+    });
+    
+    return formattedBirthdays;
+  } catch (error) {
+    console.error('❌ Error getting all birthdays:', error);
+    return {};
+  }
+}
+
+// Get birthday data for specific user
+async function getBirthdayData(userId) {
+  try {
+    const collection = await getCollection(COLLECTIONS.BIRTHDAYS);
+    return await collection.findOne({ userId });
+  } catch (error) {
+    console.error('❌ Error getting birthday data:', error);
     return null;
   }
 }
 
-/**
- * Get today's birthdays - for use by other plugins
- */
-export async function getTodaysBirthdays() {
+// Get today's birthdays
+async function getTodaysBirthdays() {
+  const today = moment.tz('Africa/Lagos');
+  const todayKey = `${String(today.month() + 1).padStart(2, '0')}-${String(today.date()).padStart(2, '0')}`;
+  
   try {
-    return await birthdayPlugin.getTodaysBirthdays();
+    const collection = await getCollection(COLLECTIONS.BIRTHDAYS);
+    const birthdays = await collection
+      .find({ 'birthday.searchKey': todayKey })
+      .toArray();
+    
+    return birthdays;
   } catch (error) {
-    console.error(chalk.red('❌ Error in getTodaysBirthdays export:'), error.message);
+    console.error('❌ Error getting today\'s birthdays:', error);
     return [];
   }
 }
 
-/**
- * Get upcoming birthdays - for use by other plugins
- */
-export async function getUpcomingBirthdays(days = 7) {
+// Get upcoming birthdays for specific days ahead
+async function getUpcomingBirthdays(daysAhead) {
+  const targetDate = moment.tz('Africa/Lagos').add(daysAhead, 'days');
+  const targetKey = `${String(targetDate.month() + 1).padStart(2, '0')}-${String(targetDate.date()).padStart(2, '0')}`;
+  
   try {
-    return await birthdayPlugin.getUpcomingBirthdays(days);
+    const collection = await getCollection(COLLECTIONS.BIRTHDAYS);
+    const birthdays = await collection
+      .find({ 'birthday.searchKey': targetKey })
+      .toArray();
+    
+    return birthdays;
   } catch (error) {
-    console.error(chalk.red('❌ Error in getUpcomingBirthdays export:'), error.message);
+    console.error('❌ Error getting upcoming birthdays:', error);
     return [];
   }
 }
 
-/**
- * Get this month's birthdays - for use by other plugins
- */
-export async function getThisMonthsBirthdays() {
+// Generate birthday wish message
+function getBirthdayWishMessage(birthdayPerson) {
+  const wishes = [
+    `🎉🎂 HAPPY BIRTHDAY! 🎂🎉\n\nWishing you a day filled with happiness and a year filled with joy! 🎈✨`,
+    `🎊 Happy Birthday to our amazing member! 🎊\n\nMay your special day be surrounded with happiness, filled with laughter, wrapped with pleasure and painted with fun! 🎨🎁`,
+    `🌟 It's someone's Birthday! 🌟\n\n🎂 Another year older, another year wiser, another year more awesome! May all your dreams come true! ✨🎉`,
+    `🎈 BIRTHDAY ALERT! 🎈\n\nIt's someone's special day! 🎂 Let's celebrate this wonderful person who brings joy to our group! 🎊🎉`,
+    `🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday dear friend! 🎵\n🎵 Happy Birthday to you! 🎵\n\n🎂 Hope your day is as special as you are! 🌟`
+  ];
+  
+  const randomWish = wishes[Math.floor(Math.random() * wishes.length)];
+  let message = randomWish;
+  
+  if (birthdayPerson.birthday.age !== undefined) {
+    message += `\n\n🎈 Celebrating ${birthdayPerson.birthday.age} wonderful years! 🎈`;
+  }
+  
+  message += `\n\n👏 From your friends at GIST HQ! 👏`;
+  
+  return message;
+}
+
+// Generate reminder message
+function getReminderMessage(birthdayPerson, daysUntil) {
+  let message;
+  
+  if (daysUntil === 1) {
+    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 Tomorrow is someone's birthday!\n\n🎁 Don't forget to wish them well! 🎉`;
+  } else {
+    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 Someone's birthday is in ${daysUntil} days!\n\n🗓️ Mark your calendar: ${birthdayPerson.birthday.displayDate} 🎉`;
+  }
+  
+  if (birthdayPerson.birthday.age !== undefined) {
+    const upcomingAge = birthdayPerson.birthday.age + 1;
+    message += `\n\n🎈 They'll be turning ${upcomingAge}! 🎈`;
+  }
+  
+  return message;
+}
+
+// Scheduled birthday wishes handler
+async function scheduledBirthdayWishes() {
+  if (!birthdaySettings.enableAutoWishes || !globalSock) {
+    console.log('🎂 Birthday wishes disabled or no connection');
+    return;
+  }
+  
+  if (!isConnectionHealthy(globalSock)) {
+    console.log('❌ Connection not healthy, skipping birthday wishes');
+    return;
+  }
+  
   try {
-    return await birthdayPlugin.getThisMonthsBirthdays();
+    const todaysBirthdays = await getTodaysBirthdays();
+    if (todaysBirthdays.length === 0) {
+      console.log('📅 No birthdays today');
+      return;
+    }
+    
+    console.log(`🎂 Processing ${todaysBirthdays.length} birthday(s) today`);
+    const today = moment.tz('Africa/Lagos').format('YYYY-MM-DD');
+    const wishesCollection = await getCollection(COLLECTIONS.BIRTHDAY_WISHES);
+
+    for (const birthdayPerson of todaysBirthdays) {
+      try {
+        // Check if already wished today
+        const existingWish = await wishesCollection.findOne({ 
+          userId: birthdayPerson.userId, 
+          date: today 
+        });
+        
+        if (existingWish) {
+          console.log(`⭐ Already wished ${birthdayPerson.name} today`);
+          continue;
+        }
+        
+        if (!isConnectionHealthy(globalSock)) {
+          console.log('❌ Connection lost during birthday processing');
+          break;
+        }
+        
+        const wishMessage = getBirthdayWishMessage(birthdayPerson);
+        let successfulSends = 0;
+      
+        // Send private wish
+        if (birthdaySettings.enablePrivateReminders) {
+          try {
+            const privateMsg = `🎉 *HAPPY BIRTHDAY ${birthdayPerson.name}!* 🎉\n\nToday is your special day! 🎂\n\nWishing you all the happiness in the world! ✨🎈`;
+            
+            const success = await safeSend(globalSock, birthdayPerson.userId, { text: privateMsg });
+            if (success) {
+              successfulSends++;
+              console.log(`✅ Private wish sent to ${birthdayPerson.name}`);
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, 3000));
+          } catch (error) {
+            console.error(`❌ Private wish failed for ${birthdayPerson.name}:`, error.message);
+          }
+        }
+        
+        // Send to configured groups
+        if (birthdaySettings.enableGroupReminders && birthdaySettings.reminderGroups.length > 0) {
+          for (const groupId of birthdaySettings.reminderGroups) {
+            try {
+              if (!isConnectionHealthy(globalSock)) break;
+              
+              const success = await safeSend(globalSock, groupId, {
+                text: wishMessage,
+                mentions: [birthdayPerson.userId]
+              });
+              
+              if (success) {
+                successfulSends++;
+                console.log(`✅ Group wish sent to ${groupId.split('@')[0]} for ${birthdayPerson.name}`);
+              }
+              
+              await new Promise(resolve => setTimeout(resolve, 5000));
+            } catch (error) {
+              console.error(`❌ Group wish failed for ${groupId.split('@')[0]}:`, error.message);
+            }
+          }
+        }
+        
+        // Mark as sent if at least one succeeded
+        if (successfulSends > 0) {
+          await wishesCollection.insertOne({
+            userId: birthdayPerson.userId,
+            name: birthdayPerson.name,
+            date: today,
+            timestamp: new Date(),
+            successfulSends
+          });
+          
+          console.log(`✅ Birthday completed for ${birthdayPerson.name} (${successfulSends} sent)`);
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 8000));
+        
+      } catch (error) {
+        console.error(`💥 Error processing ${birthdayPerson.name}:`, error.message);
+      }
+    }
   } catch (error) {
-    console.error(chalk.red('❌ Error in getThisMonthsBirthdays export:'), error.message);
-    return [];
+    console.error('❌ Scheduled birthday wishes error:', error);
   }
 }
 
-/**
- * Send birthday wishes - for use by other plugins
- */
-export async function sendBirthdayWishes(sock, bot) {
+// Scheduled birthday reminders handler
+async function scheduledBirthdayReminders(daysAhead) {
+  if (!birthdaySettings.enableReminders || !globalSock || !birthdaySettings.reminderDays.includes(daysAhead)) {
+    return;
+  }
+  
+  if (!isConnectionHealthy(globalSock)) {
+    console.log('❌ Connection not healthy, skipping reminders');
+    return;
+  }
+  
   try {
-    return await birthdayPlugin.sendBirthdayWishes(sock, bot);
+    const upcomingBirthdays = await getUpcomingBirthdays(daysAhead);
+    if (upcomingBirthdays.length === 0) {
+      console.log(`📅 No birthdays in ${daysAhead} days`);
+      return;
+    }
+    
+    console.log(`📅 Processing ${upcomingBirthdays.length} reminder(s) for ${daysAhead} days ahead`);
+    
+    const today = moment.tz('Africa/Lagos').format('YYYY-MM-DD');
+    const remindersCollection = await getCollection(COLLECTIONS.BIRTHDAY_REMINDERS);
+    
+    for (const birthdayPerson of upcomingBirthdays) {
+      const reminderKey = `${today}-${birthdayPerson.userId}-${daysAhead}`;
+      
+      try {
+        // Skip if reminder already sent
+        const existingReminder = await remindersCollection.findOne({ reminderKey });
+        if (existingReminder) {
+          continue;
+        }
+        
+        const reminderMessage = getReminderMessage(birthdayPerson, daysAhead);
+        
+        // Send to configured groups
+        if (birthdaySettings.enableGroupReminders && birthdaySettings.reminderGroups.length > 0) {
+          for (const groupId of birthdaySettings.reminderGroups) {
+            try {
+              if (!isConnectionHealthy(globalSock)) break;
+              
+              const success = await safeSend(globalSock, groupId, {
+                text: reminderMessage,
+                mentions: [birthdayPerson.userId]
+              });
+              
+              if (success) {
+                console.log(`✅ ${daysAhead}-day reminder sent to ${groupId.split('@')[0]} for ${birthdayPerson.name}`);
+              }
+              
+              await new Promise(resolve => setTimeout(resolve, 3000));
+            } catch (error) {
+              console.error(`❌ Reminder failed for group ${groupId.split('@')[0]}:`, error.message);
+            }
+          }
+        }
+        
+        // Mark reminder as sent
+        await remindersCollection.insertOne({
+          reminderKey,
+          userId: birthdayPerson.userId,
+          daysAhead,
+          date: today,
+          timestamp: new Date()
+        });
+        
+      } catch (error) {
+        console.error(`❌ Error sending reminder for ${birthdayPerson.name}:`, error.message);
+      }
+    }
   } catch (error) {
-    console.error(chalk.red('❌ Error in sendBirthdayWishes export:'), error.message);
-    return false;
+    console.error(`❌ Scheduled ${daysAhead}-day reminders error:`, error);
   }
 }
 
-/**
- * Send birthday reminders - for use by other plugins  
- */
-export async function sendBirthdayReminders(sock, bot) {
+// Scheduled cleanup handler
+async function scheduledCleanup() {
   try {
-    return await birthdayPlugin.sendBirthdayReminders(sock, bot);
+    const cutoffDate = moment.tz('Africa/Lagos').subtract(30, 'days').toDate();
+    
+    // Clean up old wishes
+    const wishesCollection = await getCollection(COLLECTIONS.BIRTHDAY_WISHES);
+    const wishesResult = await wishesCollection.deleteMany({
+      timestamp: { $lt: cutoffDate }
+    });
+    
+    // Clean up old reminders
+    const remindersCollection = await getCollection(COLLECTIONS.BIRTHDAY_REMINDERS);
+    const remindersResult = await remindersCollection.deleteMany({
+      timestamp: { $lt: cutoffDate }
+    });
+    
+    console.log(`🗑️ Cleaned up ${wishesResult.deletedCount} wishes and ${remindersResult.deletedCount} reminders`);
   } catch (error) {
-    console.error(chalk.red('❌ Error in sendBirthdayReminders export:'), error.message);
-    return false;
+    console.error('❌ Cleanup error:', error);
   }
 }
 
-/**
- * Update birthday data - for use by other plugins
- */
-export async function updateBirthdayData(userId, updates) {
+// Main plugin handler
+export default async function birthdayHandler(m, sock, config, bot) {
   try {
-    return await birthdayPlugin.updateBirthdayData(userId, updates);
+    // Store global sock reference for scheduled tasks
+    globalSock = sock;
+    
+    // Load settings if not cached
+    if (!birthdaySettings.reminderGroups) {
+      await loadSettings();
+    }
+    
+    // Handle commands
+    if (!m.body || !m.body.startsWith(config.PREFIX)) return;
+    
+    const args = m.body.slice(config.PREFIX.length).trim().split(' ');
+    const command = args[0].toLowerCase();
+    const senderId = m.key.participant || m.key.remoteJid;
+    const from = m.key.remoteJid;
+    
+    const reply = async (text) => {
+      await sock.sendMessage(from, { text }, { quoted: m });
+    };
+    
+    switch (command) {
+      case 'birthday':
+      case 'bday':
+      case 'birthdays':
+        if (args.length === 1) {
+          await showBirthdayMenu(reply, config.PREFIX);
+        } else {
+          await handleSubCommand(args[1], args.slice(2), { m, sock, config, senderId, from, reply });
+        }
+        break;
+        
+      case 'mybirthday':
+      case 'mybday':
+        await handleMyBirthday({ m, sock, config, senderId, from, reply });
+        break;
+    }
   } catch (error) {
-    console.error(chalk.red(`❌ Error in updateBirthdayData export for ${userId}:`), error.message);
-    return false;
+    console.error('❌ Birthday plugin error:', error);
   }
 }
 
-/**
- * Cleanup old records - for use by other plugins
- */
-export async function cleanupOldRecords() {
-  try {
-    return await birthdayPlugin.cleanupOldRecords();
-  } catch (error) {
-    console.error(chalk.red('❌ Error in cleanupOldRecords export:'), error.message);
-    return { remindersCleared: 0, wishesCleared: 0 };
+// Handle sub commands
+async function handleSubCommand(subCommand, args, context) {
+  switch (subCommand.toLowerCase()) {
+    case 'today':
+      await handleToday(context);
+      break;
+    case 'upcoming':
+      await handleUpcoming(context, args);
+      break;
+    case 'thismonth':
+      await handleThisMonth(context);
+      break;
+    case 'all':
+      await handleAll(context);
+      break;
+    case 'settings':
+      await handleSettings(context, args);
+      break;
+    case 'test':
+      await handleTest(context, args);
+      break;
+    case 'groups':
+      await handleGroups(context, args);
+      break;
+    case 'force':
+      await handleForceWishes(context, args);
+      break;
+    case 'status':
+      await handleStatus(context);
+      break;
+    case 'help':
+      await showBirthdayMenu(context.reply, context.config.PREFIX);
+      break;
+    default:
+      await context.reply(`❓ Unknown birthday command: *${subCommand}*\n\nUse *${context.config.PREFIX}birthday help* to see available commands.`);
   }
 }
 
-/**
- * Check if user is admin - for use by other plugins
- */
-export function isAdmin(userId) {
-  try {
-    return birthdayPlugin.isAdmin(userId);
-  } catch (error) {
-    console.error(chalk.red(`❌ Error in isAdmin export for ${userId}:`), error.message);
-    return false;
+// Show birthday menu
+async function showBirthdayMenu(reply, prefix) {
+  const menuText = `🎂 *BIRTHDAY SYSTEM v3.0* 🎂\n\n` +
+                  `📅 *View Commands:*\n` +
+                  `• *today* - Today's birthdays\n` +
+                  `• *upcoming [days]* - Upcoming birthdays (default: 7 days)\n` +
+                  `• *thismonth* - This month's birthdays\n` +
+                  `• *all* - All recorded birthdays\n` +
+                  `• *status* - System status\n\n` +
+                  `👑 *Admin Commands:*\n` +
+                  `• *settings* - View/modify settings\n` +
+                  `• *groups* - Manage reminder groups\n` +
+                  `• *test* - Test birthday functions\n` +
+                  `• *force* - Force birthday checks\n\n` +
+                  `🤖 *Features:*\n` +
+                  `• Scheduled wishes via cron tasks\n` +
+                  `• Reliable reminder system\n` +
+                  `• Connection health monitoring\n` +
+                  `• Retry logic for failed messages\n\n` +
+                  `💡 *Usage:* ${prefix}birthday [command]`;
+  
+  await reply(menuText);
+}
+
+// Handle force wishes (admin only)
+async function handleForceWishes(context, args) {
+  const { reply, senderId } = context;
+  
+  if (!isAuthorized(senderId)) {
+    await reply('🚫 Only admins can force birthday checks.');
+    return;
+  }
+  
+  if (args.length === 0) {
+    await reply(`🔧 *FORCE COMMANDS*\n\n• *wishes* - Force today's birthday wishes\n• *reminders [days]* - Force reminders for specific days\n• *cleanup* - Force cleanup\n\nUsage: *${context.config.PREFIX}birthday force [command]*`);
+    return;
+  }
+  
+  const forceType = args[0].toLowerCase();
+  
+  switch (forceType) {
+    case 'wishes':
+      await reply('🔧 Forcing birthday wishes...');
+      await scheduledBirthdayWishes();
+      await reply('✅ Forced birthday wishes completed');
+      break;
+    case 'reminders':
+      const days = args[1] ? parseInt(args[1]) : 7;
+      if (isNaN(days)) {
+        await reply('❌ Invalid days parameter');
+        return;
+      }
+      await reply(`🔧 Forcing ${days}-day reminders...`);
+      await scheduledBirthdayReminders(days);
+      await reply(`✅ Forced ${days}-day reminders completed`);
+      break;
+    case 'cleanup':
+      await reply('🔧 Forcing cleanup...');
+      await scheduledCleanup();
+      await reply('✅ Forced cleanup completed');
+      break;
+    default:
+      await reply(`❓ Unknown force command: *${forceType}*`);
   }
 }
 
-/**
- * Get birthday settings - for use by other plugins
- */
-export async function getBirthdaySettings() {
+// Handle status command
+async function handleStatus(context) {
+  const { reply } = context;
+  
   try {
-    return birthdayPlugin.settings;
+    const todaysBirthdays = await getTodaysBirthdays();
+    const upcoming7 = await getUpcomingBirthdays(7);
+    const upcoming3 = await getUpcomingBirthdays(3);
+    const upcoming1 = await getUpcomingBirthdays(1);
+    
+    const now = moment.tz('Africa/Lagos');
+    const connectionStatus = globalSock && isConnectionHealthy(globalSock) ? '✅ Healthy' : '❌ Unhealthy';
+    
+    let statusText = `📊 *BIRTHDAY SYSTEM STATUS* 📊\n\n`;
+    statusText += `🔌 *Connection:* ${connectionStatus}\n`;
+    statusText += `⏰ *Current Time:* ${now.format('YYYY-MM-DD HH:mm:ss')}\n\n`;
+    statusText += `📅 *Birthday Counts:*\n`;
+    statusText += `• Today: ${todaysBirthdays.length}\n`;
+    statusText += `• Tomorrow: ${upcoming1.length}\n`;
+    statusText += `• Next 3 days: ${upcoming3.length}\n`;
+    statusText += `• Next 7 days: ${upcoming7.length}\n\n`;
+    statusText += `⚙️ *Settings:*\n`;
+    statusText += `• Auto Wishes: ${birthdaySettings.enableAutoWishes ? '✅' : '❌'}\n`;
+    statusText += `• Reminders: ${birthdaySettings.enableReminders ? '✅' : '❌'}\n`;
+    statusText += `• Groups: ${birthdaySettings.reminderGroups.length}\n`;
+    statusText += `• Reminder Days: ${birthdaySettings.reminderDays.join(', ')}\n\n`;
+    statusText += `🤖 *Scheduled Tasks:*\n`;
+    statusText += `• Birthday wishes: Daily at 00:01\n`;
+    statusText += `• Reminders: Daily at 09:00\n`;
+    statusText += `• Cleanup: Weekly on Sundays at 02:00`;
+    
+    await reply(statusText);
   } catch (error) {
-    console.error(chalk.red('❌ Error in getBirthdaySettings export:'), error.message);
-    return DEFAULT_SETTINGS;
+    await reply('❌ Error getting status information');
+    console.error('Status error:', error);
   }
 }
 
-/**
- * Format birthday list - for use by other plugins
- */
-export function formatBirthdayList(birthdays, title) {
-  try {
-    return birthdayPlugin.formatBirthdayList(birthdays, title);
-  } catch (error) {
-    console.error(chalk.red('❌ Error in formatBirthdayList export:'), error.message);
-    return `${title}\n\n❌ Error formatting birthday list.`;
+// Handle today's birthdays
+async function handleToday(context) {
+  const { sock, m } = context;
+  
+  const todaysBirthdays = await getTodaysBirthdays();
+  
+  if (todaysBirthdays.length === 0) {
+    await sock.sendMessage(m.key.remoteJid, {
+      text: `🎂 *No birthdays today*\n\n📅 Check upcoming birthdays with *${context.config.PREFIX}birthday upcoming*`
+    });
+    return;
   }
-}
-
-// =============================================
-// PLUGIN MANAGER INTEGRATION EVENTS
-// =============================================
-
-// Register plugin events for cross-plugin communication
-if (typeof PluginHelpers !== 'undefined' && PluginHelpers.registerPlugin) {
-  PluginHelpers.registerPlugin('birthday', {
-    name: 'Birthday Manager',
-    version: '2.0.0',
-    exports: {
-      getAllBirthdays,
-      getBirthdayData,
-      getTodaysBirthdays,
-      getUpcomingBirthdays,
-      getThisMonthsBirthdays,
-      sendBirthdayWishes,
-      sendBirthdayReminders,
-      updateBirthdayData,
-      cleanupOldRecords,
-      isAdmin,
-      getBirthdaySettings,
-      formatBirthdayList
+  
+  let message = `🎉 *TODAY'S BIRTHDAYS* 🎉\n\n`;
+  const mentions = [];
+  
+  todaysBirthdays.forEach(person => {
+    mentions.push(person.userId);
+    message += `🎂 @${person.userId.split('@')[0]}\n`;
+    if (person.birthday.age !== undefined) {
+      message += `   🎈 Turning ${person.birthday.age} today!\n`;
     }
   });
   
-  // Listen for attendance events to sync birthday data
-  PluginHelpers.onEvent('attendance_dob_updated', async (data) => {
-    try {
-      const { userId, dob } = data;
-      if (userId && dob) {
-        const birthday = moment(dob).format('YYYY-MM-DD');
-        await birthdayPlugin.updateBirthdayData(userId, { birthday });
-        console.log(chalk.green(`🎂 Birthday synced from attendance: ${userId} - ${birthday}`));
-      }
-    } catch (error) {
-      console.error(chalk.red('❌ Error syncing birthday from attendance:'), error.message);
-    }
-  });
+  message += `\n🎊 *Let's wish them a happy birthday!* 🎊`;
   
-  // Emit birthday events for other plugins
-  PluginHelpers.onEvent('daily_birthday_check', async () => {
-    try {
-      const todaysBirthdays = await getTodaysBirthdays();
-      if (todaysBirthdays.length > 0) {
-        PluginHelpers.emitEvent('birthdays_today', { birthdays: todaysBirthdays });
-      }
-    } catch (error) {
-      console.error(chalk.red('❌ Error in daily birthday check event:'), error.message);
-    }
+  await sock.sendMessage(m.key.remoteJid, {
+    text: message,
+    mentions: mentions
   });
 }
 
-console.log(chalk.green('🎂 Birthday Plugin loaded successfully with all features!'));
+// Handle upcoming birthdays
+async function handleUpcoming(context, args) {
+  const { sock, m } = context;
+  
+  const days = args.length > 0 ? parseInt(args[0]) : 7;
+  if (isNaN(days) || days < 1 || days > 365) {
+    await sock.sendMessage(m.key.remoteJid, {
+      text: '⚠️ *Please provide a valid number of days (1-365)*'
+    });
+    return;
+  }
+  
+  const allBirthdays = await getAllBirthdays();
+  const birthdayEntries = Object.values(allBirthdays);
+  const today = new Date();
+  const upcomingBirthdays = [];
+  
+  birthdayEntries.forEach(entry => {
+    const birthday = entry.birthday;
+    const thisYear = today.getFullYear();
+    const nextBirthday = new Date(thisYear, birthday.month - 1, birthday.day);
+    
+    if (nextBirthday < today) {
+      nextBirthday.setFullYear(thisYear + 1);
+    }
+    
+    const daysUntil = Math.ceil((nextBirthday - today) / (1000 * 60 * 60 * 24));
+    
+    if (daysUntil >= 0 && daysUntil <= days) {
+      upcomingBirthdays.push({
+        ...entry,
+        daysUntil: daysUntil
+      });
+    }
+  });
+  
+  if (upcomingBirthdays.length === 0) {
+    await sock.sendMessage(m.key.remoteJid, {
+      text: `📅 *No birthdays in the next ${days} days*\n\nTry checking a longer period or use *${context.config.PREFIX}birthday thismonth*`
+    });
+    return;
+  }
+  
+  upcomingBirthdays.sort((a, b) => a.daysUntil - b.daysUntil);
+  
+  let message = `📅 *UPCOMING BIRTHDAYS (Next ${days} days)* 📅\n\n`;
+  const mentions = [];
+  
+  upcomingBirthdays.forEach(upcoming => {
+    mentions.push(upcoming.userId);
+    
+    if (upcoming.daysUntil === 0) {
+      message += `🎊 @${upcoming.userId.split('@')[0]} - TODAY! 🎊\n`;
+    } else if (upcoming.daysUntil === 1) {
+      message += `🎂 @${upcoming.userId.split('@')[0]} - Tomorrow\n`;
+    } else {
+      message += `📌 @${upcoming.userId.split('@')[0]} - ${upcoming.daysUntil} days (${upcoming.birthday.monthName} ${upcoming.birthday.day})\n`;
+    }
+    
+    if (upcoming.birthday.age !== undefined) {
+      const upcomingAge = upcoming.birthday.age + (upcoming.daysUntil === 0 ? 0 : 1);
+      message += `   🎈 ${upcoming.daysUntil === 0 ? 'Turned' : 'Turning'} ${upcomingAge}\n`;
+    }
+    
+    message += '\n';
+  });
+  
+  await sock.sendMessage(m.key.remoteJid, {
+    text: message,
+    mentions: mentions
+  });
+}
+
+// Handle this month's birthdays
+async function handleThisMonth(context) {
+  const { sock, m } = context;
+  
+  const currentMonth = moment.tz('Africa/Lagos').month() + 1; // moment months are 0-indexed
+  const allBirthdays = await getAllBirthdays();
+  const thisMonthBirthdays = [];
+  
+  Object.values(allBirthdays).forEach(entry => {
+    if (entry.birthday.month === currentMonth) {
+      thisMonthBirthdays.push(entry);
+    }
+  });
+  
+  if (thisMonthBirthdays.length === 0) {
+    const monthName = moment.tz('Africa/Lagos').format('MMMM');
+    await sock.sendMessage(m.key.remoteJid, {
+      text: `📅 *No birthdays in ${monthName}*\n\nUse *${context.config.PREFIX}birthday all* to see all recorded birthdays`
+    });
+    return;
+  }
+  
+  // Sort by day
+  thisMonthBirthdays.sort((a, b) => a.birthday.day - b.birthday.day);
+  
+  const monthName = moment.tz('Africa/Lagos').format('MMMM YYYY');
+  let message = `📅 *${monthName.toUpperCase()} BIRTHDAYS* 📅\n\n`;
+  const mentions = [];
+  
+  thisMonthBirthdays.forEach(person => {
+    mentions.push(person.userId);
+    message += `🎂 @${person.userId.split('@')[0]} - ${person.birthday.monthName} ${person.birthday.day}`;
+    
+    if (person.birthday.age !== undefined) {
+      message += ` (${person.birthday.age} years old)`;
+    }
+    
+    // Check if birthday has passed this month
+    const today = moment.tz('Africa/Lagos');
+    if (person.birthday.month === today.month() + 1) {
+      if (person.birthday.day === today.date()) {
+        message += ` 🎊 TODAY!`;
+      } else if (person.birthday.day < today.date()) {
+        message += ` ✅ Celebrated`;
+      } else {
+        const daysLeft = person.birthday.day - today.date();
+        message += ` (${daysLeft} days left)`;
+      }
+    }
+    
+    message += '\n';
+  });
+  
+  await sock.sendMessage(m.key.remoteJid, {
+    text: message,
+    mentions: mentions
+  });
+}
+
+// Handle all birthdays (admin only)
+async function handleAll(context) {
+  const { sock, m, senderId } = context;
+  
+  if (!isAuthorized(senderId)) {
+    await sock.sendMessage(m.key.remoteJid, {
+      text: '🚫 Only admins can view all birthdays.'
+    });
+    return;
+  }
+  
+  const allBirthdays = await getAllBirthdays();
+  const birthdayEntries = Object.values(allBirthdays);
+  
+  if (birthdayEntries.length === 0) {
+    await sock.sendMessage(m.key.remoteJid, {
+      text: `🎂 *No birthdays recorded*\n\nBirthdays are automatically saved when members submit attendance forms with valid D.O.B information.`
+    });
+    return;
+  }
+  
+  // Sort by month and day
+  birthdayEntries.sort((a, b) => {
+    if (a.birthday.month !== b.birthday.month) {
+      return a.birthday.month - b.birthday.month;
+    }
+    return a.birthday.day - b.birthday.day;
+  });
+  
+  let message = `🎂 *ALL BIRTHDAYS* 🎂\n\n📊 Total: ${birthdayEntries.length} members\n\n`;
+  const mentions = [];
+  
+  let currentMonth = null;
+  
+  birthdayEntries.forEach(person => {
+    mentions.push(person.userId);
+    
+    // Add month header
+    if (currentMonth !== person.birthday.month) {
+      currentMonth = person.birthday.month;
+      message += `\n📅 *${person.birthday.monthName.toUpperCase()}*\n`;
+    }
+    
+    message += `🎂 @${person.userId.split('@')[0]} - ${person.birthday.day}`;
+    
+    if (person.birthday.age !== undefined) {
+      message += ` (${person.birthday.age} years old)`;
+    }
+    
+    message += '\n';
+  });
+  
+  await sock.sendMessage(m.key.remoteJid, {
+    text: message,
+    mentions: mentions
+  });
+}
+
+// Handle my birthday command
+async function handleMyBirthday(context) {
+  const { reply, senderId } = context;
+  
+  try {
+    const birthdayData = await getBirthdayData(senderId);
+    
+    if (!birthdayData) {
+      await reply(`🎂 *No Birthday Recorded*\n\nYour birthday hasn't been saved yet. It will be automatically saved when you submit your next attendance form with a valid D.O.B field.\n\n💡 *Make sure to fill your D.O.B correctly in the attendance form!*`);
+      return;
+    }
+    
+    const birthday = birthdayData.birthday;
+    let message = `🎂 *Your Birthday Information* 🎂\n\n`;
+    message += `👤 Name: ${birthdayData.name}\n`;
+    message += `📅 Birthday: ${birthday.displayDate}\n`;
+    message += `📊 Day: ${birthday.day}\n`;
+    message += `📊 Month: ${birthday.monthName}\n`;
+    
+    if (birthday.year) {
+      message += `📊 Year: ${birthday.year}\n`;
+    }
+    
+    if (birthday.age !== undefined) {
+      message += `🎈 Current Age: ${birthday.age} years old\n`;
+    }
+    
+    message += `💾 Last Updated: ${new Date(birthdayData.lastUpdated).toLocaleString()}\n`;
+    
+    // Calculate days until next birthday
+    const today = new Date();
+    const thisYear = today.getFullYear();
+    const nextBirthday = new Date(thisYear, birthday.month - 1, birthday.day);
+    
+    if (nextBirthday < today) {
+      nextBirthday.setFullYear(thisYear + 1);
+    }
+    
+    const daysUntil = Math.ceil((nextBirthday - today) / (1000 * 60 * 60 * 24));
+    
+    if (daysUntil === 0) {
+      message += `🎉 *IT'S YOUR BIRTHDAY TODAY!* 🎉\n`;
+      message += `🎊 *HAPPY BIRTHDAY!* 🎊`;
+    } else if (daysUntil === 1) {
+      message += `🎂 *Your birthday is TOMORROW!* 🎂`;
+    } else if (daysUntil <= 7) {
+      message += `🗓 *Your birthday is in ${daysUntil} days!*`;
+    } else {
+      message += `📅 Days until next birthday: ${daysUntil}`;
+    }
+    
+    await reply(message);
+  } catch (error) {
+    await reply('❌ *Error loading birthday information. Please try again.*');
+    console.error('My birthday error:', error);
+  }
+}
+
+// Handle settings command (admin only)
+async function handleSettings(context, args) {
+  const { reply, senderId } = context;
+  
+  if (!isAuthorized(senderId)) {
+    await reply('🚫 Only admins can modify birthday settings.');
+    return;
+  }
+  
+  if (args.length === 0) {
+    await showSettings(reply);
+    return;
+  }
+  
+  const setting = args[0].toLowerCase();
+  const value = args.slice(1).join(' ');
+  
+  switch (setting) {
+    case 'reminders':
+      await toggleReminders(reply, value, context);
+      break;
+    case 'wishes':
+      await toggleWishes(reply, value, context);
+      break;
+    case 'remindertime':
+      await setReminderTime(reply, value, context);
+      break;
+    case 'wishtime':
+      await setWishTime(reply, value, context);
+      break;
+    case 'reminderdays':
+      await setReminderDays(reply, value, context);
+      break;
+    case 'groupreminders':
+      await toggleGroupReminders(reply, value, context);
+      break;
+    case 'privatereminders':
+      await togglePrivateReminders(reply, value, context);
+      break;
+    case 'addadmin':
+      await addAdmin(reply, value, context);
+      break;
+    case 'removeadmin':
+      await removeAdmin(reply, value, context);
+      break;
+    case 'reload':
+      await reloadSettings(reply, context);
+      break;
+    default:
+      await reply(`❓ Unknown setting: *${setting}*\n\nUse *${context.config.PREFIX}birthday settings* to see available options.`);
+  }
+}
+
+// Show settings
+async function showSettings(reply) {
+  const settings = birthdaySettings;
+  
+  let message = `⚙️ *BIRTHDAY SETTINGS* ⚙️\n\n`;
+  
+  message += `🔔 *Reminders:* ${settings.enableReminders ? '✅ ON' : '❌ OFF'}\n`;
+  message += `🎉 *Auto Wishes:* ${settings.enableAutoWishes ? '✅ ON' : '❌ OFF'}\n`;
+  message += `👥 *Group Reminders:* ${settings.enableGroupReminders ? '✅ ON' : '❌ OFF'}\n`;
+  message += `💬 *Private Reminders:* ${settings.enablePrivateReminders ? '✅ ON' : '❌ OFF'}\n\n`;
+  
+  message += `⏰ *Reminder Time:* ${settings.reminderTime}\n`;
+  message += `🕐 *Wish Time:* ${settings.wishTime}\n`;
+  message += `📅 *Reminder Days:* ${settings.reminderDays.join(', ')} days before\n\n`;
+  
+  message += `👥 *Configured Groups:* ${settings.reminderGroups.length}\n`;
+  message += `👑 *Authorized Admins:* ${settings.adminNumbers.length}\n\n`;
+  
+  message += `🔧 *Change Settings:*\n`;
+  message += `• *reminders on/off* - Toggle reminders\n`;
+  message += `• *wishes on/off* - Toggle auto wishes\n`;
+  message += `• *remindertime HH:MM* - Set reminder time\n`;
+  message += `• *wishtime HH:MM* - Set wish time\n`;
+  message += `• *reminderdays 7,3,1* - Set reminder days\n`;
+  message += `• *groupreminders on/off* - Toggle group reminders\n`;
+  message += `• *privatereminders on/off* - Toggle private reminders\n`;
+  message += `• *addadmin @user* - Add birthday admin\n`;
+  message += `• *removeadmin @user* - Remove birthday admin`;
+  
+  await reply(message);
+}
+
+// Settings helper functions
+async function toggleReminders(reply, value, context) {
+  if (!value) {
+    await reply(`⚠️ Please specify: *on* or *off*\n\nExample: *${context.config.PREFIX}birthday settings reminders on*`);
+    return;
+  }
+  
+  const enable = value.toLowerCase() === 'on';
+  birthdaySettings.enableReminders = enable;
+  await saveSettings();
+  
+  if (birthdayScheduler) {
+    birthdayScheduler.restart();
+  }
+  
+  await reply(`✅ Birthday reminders ${enable ? 'enabled' : 'disabled'} successfully!`);
+}
+
+async function toggleWishes(reply, value, context) {
+  if (!value) {
+    await reply(`⚠️ Please specify: *on* or *off*\n\nExample: *${context.config.PREFIX}birthday settings wishes on*`);
+    return;
+  }
+  
+  const enable = value.toLowerCase() === 'on';
+  birthdaySettings.enableAutoWishes = enable;
+  await saveSettings();
+  
+  if (birthdayScheduler) {
+    birthdayScheduler.restart();
+  }
+  
+  await reply(`✅ Auto birthday wishes ${enable ? 'enabled' : 'disabled'} successfully!`);
+}
+
+async function setReminderTime(reply, value, context) {
+  if (!value) {
+    await reply(`⚠️ Please specify time in HH:MM format\n\nExample: *${context.config.PREFIX}birthday settings remindertime 09:00*`);
+    return;
+  }
+  
+  const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+  if (!timeRegex.test(value)) {
+    await reply('⚠️ Invalid time format. Please use HH:MM (24-hour format)\n\nExample: 09:00, 14:30, 23:45');
+    return;
+  }
+  
+  birthdaySettings.reminderTime = value;
+  await saveSettings();
+  
+  if (birthdayScheduler) {
+    birthdayScheduler.restart();
+  }
+  
+  await reply(`✅ Reminder time set to *${value}* successfully!`);
+}
+
+async function setWishTime(reply, value, context) {
+  if (!value) {
+    await reply(`⚠️ Please specify time in HH:MM format\n\nExample: *${context.config.PREFIX}birthday settings wishtime 00:01*`);
+    return;
+  }
+  
+  const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+  if (!timeRegex.test(value)) {
+    await reply('⚠️ Invalid time format. Please use HH:MM (24-hour format)\n\nExample: 00:01, 12:00, 23:59');
+    return;
+  }
+  
+  birthdaySettings.wishTime = value;
+  await saveSettings();
+  
+  if (birthdayScheduler) {
+    birthdayScheduler.restart();
+  }
+  
+  await reply(`✅ Birthday wish time set to *${value}* successfully!`);
+}
+
+async function setReminderDays(reply, value, context) {
+  if (!value) {
+    await reply(`⚠️ Please specify days separated by commas\n\nExample: *${context.config.PREFIX}birthday settings reminderdays 7,3,1*`);
+    return;
+  }
+  
+  const daysStr = value.split(',').map(d => d.trim());
+  const days = [];
+  
+  for (const dayStr of daysStr) {
+    const day = parseInt(dayStr);
+    if (isNaN(day) || day < 1 || day > 365) {
+      await reply(`⚠️ Invalid day: *${dayStr}*. Days must be between 1 and 365.`);
+      return;
+    }
+    days.push(day);
+  }
+  
+  // Sort days in descending order
+  days.sort((a, b) => b - a);
+  
+  birthdaySettings.reminderDays = days;
+  await saveSettings();
+  
+  if (birthdayScheduler) {
+    birthdayScheduler.restart();
+  }
+  
+  await reply(`✅ Reminder days set to *${days.join(', ')}* days before birthday!`);
+}
+
+async function toggleGroupReminders(reply, value, context) {
+  if (!value) {
+    await reply(`⚠️ Please specify: *on* or *off*\n\nExample: *${context.config.PREFIX}birthday settings groupreminders on*`);
+    return;
+  }
+  
+  const enable = value.toLowerCase() === 'on';
+  birthdaySettings.enableGroupReminders = enable;
+  await saveSettings();
+  
+  await reply(`✅ Group reminders ${enable ? 'enabled' : 'disabled'} successfully!`);
+}
+
+async function togglePrivateReminders(reply, value, context) {
+  if (!value) {
+    await reply(`⚠️ Please specify: *on* or *off*\n\nExample: *${context.config.PREFIX}birthday settings privatereminders on*`);
+    return;
+  }
+  
+  const enable = value.toLowerCase() === 'on';
+  birthdaySettings.enablePrivateReminders = enable;
+  await saveSettings();
+  
+  await reply(`✅ Private reminders ${enable ? 'enabled' : 'disabled'} successfully!`);
+}
+
+async function addAdmin(reply, value, context) {
+  if (!value) {
+    await reply(`⚠️ Please mention a user to add as admin\n\nExample: *${context.config.PREFIX}birthday settings addadmin @user*`);
+    return;
+  }
+  
+  // Extract phone number from mention or direct input
+  let phoneNumber = value.replace('@', '').replace(/\s+/g, '');
+  if (!phoneNumber.includes('@s.whatsapp.net')) {
+    phoneNumber += '@s.whatsapp.net';
+  }
+  
+  if (birthdaySettings.adminNumbers.includes(phoneNumber)) {
+    await reply('⚠️ User is already a birthday admin.');
+    return;
+  }
+  
+  birthdaySettings.adminNumbers.push(phoneNumber);
+  await saveSettings();
+  
+  await reply(`✅ Added ${phoneNumber.split('@')[0]} as birthday admin!`);
+}
+
+async function removeAdmin(reply, value, context) {
+  if (!value) {
+    await reply(`⚠️ Please mention a user to remove from admins\n\nExample: *${context.config.PREFIX}birthday settings removeadmin @user*`);
+    return;
+  }
+  
+  // Extract phone number from mention or direct input
+  let phoneNumber = value.replace('@', '').replace(/\s+/g, '');
+  if (!phoneNumber.includes('@s.whatsapp.net')) {
+    phoneNumber += '@s.whatsapp.net';
+  }
+  
+  const index = birthdaySettings.adminNumbers.indexOf(phoneNumber);
+  if (index === -1) {
+    await reply('⚠️ User is not a birthday admin.');
+    return;
+  }
+  
+  birthdaySettings.adminNumbers.splice(index, 1);
+  await saveSettings();
+  
+  await reply(`✅ Removed ${phoneNumber.split('@')[0]} from birthday admins!`);
+}
+
+async function reloadSettings(reply, context) {
+  try {
+    await loadSettings();
+    
+    if (birthdayScheduler) {
+      birthdayScheduler.restart();
+    }
+    
+    await reply('✅ Birthday settings reloaded successfully!');
+  } catch (error) {
+    console.error('Error reloading settings:', error);
+    await reply('❌ Error reloading settings. Check logs for details.');
+  }
+}
+
+// Handle test command (admin only)
+async function handleTest(context, args) {
+  const { reply, senderId, sock } = context;
+  
+  if (!isAuthorized(senderId)) {
+    await reply('🚫 Only admins can run birthday tests.');
+    return;
+  }
+  
+  if (args.length === 0) {
+    await reply(`🧪 *BIRTHDAY TEST COMMANDS*\n\n` +
+               `• *wish* - Test birthday wish message\n` +
+               `• *reminder* - Test reminder message\n` +
+               `• *scheduler* - Test scheduler status\n` +
+               `• *today* - Force check today's birthdays\n` +
+               `• *cleanup* - Test cleanup function\n\n` +
+               `Usage: *${context.config.PREFIX}birthday test [command]*`);
+    return;
+  }
+  
+  const testType = args[0].toLowerCase();
+  
+  switch (testType) {
+    case 'wish':
+      await testWish(reply);
+      break;
+    case 'reminder':
+      await testReminder(reply);
+      break;
+    case 'scheduler':
+      await testScheduler(reply);
+      break;
+    case 'today':
+      await testTodayBirthdays(reply, sock);
+      break;
+    case 'cleanup':
+      await testCleanup(reply);
+      break;
+    default:
+      await reply(`❓ Unknown test: *${testType}*\n\nUse *${context.config.PREFIX}birthday test* to see available tests.`);
+  }
+}
+
+// Test functions
+async function testWish(reply) {
+  const testPerson = {
+    name: 'Test User',
+    userId: '1234567890@s.whatsapp.net',
+    birthday: {
+      age: 25,
+      displayDate: 'January 1',
+      monthName: 'January',
+      day: 1,
+      month: 1
+    }
+  };
+  
+  const wishMessage = getBirthdayWishMessage(testPerson);
+  
+  await reply(`🧪 *BIRTHDAY WISH TEST*\n\n${wishMessage}`);
+}
+
+async function testReminder(reply) {
+  const testPerson = {
+    name: 'Test User',
+    birthday: {
+      age: 25,
+      displayDate: 'January 1',
+      monthName: 'January',
+      day: 1,
+      month: 1
+    }
+  };
+  
+  const reminderMessage = getReminderMessage(testPerson, 3);
+  
+  await reply(`🧪 *BIRTHDAY REMINDER TEST*\n\n${reminderMessage}`);
+}
+
+async function testScheduler(reply) {
+  const status = birthdayScheduler ? 
+    (birthdayScheduler.running ? '✅ Running' : '❌ Stopped') : 
+    '❌ Not initialized';
+  
+  const now = moment.tz('Africa/Lagos');
+  
+  await reply(`🧪 *SCHEDULER STATUS TEST*\n\n` +
+             `Status: ${status}\n` +
+             `Current Time: ${now.format('YYYY-MM-DD HH:mm:ss')}\n` +
+             `Wish Time: ${birthdaySettings.wishTime}\n` +
+             `Reminder Time: ${birthdaySettings.reminderTime}\n` +
+             `Intervals: ${birthdayScheduler ? birthdayScheduler.intervals.length : 0}`);
+}
+
+async function testTodayBirthdays(reply, sock) {
+  await reply('🧪 *Testing today\'s birthdays...*');
+  
+  try {
+    await sendBirthdayWishes(sock);
+    await reply('✅ Birthday wish test completed. Check logs for details.');
+  } catch (error) {
+    console.error('Test birthday wishes error:', error);
+    await reply(`❌ Test failed: ${error.message}`);
+  }
+}
+
+async function testCleanup(reply) {
+  await reply('🧪 *Testing cleanup function...*');
+  
+  try {
+    await cleanupReminderRecords();
+    await reply('✅ Cleanup test completed successfully!');
+  } catch (error) {
+    console.error('Test cleanup error:', error);
+    await reply(`❌ Cleanup test failed: ${error.message}`);
+  }
+}
+
+// Handle groups command (admin only)
+async function handleGroups(context, args) {
+  const { reply, senderId, m } = context;
+  
+  if (!isAuthorized(senderId)) {
+    await reply('🚫 Only admins can manage birthday groups.');
+    return;
+  }
+  
+  if (args.length === 0) {
+    await showGroups(reply, context);
+    return;
+  }
+  
+  const action = args[0].toLowerCase();
+  
+  switch (action) {
+    case 'add':
+      await addGroup(reply, m, context);
+      break;
+    case 'remove':
+      await removeGroup(reply, args[1], context);
+      break;
+    case 'list':
+      await showGroups(reply, context);
+      break;
+    case 'clear':
+      await clearGroups(reply, context);
+      break;
+    default:
+      await reply(`❓ Unknown group action: *${action}*\n\nUse *${context.config.PREFIX}birthday groups* to see available actions.`);
+  }
+}
+
+// Group management functions
+async function showGroups(reply, context) {
+  const groupCount = birthdaySettings.reminderGroups.length;
+  
+  let message = `👥 *BIRTHDAY REMINDER GROUPS* 👥\n\n`;
+  
+  if (groupCount === 0) {
+    message += `📝 No groups configured for birthday reminders.\n\n`;
+  } else {
+    message += `📊 Total Groups: ${groupCount}\n\n`;
+    
+    birthdaySettings.reminderGroups.forEach((groupId, index) => {
+      const shortId = groupId.split('@')[0];
+      message += `${index + 1}. ${shortId}\n`;
+    });
+    
+    message += '\n';
+  }
+  
+  message += `🔧 *Group Management:*\n`;
+  message += `• *add* - Add current group\n`;
+  message += `• *remove [groupId]* - Remove specific group\n`;
+  message += `• *list* - Show all groups\n`;
+  message += `• *clear* - Remove all groups\n\n`;
+  message += `💡 Use this command in a group to add it for birthday reminders.`;
+  
+  await reply(message);
+}
+
+async function addGroup(reply, message, context) {
+  const groupId = message.key.remoteJid;
+  
+  if (!groupId.includes('@g.us')) {
+    await reply('⚠️ This command can only be used in groups.');
+    return;
+  }
+  
+  if (birthdaySettings.reminderGroups.includes(groupId)) {
+    await reply('⚠️ This group is already configured for birthday reminders.');
+    return;
+  }
+  
+  birthdaySettings.reminderGroups.push(groupId);
+  await saveSettings();
+  
+  const shortId = groupId.split('@')[0];
+  await reply(`✅ Group *${shortId}* added for birthday reminders!\n\n🎂 This group will now receive birthday wishes and reminders.`);
+}
+
+async function removeGroup(reply, groupIdArg, context) {
+  if (!groupIdArg) {
+    await reply(`⚠️ Please specify a group ID\n\nExample: *${context.config.PREFIX}birthday groups remove 1234567890*`);
+    return;
+  }
+  
+  // Find group by partial ID
+  const targetGroup = birthdaySettings.reminderGroups.find(id => 
+    id.includes(groupIdArg) || id.split('@')[0] === groupIdArg
+  );
+  
+  if (!targetGroup) {
+    await reply(`⚠️ Group not found: *${groupIdArg}*\n\nUse *${context.config.PREFIX}birthday groups list* to see configured groups.`);
+    return;
+  }
+  
+  const index = birthdaySettings.reminderGroups.indexOf(targetGroup);
+  birthdaySettings.reminderGroups.splice(index, 1);
+  await saveSettings();
+  
+  const shortId = targetGroup.split('@')[0];
+  await reply(`✅ Group *${shortId}* removed from birthday reminders!`);
+}
+
+async function clearGroups(reply, context) {
+  const groupCount = birthdaySettings.reminderGroups.length;
+  
+  if (groupCount === 0) {
+    await reply('📝 No groups are currently configured for birthday reminders.');
+    return;
+  }
+  
+  birthdaySettings.reminderGroups = [];
+  await saveSettings();
+  
+  await reply(`✅ Cleared all ${groupCount} group(s) from birthday reminders!`);
+}
+
+// Export functions for external use
+export { 
+  getAllBirthdays, 
+  getBirthdayData,
+  getTodaysBirthdays,
+  getUpcomingBirthdays,
+  birthdaySettings,
+  scheduledBirthdayWishes,
+  scheduledBirthdayReminders,
+  scheduledCleanup
+};
