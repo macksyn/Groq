@@ -81,22 +81,6 @@ const commands = {
       }
     }
   },
-  // ...other command handlers should follow the same pattern...
-};
-
-// Plugin entrypoint for PluginManager
-export default {
-  info,
-  commands,
-  async onLoad() {
-    // Load settings from DB on startup
-    this.settings = await loadSettings();
-  },
-  async onSave() {
-    // Save settings to DB
-    await saveSettings(this.settings || {});
-  }
-};
 
   stats: {
     name: 'stats',
@@ -401,8 +385,7 @@ export default {
 };
 
 // --- Main Handler ---
-
-export default async function ownerHandler(m, sock, config, bot) {
+async function ownerHandler(m, sock, config, bot) {
   if (!m.body || !m.body.startsWith(config.PREFIX)) return;
 
   const args = m.body.slice(config.PREFIX.length).trim().split(' ');
@@ -466,3 +449,17 @@ export default async function ownerHandler(m, sock, config, bot) {
     await m.reply(`❌ An error occurred while executing the command: ${error.message}`);
   }
 }
+
+// Plugin entrypoint for PluginManager
+export default {
+  info,
+  handler: ownerHandler,
+  async onLoad() {
+    // Load settings from DB on startup
+    this.settings = await loadSettings();
+  },
+  async onSave() {
+    // Save settings to DB
+    await saveSettings(this.settings || {});
+  }
+};
