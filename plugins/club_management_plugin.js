@@ -19,12 +19,6 @@ function isRateLimited(userId, command) {
   return false;
 }
 
-// Basic sender verification (example: check sender format)
-function isValidSender(sender) {
-  // Accept only WhatsApp-like IDs (e.g., 2348012345678@s.whatsapp.net)
-  return typeof sender === 'string' && /^\d{8,15}@s\.whatsapp\.net$/.test(sender);
-}
-
 // Plugin info and metadata
 export const info = {
   name: 'Club Management',
@@ -506,12 +500,6 @@ export default async function ClubManagement(m, sock, config, bot) {
   
   const subCommand = args[1]?.toLowerCase();
   const userId = m.sender;
-  
-  // Sender authentication
-  if (!isValidSender(userId)) {
-    await sock.sendMessage(m.from, { text: '❌ Authentication failed: Invalid sender ID.' });
-    return;
-  }
 
   // Rate limiting
   if (isRateLimited(userId, subCommand)) {
@@ -625,8 +613,8 @@ async function handleClubRegister(m, sock, args, userId) {
       return;
     }
     
-    // Check if user has enough money (registration fee: 100,000)
-    const registrationFee = 1000000; // Increased
+    // Check if user has enough money (registration fee: 1,0000,000)
+    const registrationFee = 10000000; // Increased
     const userBalance = await PluginHelpers.getBalance(userId);
     
     if (userBalance.wallet < registrationFee) {
@@ -1073,8 +1061,8 @@ async function handleClubHire(m, sock, args, userId) {
       }
       // Generate random staff name
       const names = {
-        dj: ['DJ Mike', 'DJ Sarah', 'DJ Alex', 'DJ Luna', 'DJ Storm'],
-        bartender: ['Carlos', 'Maria', 'Tony', 'Lisa', 'Jake'],
+        dj: ['DJ Neptune', 'DJ cuppy', 'DJ Spinall', 'DJ Big N', 'DJ Xclusive'],
+        bartender: ['Angella', 'Maria', 'Jay', 'Lisa', 'Sandra'],
         bouncer: ['Big Joe', 'Marcus', 'Steel', 'Bruno', 'Tank'],
         cleaner: ['Rosa', 'Ahmed', 'Grace', 'Pedro', 'Kim'],
         stripper: ['Diamond', 'Cherry', 'Angel', 'Raven', 'Candy'],
