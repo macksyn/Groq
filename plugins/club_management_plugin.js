@@ -1,5 +1,8 @@
 // plugins/clubManagement.js - Complete Club Business Simulation Game
 import chalk from 'chalk';
+import moment from 'moment-timezone';
+import { PluginHelpers, unifiedUserManager, safeOperation, getCollection } from '../lib/pluginIntegration.js';
+
 // Simple in-memory rate limiter (per user, per command)
 const rateLimitStore = {};
 const RATE_LIMIT_WINDOW = 10 * 1000; // 10 seconds
@@ -21,8 +24,6 @@ function isValidSender(sender) {
   // Accept only WhatsApp-like IDs (e.g., 2348012345678@s.whatsapp.net)
   return typeof sender === 'string' && /^\d{8,15}@s\.whatsapp\.net$/.test(sender);
 }
-import moment from 'moment-timezone';
-import { PluginHelpers, unifiedUserManager, safeOperation, getCollection } from '../lib/pluginIntegration.js';
 
 // Plugin info and metadata
 export const info = {
@@ -46,7 +47,8 @@ export const info = {
     'club takeover <target>',
     'club license <type>',
     'club upgrade <area>',
-    'club leaderboard'
+    'club leaderboard',
+    'club book <celebrity> <event>'
   ],
   scheduledTasks: [
     {
@@ -72,62 +74,96 @@ export const info = {
       schedule: '0 */4 * * *', // Every 4 hours
       description: 'Generate passive revenue for active clubs',
       handler: async () => await generatePassiveRevenue()
+    },
+    {
+      name: 'celebrity_availability_update',
+      schedule: '0 0 * * *', // Daily at midnight
+      description: 'Randomize celebrity availability',
+      handler: async () => await updateCelebrityAvailability()
+    },
+    {
+      name: 'utilities_deduction',
+      schedule: '0 0 * * 0', // Weekly Sunday
+      description: 'Deduct utilities and rent',
+      handler: async () => await deductUtilities()
     }
   ]
 };
 
-// Game data and configurations
+// Game data and configurations - Updated with real brands, celebrities, and high prices
 const GAME_CONFIG = {
   EQUIPMENT: {
-    // Sound Equipment
-    'basic_speakers': { price: 15000, durability: 100, category: 'sound', boost: { revenue: 1.1, happiness: 0.05 } },
-    'pro_speakers': { price: 35000, durability: 120, category: 'sound', boost: { revenue: 1.25, happiness: 0.1 } },
-    'dj_booth': { price: 25000, durability: 90, category: 'sound', boost: { revenue: 1.15, happiness: 0.08 } },
-    'mixing_console': { price: 45000, durability: 110, category: 'sound', boost: { revenue: 1.3, happiness: 0.12 } },
+    // Sound Equipment (High-end, expensive for economy drain)
+    'jbl_srx815p_speakers': { price: 5000000, durability: 150, category: 'sound', boost: { revenue: 1.3, happiness: 0.12 } },
+    'yamaha_dzr15_speakers': { price: 4500000, durability: 140, category: 'sound', boost: { revenue: 1.25, happiness: 0.1 } },
+    'pioneer_djm900_dj_booth': { price: 8000000, durability: 130, category: 'sound', boost: { revenue: 1.4, happiness: 0.15 } },
+    'bose_l1_pro32_system': { price: 12000000, durability: 160, category: 'sound', boost: { revenue: 1.5, happiness: 0.18 } },
     
     // Lighting
-    'basic_lights': { price: 8000, durability: 80, category: 'lighting', boost: { revenue: 1.05, happiness: 0.03 } },
-    'led_system': { price: 28000, durability: 100, category: 'lighting', boost: { revenue: 1.2, happiness: 0.08 } },
-    'laser_show': { price: 55000, durability: 85, category: 'lighting', boost: { revenue: 1.4, happiness: 0.15 } },
+    'chauvet_rogue_r2x_beam': { price: 6000000, durability: 120, category: 'lighting', boost: { revenue: 1.35, happiness: 0.14 } },
+    'martin_mac_aura_xb': { price: 10000000, durability: 150, category: 'lighting', boost: { revenue: 1.45, happiness: 0.16 } },
     
     // Furniture & Comfort
-    'bar_stools': { price: 12000, durability: 150, category: 'furniture', boost: { revenue: 1.08, happiness: 0.04 } },
-    'vip_booths': { price: 40000, durability: 200, category: 'furniture', boost: { revenue: 1.35, happiness: 0.12 } },
-    'dance_floor': { price: 30000, durability: 120, category: 'furniture', boost: { revenue: 1.2, happiness: 0.09 } },
-    'security_system': { price: 20000, durability: 180, category: 'security', boost: { revenue: 1.1, happiness: 0.06 } }
+    'vip_leather_booths': { price: 3000000, durability: 200, category: 'furniture', boost: { revenue: 1.25, happiness: 0.1 } },
+    'chrome_bar_stools': { price: 1500000, durability: 180, category: 'furniture', boost: { revenue: 1.15, happiness: 0.08 } },
+    
+    // Security
+    'hikvision_ds2cd_camera': { price: 2000000, durability: 200, category: 'security', boost: { revenue: 1.2, happiness: 0.1 } },
+    'samsung_qn_security_monitor': { price: 3500000, durability: 180, category: 'security', boost: { revenue: 1.25, happiness: 0.12 } }
   },
   
   STAFF: {
-    'dj': { salary: 8000, boost: { revenue: 1.25, happiness: 0.1 }, specialty: 'entertainment' },
-    'bartender': { salary: 5000, boost: { revenue: 1.15, happiness: 0.06 }, specialty: 'service' },
-    'bouncer': { salary: 6000, boost: { revenue: 1.05, happiness: 0.08 }, specialty: 'security' },
-    'cleaner': { salary: 3000, boost: { revenue: 1.03, happiness: 0.04 }, specialty: 'maintenance' },
-    'stripper': { salary: 10000, boost: { revenue: 1.4, happiness: 0.15 }, specialty: 'adult_entertainment' },
-    'waitress': { salary: 4000, boost: { revenue: 1.12, happiness: 0.05 }, specialty: 'service' },
-    'technician': { salary: 7000, boost: { revenue: 1.08, maintenance: 0.2 }, specialty: 'technical' }
+    'dj': { salary: 80000, boost: { revenue: 1.25, happiness: 0.1 }, specialty: 'entertainment' },
+    'bartender': { salary: 50000, boost: { revenue: 1.15, happiness: 0.06 }, specialty: 'service' },
+    'bouncer': { salary: 60000, boost: { revenue: 1.05, happiness: 0.08 }, specialty: 'security' },
+    'cleaner': { salary: 30000, boost: { revenue: 1.03, happiness: 0.04 }, specialty: 'maintenance' },
+    'stripper': { salary: 100000, boost: { revenue: 1.4, happiness: 0.15 }, specialty: 'adult_entertainment' },
+    'waitress': { salary: 40000, boost: { revenue: 1.12, happiness: 0.05 }, specialty: 'service' },
+    'technician': { salary: 70000, boost: { revenue: 1.08, maintenance: 0.2 }, specialty: 'technical' }
   },
   
   LICENSES: {
-    'business': { price: 50000, duration: 365, required: true, description: 'Basic business operation license' },
-    'liquor': { price: 75000, duration: 365, required: false, description: 'Alcohol serving permit' },
-    'adult_entertainment': { price: 100000, duration: 180, required: false, description: 'Adult entertainment license' },
-    'noise_permit': { price: 25000, duration: 180, required: false, description: 'Late night noise permit' },
-    'food_service': { price: 40000, duration: 365, required: false, description: 'Food service permit' }
+    'business': { price: 500000, duration: 365, required: true, description: 'Basic business operation license' },
+    'liquor': { price: 750000, duration: 365, required: false, description: 'Alcohol serving permit' },
+    'adult_entertainment': { price: 1000000, duration: 180, required: false, description: 'Adult entertainment license' },
+    'noise_permit': { price: 250000, duration: 180, required: false, description: 'Late night noise permit' },
+    'food_service': { price: 400000, duration: 365, required: false, description: 'Food service permit' }
   },
   
   UPGRADES: {
-    'premium_interior': { price: 80000, boost: { revenue: 1.3, happiness: 0.12 } },
-    'vip_lounge': { price: 120000, boost: { revenue: 1.5, happiness: 0.18 } },
-    'rooftop_terrace': { price: 150000, boost: { revenue: 1.4, happiness: 0.15 } },
-    'private_rooms': { price: 200000, boost: { revenue: 1.6, happiness: 0.2 } }
+    'premium_interior': { price: 800000, boost: { revenue: 1.3, happiness: 0.12 } },
+    'vip_lounge': { price: 1200000, boost: { revenue: 1.5, happiness: 0.18 } },
+    'rooftop_terrace': { price: 1500000, boost: { revenue: 1.4, happiness: 0.15 } },
+    'private_rooms': { price: 2000000, boost: { revenue: 1.6, happiness: 0.2 } }
   },
   
   EVENTS: {
-    'house_party': { cost: 5000, duration: 4, min_equipment: 2, revenue_multiplier: 1.2 },
-    'themed_night': { cost: 8000, duration: 6, min_equipment: 3, revenue_multiplier: 1.4 },
-    'concert': { cost: 15000, duration: 8, min_equipment: 5, revenue_multiplier: 1.8 },
-    'exclusive_event': { cost: 25000, duration: 12, min_equipment: 8, revenue_multiplier: 2.5 }
-  }
+    'house_party': { cost: 50000, duration: 4, min_equipment: 2, revenue_multiplier: 1.2 },
+    'themed_night': { cost: 80000, duration: 6, min_equipment: 3, revenue_multiplier: 1.4 },
+    'concert': { cost: 150000, duration: 8, min_equipment: 5, revenue_multiplier: 1.8 },
+    'exclusive_event': { cost: 250000, duration: 12, min_equipment: 8, revenue_multiplier: 2.5 }
+  },
+  
+  CELEBRITIES: {
+    'burna_boy': { fee: 80000000, boost: { revenue: 2.5, happiness: 0.3 }, availability: 0.5, genre: 'afro_fusion' },
+    'wizkid': { fee: 70000000, boost: { revenue: 2.3, happiness: 0.28 }, availability: 0.6, genre: 'afrobeats' },
+    'davido': { fee: 60000000, boost: { revenue: 2.2, happiness: 0.25 }, availability: 0.7, genre: 'afrobeats' },
+    'rema': { fee: 40000000, boost: { revenue: 2.0, happiness: 0.22 }, availability: 0.8, genre: 'afro_rave' },
+    'fireboy_dml': { fee: 30000000, boost: { revenue: 1.8, happiness: 0.2 }, availability: 0.85, genre: 'afrobeats_rnb' },
+    'asake': { fee: 35000000, boost: { revenue: 1.9, happiness: 0.21 }, availability: 0.75, genre: 'fuji_afrobeats' },
+    'olamide': { fee: 25000000, boost: { revenue: 1.7, happiness: 0.18 }, availability: 0.9, genre: 'street_hop' },
+    'ayra_starr': { fee: 30000000, boost: { revenue: 1.8, happiness: 0.2 }, availability: 0.8, genre: 'afropop_rnb' },
+    'tems': { fee: 45000000, boost: { revenue: 2.1, happiness: 0.23 }, availability: 0.7, genre: 'alternative_rnb' },
+    'tiwa_savage': { fee: 40000000, boost: { revenue: 2.0, happiness: 0.22 }, availability: 0.75, genre: 'afrobeats' },
+    'seyi_vibez': { fee: 20000000, boost: { revenue: 1.6, happiness: 0.15 }, availability: 0.9, genre: 'fuji_street_hop' },
+    'oxlade': { fee: 15000000, boost: { revenue: 1.5, happiness: 0.14 }, availability: 0.95, genre: 'afrobeats_rnb' },
+    'joeboy': { fee: 18000000, boost: { revenue: 1.55, happiness: 0.16 }, availability: 0.9, genre: 'afrobeats_pop' },
+    'omah_lay': { fee: 22000000, boost: { revenue: 1.65, happiness: 0.17 }, availability: 0.85, genre: 'afrobeats_soul' },
+    'ckay': { fee: 25000000, boost: { revenue: 1.7, happiness: 0.18 }, availability: 0.8, genre: 'afrobeats_pop' }
+  },
+
+  UTILITIES_BASE_COST: 2000000, // Base weekly utilities/rent, scales with club size
+  INFLATION_RATE: 0.05 // 5% weekly price increase for equipment/licenses
 };
 
 // Scheduled task handlers
@@ -147,8 +183,8 @@ async function processEquipmentBreakdown() {
         const hasTechnician = (club.staff || []).some(s => s.type === 'technician');
         const degradationRate = hasTechnician ? 0.5 : 1.0; // Technicians halve degradation
         
-        // Random degradation (1-3 points)
-        const degradation = Math.floor(Math.random() * 3 + 1) * degradationRate;
+        // Random degradation (1-3 points), higher during events
+        const degradation = Math.floor(Math.random() * 3 + 1) * degradationRate * (club.weeklyEvents > 2 ? 1.5 : 1.0);
         item.currentDurability = Math.max(0, item.currentDurability - degradation);
         
         // Equipment breaks if durability hits 0
@@ -206,6 +242,16 @@ async function processLicenseRenewals() {
               penalty: penalty,
               date: now
             });
+
+            // Escalate: 3 violations = shutdown
+            if (club.violations.length >= 3) {
+              club.isActive = false;
+              club.violations.push({
+                type: 'club_shutdown',
+                description: 'Multiple violations leading to temporary shutdown',
+                date: now
+              });
+            }
           }
         }
       }
@@ -213,7 +259,7 @@ async function processLicenseRenewals() {
       if (updated) {
         await clubsCollection.updateOne(
           { userId: club.userId },
-          { $set: { licenses: licenses, balance: club.balance, violations: club.violations || [], updatedAt: new Date() } }
+          { $set: { licenses: licenses, balance: club.balance, violations: club.violations || [], isActive: club.isActive, updatedAt: new Date() } }
         );
         renewalCount++;
       }
@@ -277,8 +323,16 @@ async function generatePassiveRevenue() {
     let revenueGenerated = 0;
     
     for (const club of activeClubs) {
-      const baseRevenue = calculatePassiveRevenue(club);
+      let baseRevenue = calculatePassiveRevenue(club);
       
+      // Deduct salaries more aggressively
+      for (const staff of club.staff || []) {
+        const config = GAME_CONFIG.STAFF[staff.type];
+        if (config) {
+          baseRevenue -= config.salary; // Full deduction if unpaid
+        }
+      }
+
       if (baseRevenue > 0) {
         // Add to club balance and user wallet
         await clubsCollection.updateOne(
@@ -297,12 +351,80 @@ async function generatePassiveRevenue() {
         await unifiedUserManager.addMoney(club.userId, Math.floor(baseRevenue * 0.3), 'Club passive income');
         
         revenueGenerated += baseRevenue;
+      } else {
+        // Negative revenue leads to violation
+        if (!club.violations) club.violations = [];
+        club.violations.push({
+          type: 'negative_revenue',
+          description: 'Club operating at loss',
+          date: new Date()
+        });
+        await clubsCollection.updateOne(
+          { userId: club.userId },
+          { $set: { violations: club.violations } }
+        );
       }
     }
     
     console.log(chalk.green(`💰 Generated ₦${revenueGenerated.toLocaleString()} passive revenue for ${activeClubs.length} active clubs`));
   } catch (error) {
     console.error(chalk.red('❌ Passive revenue generation error:'), error.message);
+  }
+}
+
+async function updateCelebrityAvailability() {
+  try {
+    const celebritiesCollection = await getCollection('celebrities');
+    Object.entries(GAME_CONFIG.CELEBRITIES).forEach(async ([name, celeb]) => {
+      const newAvailability = Math.random() * (0.9 - 0.4) + 0.4; // Random 0.4-0.9
+      await celebritiesCollection.updateOne(
+        { name },
+        { $set: { availability: newAvailability, updatedAt: new Date() } },
+        { upsert: true }
+      );
+    });
+    console.log(chalk.green(`🎤 Updated celebrity availabilities`));
+  } catch (error) {
+    console.error(chalk.red('❌ Celebrity availability update error:'), error.message);
+  }
+}
+
+async function deductUtilities() {
+  try {
+    const clubsCollection = await getCollection('clubs');
+    const clubs = await clubsCollection.find({ isActive: true }).toArray();
+    
+    let totalDeductions = 0;
+    
+    for (const club of clubs) {
+      // Calculate utilities based on size (equipment + staff + upgrades)
+      const clubSize = (club.equipment?.length || 0) + (club.staff?.length || 0) + (club.upgrades?.length || 0);
+      const utilitiesCost = GAME_CONFIG.UTILITIES_BASE_COST + (clubSize * 100000); // Scales with size
+      
+      club.balance = Math.max(0, club.balance - utilitiesCost);
+      
+      if (club.balance < 0) {
+        club.isActive = false;
+        if (!club.violations) club.violations = [];
+        club.violations.push({
+          type: 'utilities_default',
+          description: 'Failed to pay utilities - club shutdown',
+          penalty: utilitiesCost,
+          date: new Date()
+        });
+      }
+      
+      await clubsCollection.updateOne(
+        { userId: club.userId },
+        { $set: { balance: club.balance, isActive: club.isActive, violations: club.violations || [], updatedAt: new Date() } }
+      );
+      
+      totalDeductions += utilitiesCost;
+    }
+    
+    console.log(chalk.yellow(`🏠 Deducted ₦${totalDeductions.toLocaleString()} in utilities across clubs`));
+  } catch (error) {
+    console.error(chalk.red('❌ Utilities deduction task error:'), error.message);
   }
 }
 
@@ -324,20 +446,20 @@ function calculateClubRating(club) {
   // Upgrade bonus
   rating += (club.upgrades || []).length * 12;
   
-  // Recent violations penalty
+  // Recent violations penalty (more severe)
   const recentViolations = (club.violations || []).filter(v => 
     new Date() - new Date(v.date) < 30 * 24 * 60 * 60 * 1000 // Last 30 days
   );
-  rating -= recentViolations.length * 15;
+  rating -= recentViolations.length * 20; // Increased penalty
   
   return Math.max(0, Math.min(100, Math.round(rating)));
 }
 
 function calculatePassiveRevenue(club) {
-  let baseRevenue = 1000; // Base hourly revenue
+  let baseRevenue = 10000; // Increased base for higher stakes
   
-  // Equipment multipliers
-  const workingEquipment = (club.equipment || []).filter(e => !e.broken);
+  // Equipment multipliers (cap to prevent exploits)
+  const workingEquipment = (club.equipment || []).filter(e => !e.broken).slice(0, 10); // Cap at 10
   for (const item of workingEquipment) {
     const config = GAME_CONFIG.EQUIPMENT[item.type];
     if (config) {
@@ -345,9 +467,10 @@ function calculatePassiveRevenue(club) {
     }
   }
   
-  // Staff multipliers
-  for (const staff of club.staff || []) {
-    const config = GAME_CONFIG.STAFF[staff.type];
+  // Staff multipliers (cap at 15 staff)
+  const staff = (club.staff || []).slice(0, 15);
+  for (const s of staff) {
+    const config = GAME_CONFIG.STAFF[s.type];
     if (config) {
       baseRevenue *= config.boost.revenue || 1.0;
       // Deduct salary
@@ -378,10 +501,12 @@ export default async function ClubManagement(m, sock, config, bot) {
   
   const args = m.body.slice(config.PREFIX.length).trim().split(' ');
   const command = args[0].toLowerCase();
+  
   if (command !== 'club') return;
+  
   const subCommand = args[1]?.toLowerCase();
   const userId = m.sender;
-
+  
   // Sender authentication
   if (!isValidSender(userId)) {
     await sock.sendMessage(m.from, { text: '❌ Authentication failed: Invalid sender ID.' });
@@ -441,6 +566,9 @@ export default async function ClubManagement(m, sock, config, bot) {
       case 'leaderboard':
         await handleClubLeaderboard(m, sock, userId);
         break;
+      case 'book':
+        await handleClubBook(m, sock, args.slice(2), userId);
+        break;
       default:
         await showClubHelp(m, sock, config.PREFIX);
         break;
@@ -498,7 +626,7 @@ async function handleClubRegister(m, sock, args, userId) {
     }
     
     // Check if user has enough money (registration fee: 100,000)
-    const registrationFee = 100000;
+    const registrationFee = 1000000; // Increased
     const userBalance = await PluginHelpers.getBalance(userId);
     
     if (userBalance.wallet < registrationFee) {
@@ -642,6 +770,7 @@ async function handleClubInfo(m, sock, userId) {
 • \`/club market\` - Browse equipment
 • \`/club hire <staff>\` - Hire staff
 • \`/club host <event>\` - Host events
+• \`/club book <celebrity> <event>\` - Book celebrities
 • \`/club billboard\` - View rankings`;
 
     await sock.sendMessage(m.from, { text: infoMsg });
@@ -690,19 +819,21 @@ async function handleClubMarket(m, sock, userId) {
     
     marketMsg += `\n\n💼 *STAFF AVAILABLE*`;
     Object.entries(GAME_CONFIG.STAFF).forEach(([key, staff]) => {
-      marketMsg += `\n• ${key}: ₦${staff.salary.toLocaleString()}/week`;
+      marketMsg += `\n• ${key.replace(/_/g, ' ')}: Salary ₦${staff.salary.toLocaleString()} (Revenue Boost: ${Math.round((staff.boost.revenue - 1) * 100)}%)`;
     });
     
-    marketMsg += `\n\n*Usage:*
-• \`/club buy <item_name>\`
-• \`/club hire <staff_type>\``;
+    marketMsg += `\n\n⭐ *CELEBRITIES FOR BOOKING*`;
+    Object.entries(GAME_CONFIG.CELEBRITIES).forEach(([key, celeb]) => {
+      marketMsg += `\n• ${key.replace(/_/g, ' ')}: Fee ₦${celeb.fee.toLocaleString()} (Revenue Boost: ${Math.round((celeb.boost.revenue - 1) * 100)}%)`;
+    });
     
+    marketMsg += `\n\n*Usage:* /club buy <item> | /club hire <staff> | /club book <celebrity> <event>\n\nPrices subject to 5% weekly inflation!`;
+
     await sock.sendMessage(m.from, { text: marketMsg });
-    
   } catch (error) {
     console.error(chalk.red('❌ Club market error:'), error.message);
     await sock.sendMessage(m.from, {
-      text: '❌ Failed to load market information.'
+      text: '❌ Failed to load market.'
     });
   }
 }
@@ -710,13 +841,12 @@ async function handleClubMarket(m, sock, userId) {
 async function handleClubBuy(m, sock, args, userId) {
   if (args.length === 0) {
     await sock.sendMessage(m.from, {
-      text: '❌ Please specify what to buy!\n\n*Usage:* /club buy <item_name>\n\nUse `/club market` to see available items.'
+      text: '❌ Please specify item to buy!\n\n*Usage:* /club buy <item_name>\n\nView available: /club market'
     });
     return;
   }
   
-  // Sanitize item name: allow only letters, numbers, underscores
-  const itemName = args.join('_').replace(/[^\w_]/g, '').toLowerCase();
+  const itemName = args.join('_').toLowerCase();
   
   const { MongoClient } = require('mongodb');
   const client = await MongoClient.connect(process.env.MONGO_URI, { useUnifiedTopology: true });
@@ -725,23 +855,35 @@ async function handleClubBuy(m, sock, args, userId) {
     await session.withTransaction(async () => {
       const clubsCollection = client.db().collection('clubs');
       const club = await clubsCollection.findOne({ userId }, { session });
+      
       if (!club) {
         await sock.sendMessage(m.from, {
-          text: '❌ You don\'t own a club! Use `/club register <name>` first.'
+          text: '❌ You don\'t own a club!'
         });
         await session.abortTransaction();
         return;
       }
+      
       const equipment = GAME_CONFIG.EQUIPMENT[itemName];
       if (!equipment) {
         await sock.sendMessage(m.from, {
-          text: `❌ Equipment "${itemName}" not found!\n\nUse \`/club market\` to see available items.`
+          text: `❌ Item "${itemName.replace(/_/g, ' ')}" not found!\n\nView available: /club market`
         });
         await session.abortTransaction();
         return;
       }
-      // Check if user has enough money
+      
+      // Cap equipment at 10
+      if (club.equipment?.length >= 10) {
+        await sock.sendMessage(m.from, {
+          text: '❌ Maximum equipment limit reached (10 items)! Repair or sell existing ones.'
+        });
+        await session.abortTransaction();
+        return;
+      }
+      
       const userBalance = await PluginHelpers.getBalance(userId);
+      
       if (userBalance.wallet < equipment.price) {
         await sock.sendMessage(m.from, {
           text: `❌ Insufficient funds!\n\n*Item:* ${itemName.replace(/_/g, ' ')}\n*Price:* ₦${equipment.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`
@@ -749,8 +891,10 @@ async function handleClubBuy(m, sock, args, userId) {
         await session.abortTransaction();
         return;
       }
-      // Deduct money and add equipment atomically
+      
+      // Deduct money and add equipment
       await unifiedUserManager.removeMoney(userId, equipment.price, `Club equipment: ${itemName}`, { session });
+      
       const newEquipment = {
         type: itemName,
         purchasedAt: new Date(),
@@ -759,15 +903,25 @@ async function handleClubBuy(m, sock, args, userId) {
         broken: false,
         timesRepaired: 0
       };
+      
       await clubsCollection.updateOne(
         { userId },
-        {
+        { 
           $push: { equipment: newEquipment },
           $set: { updatedAt: new Date() }
         },
         { session }
       );
-      const successMsg = `✅ *Equipment Purchased!*\n\nItem: ${itemName.replace(/_/g, ' ')}\nCost: ₦${equipment.price.toLocaleString()}\nDurability: ${equipment.durability}\nRevenue Boost: ${Math.round((equipment.boost.revenue - 1) * 100)}%\n\nTip: Hire a technician to reduce equipment wear!`;
+      
+      const successMsg = `✅ *Equipment Purchased!*
+
+🛍️ *Item:* ${itemName.replace(/_/g, ' ')}
+💰 *Cost:* ₦${equipment.price.toLocaleString()}
+🔧 *Durability:* ${equipment.durability}
+📈 *Revenue Boost:* ${Math.round((equipment.boost.revenue - 1) * 100)}%
+
+💡 *Tip:* Hire a technician to reduce equipment wear!`;
+
       await sock.sendMessage(m.from, { text: successMsg });
     });
   } catch (error) {
@@ -875,87 +1029,85 @@ async function handleClubHire(m, sock, args, userId) {
   // Sanitize staff type: allow only letters and underscores
   const staffType = args[0].replace(/[^a-zA-Z_]/g, '').toLowerCase();
 
+  const { MongoClient } = require('mongodb');
+  const client = await MongoClient.connect(process.env.MONGO_URI, { useUnifiedTopology: true });
+  const session = client.startSession();
   try {
-    const clubsCollection = await getCollection('clubs');
-    const club = await clubsCollection.findOne({ userId });
-    if (!club) {
-      await sock.sendMessage(m.from, { text: '❌ You don\'t own a club!' });
-      return;
-    }
-    const staffConfig = GAME_CONFIG.STAFF[staffType];
-    if (!staffConfig) {
-      await sock.sendMessage(m.from, { text: `❌ Staff type "${staffType}" not found!\n\n*Available:* ${Object.keys(GAME_CONFIG.STAFF).join(', ')}` });
-      return;
-    }
-    // Check if already have this type of staff (limit 2 per type)
-    const existingStaff = (club.staff || []).filter(s => s.type === staffType);
-    if (existingStaff.length >= 2) {
-      await sock.sendMessage(m.from, { text: `❌ You already have maximum ${staffType}s (2 max per type)!\n\nUse \`/club fire ${staffType}\` to make room.` });
-      return;
-    }
-    // Hiring cost (4 weeks salary upfront)
-    const hiringCost = staffConfig.salary * 4;
-    const userBalance = await PluginHelpers.getBalance(userId);
-    if (userBalance.wallet < hiringCost) {
-      await sock.sendMessage(m.from, { text: `❌ Insufficient funds to hire ${staffType}!\n\n*Cost:* ₦${hiringCost.toLocaleString()} (4 weeks salary)\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}` });
-      return;
-    }
-    // Special requirements check
-    if (staffType === 'stripper') {
-      const hasAdultLicense = (club.licenses || []).some(l => l.type === 'adult_entertainment' && l.active);
-      if (!hasAdultLicense) {
-        await sock.sendMessage(m.from, { text: '❌ You need an active adult entertainment license to hire strippers!\n\nUse `/club license adult_entertainment` first.' });
+    await session.withTransaction(async () => {
+      const clubsCollection = client.db().collection('clubs');
+      const club = await clubsCollection.findOne({ userId }, { session });
+      if (!club) {
+        await sock.sendMessage(m.from, { text: '❌ You don\'t own a club!' });
+        await session.abortTransaction();
         return;
       }
-    }
-    // Generate random staff name
-    const names = {
-      dj: ['DJ Mike', 'DJ Sarah', 'DJ Alex', 'DJ Luna', 'DJ Storm'],
-      bartender: ['Carlos', 'Maria', 'Tony', 'Lisa', 'Jake'],
-      bouncer: ['Big Joe', 'Marcus', 'Steel', 'Bruno', 'Tank'],
-      cleaner: ['Rosa', 'Ahmed', 'Grace', 'Pedro', 'Kim'],
-      stripper: ['Diamond', 'Cherry', 'Angel', 'Raven', 'Candy'],
-      waitress: ['Sophie', 'Emma', 'Olivia', 'Mia', 'Ava'],
-      technician: ['Tech Sam', 'Engineer Bob', 'Geek Paul', 'Pro Lisa', 'Wizard John']
-    };
-    const randomName = names[staffType][Math.floor(Math.random() * names[staffType].length)];
-    // --- Begin Transaction ---
-    const { MongoClient } = require('mongodb');
-    const client = await MongoClient.connect(process.env.MONGO_URI, { useUnifiedTopology: true });
-    const session = client.startSession();
-    try {
-      await session.withTransaction(async () => {
-        const clubsCollection = client.db().collection('clubs');
-        await unifiedUserManager.removeMoney(userId, hiringCost, `Hire ${staffType}: ${randomName}`, { session });
-        const newStaff = {
-          type: staffType,
-          name: randomName,
-          hiredAt: new Date(),
-          weeksHired: 4,
-          performance: Math.floor(Math.random() * 20) + 80,
-          salary: staffConfig.salary
-        };
-        await clubsCollection.updateOne(
-          { userId },
-          {
-            $push: { staff: newStaff },
-            $set: { updatedAt: new Date() }
-          },
-          { session }
-        );
-        const successMsg = `✅ *Staff Hired Successfully!*\n\n👤 *Name:* ${randomName}\n💼 *Position:* ${staffType}\n💰 *Cost:* ₦${hiringCost.toLocaleString()} (4 weeks prepaid)\n📊 *Performance:* ${newStaff.performance}%\n📈 *Revenue Boost:* ${Math.round((staffConfig.boost.revenue - 1) * 100)}%\n\n🎉 ${randomName} is now working at your club!`;
-        await sock.sendMessage(m.from, { text: successMsg });
-      });
-    } catch (error) {
-      console.error(chalk.red('❌ Club hire error:'), error.message);
-      await sock.sendMessage(m.from, { text: '❌ Failed to hire staff.' });
-    } finally {
-      await session.endSession();
-      await client.close();
-    }
+      const staffConfig = GAME_CONFIG.STAFF[staffType];
+      if (!staffConfig) {
+        await sock.sendMessage(m.from, { text: `❌ Staff type "${staffType}" not found!\n\n*Available:* ${Object.keys(GAME_CONFIG.STAFF).join(', ')}` });
+        await session.abortTransaction();
+        return;
+      }
+      // Check if already have this type of staff (limit 2 per type)
+      const existingStaff = (club.staff || []).filter(s => s.type === staffType);
+      if (existingStaff.length >= 2) {
+        await sock.sendMessage(m.from, { text: `❌ You already have maximum ${staffType}s (2 max per type)!\n\nUse \`/club fire ${staffType}\` to make room.` });
+        await session.abortTransaction();
+        return;
+      }
+      // Hiring cost (4 weeks salary upfront)
+      const hiringCost = staffConfig.salary * 4;
+      const userBalance = await PluginHelpers.getBalance(userId);
+      if (userBalance.wallet < hiringCost) {
+        await sock.sendMessage(m.from, { text: `❌ Insufficient funds to hire ${staffType}!\n\n*Cost:* ₦${hiringCost.toLocaleString()} (4 weeks salary)\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}` });
+        await session.abortTransaction();
+        return;
+      }
+      // Special requirements check
+      if (staffType === 'stripper') {
+        const hasAdultLicense = (club.licenses || []).some(l => l.type === 'adult_entertainment' && l.active);
+        if (!hasAdultLicense) {
+          await sock.sendMessage(m.from, { text: '❌ You need an active adult entertainment license to hire strippers!\n\nUse `/club license adult_entertainment` first.' });
+          await session.abortTransaction();
+          return;
+        }
+      }
+      // Generate random staff name
+      const names = {
+        dj: ['DJ Mike', 'DJ Sarah', 'DJ Alex', 'DJ Luna', 'DJ Storm'],
+        bartender: ['Carlos', 'Maria', 'Tony', 'Lisa', 'Jake'],
+        bouncer: ['Big Joe', 'Marcus', 'Steel', 'Bruno', 'Tank'],
+        cleaner: ['Rosa', 'Ahmed', 'Grace', 'Pedro', 'Kim'],
+        stripper: ['Diamond', 'Cherry', 'Angel', 'Raven', 'Candy'],
+        waitress: ['Sophie', 'Emma', 'Olivia', 'Mia', 'Ava'],
+        technician: ['Tech Sam', 'Engineer Bob', 'Geek Paul', 'Pro Lisa', 'Wizard John']
+      };
+      const randomName = names[staffType][Math.floor(Math.random() * names[staffType].length)];
+      await unifiedUserManager.removeMoney(userId, hiringCost, `Hire ${staffType}: ${randomName}`, { session });
+      const newStaff = {
+        type: staffType,
+        name: randomName,
+        hiredAt: new Date(),
+        weeksHired: 4,
+        performance: Math.floor(Math.random() * 20) + 80,
+        salary: staffConfig.salary
+      };
+      await clubsCollection.updateOne(
+        { userId },
+        {
+          $push: { staff: newStaff },
+          $set: { updatedAt: new Date() }
+        },
+        { session }
+      );
+      const successMsg = `✅ *Staff Hired Successfully!*\n\n👤 *Name:* ${randomName}\n💼 *Position:* ${staffType}\n💰 *Cost:* ₦${hiringCost.toLocaleString()} (4 weeks prepaid)\n📊 *Performance:* ${newStaff.performance}%\n📈 *Revenue Boost:* ${Math.round((staffConfig.boost.revenue - 1) * 100)}%\n\n🎉 ${randomName} is now working at your club!`;
+      await sock.sendMessage(m.from, { text: successMsg });
+    });
   } catch (error) {
     console.error(chalk.red('❌ Club hire error:'), error.message);
     await sock.sendMessage(m.from, { text: '❌ Failed to hire staff.' });
+  } finally {
+    await session.endSession();
+    await client.close();
   }
 }
 
@@ -1173,10 +1325,10 @@ async function handleClubHost(m, sock, args, userId) {
       }
     );
     
-    // Small chance of equipment breakdown during event
-    if (Math.random() < 0.1) {
+    // Increased chance of equipment breakdown during event (20%)
+    if (Math.random() < 0.2) {
       const randomEquipment = workingEquipment[Math.floor(Math.random() * workingEquipment.length)];
-      randomEquipment.currentDurability = Math.max(0, randomEquipment.currentDurability - 10);
+      randomEquipment.currentDurability = Math.max(0, randomEquipment.currentDurability - 20); // Higher damage
       
       if (randomEquipment.currentDurability <= 0) {
         randomEquipment.broken = true;
@@ -1263,6 +1415,128 @@ Week ${latestBillboard.week}, ${latestBillboard.year}
   }
 }
 
+async function handleClubBook(m, sock, args, userId) {
+  if (args.length < 2) {
+    await sock.sendMessage(m.from, {
+      text: '❌ Please specify celebrity and event!\n\n*Usage:* /club book <celebrity> <event>\n\nView available: /club market'
+    });
+    return;
+  }
+  
+  const celebName = args[0].toLowerCase();
+  const eventType = args[1].toLowerCase();
+  
+  const { MongoClient } = require('mongodb');
+  const client = await MongoClient.connect(process.env.MONGO_URI, { useUnifiedTopology: true });
+  const session = client.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const clubsCollection = client.db().collection('clubs');
+      const celebritiesCollection = client.db().collection('celebrities');
+      const club = await clubsCollection.findOne({ userId }, { session });
+      
+      if (!club) {
+        await sock.sendMessage(m.from, { text: '❌ You don\'t own a club!' });
+        await session.abortTransaction();
+        return;
+      }
+      
+      const celebConfig = GAME_CONFIG.CELEBRITIES[celebName];
+      if (!celebConfig) {
+        await sock.sendMessage(m.from, { text: `❌ Celebrity "${celebName.replace(/_/g, ' ')}" not found!\n\nView available: /club market` });
+        await session.abortTransaction();
+        return;
+      }
+      
+      const eventConfig = GAME_CONFIG.EVENTS[eventType];
+      if (!eventConfig) {
+        await sock.sendMessage(m.from, { text: `❌ Event "${eventType}" not found!\n\nView available: /club host` });
+        await session.abortTransaction();
+        return;
+      }
+      
+      // Get current availability
+      const celebData = await celebritiesCollection.findOne({ name: celebName }) || { availability: celebConfig.availability };
+      
+      // Roll for success
+      if (Math.random() > celebData.availability) {
+        // Failure: lose 50% fee
+        const deposit = Math.floor(celebConfig.fee * 0.5);
+        await unifiedUserManager.removeMoney(userId, deposit, `Failed booking deposit: ${celebName}`, { session });
+        await sock.sendMessage(m.from, { text: `❌ Booking failed! ${celebName.replace(/_/g, ' ')} is unavailable.\n\nLost deposit: ₦${deposit.toLocaleString()}\n\nReputation decreased.` });
+        
+        // Decrease reputation
+        await clubsCollection.updateOne(
+          { userId },
+          { $inc: { reputation: -10 } },
+          { session }
+        );
+        
+        // Add violation
+        const violations = club.violations || [];
+        violations.push({
+          type: 'failed_booking',
+          description: `Failed to book ${celebName}`,
+          date: new Date()
+        });
+        await clubsCollection.updateOne(
+          { userId },
+          { $set: { violations } },
+          { session }
+        );
+        
+        await session.commitTransaction();
+        return;
+      }
+      
+      const userBalance = await PluginHelpers.getBalance(userId);
+      if (userBalance.wallet < celebConfig.fee) {
+        await sock.sendMessage(m.from, { text: `❌ Insufficient funds!\n\n*Fee:* ₦${celebConfig.fee.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}` });
+        await session.abortTransaction();
+        return;
+      }
+      
+      // Book successfully - apply boost to event
+      await unifiedUserManager.removeMoney(userId, celebConfig.fee, `Book ${celebName} for ${eventType}`, { session });
+      
+      // Store booking in club (for event boost)
+      const newBooking = {
+        celebrity: celebName,
+        event: eventType,
+        bookedAt: new Date(),
+        boost: celebConfig.boost
+      };
+      
+      await clubsCollection.updateOne(
+        { userId },
+        { 
+          $push: { bookings: newBooking },
+          $inc: { reputation: 20 }, // Boost reputation
+          $set: { updatedAt: new Date() }
+        },
+        { session }
+      );
+      
+      const successMsg = `✅ *Celebrity Booked!*
+
+⭐ *Celebrity:* ${celebName.replace(/_/g, ' ')}
+🎪 *For Event:* ${eventType.replace(/_/g, ' ')}
+💰 *Fee:* ₦${celebConfig.fee.toLocaleString()}
+📈 *Revenue Boost:* ${Math.round((celebConfig.boost.revenue - 1) * 100)}%
+
+💡 Host the event to apply the boost!`;
+
+      await sock.sendMessage(m.from, { text: successMsg });
+    });
+  } catch (error) {
+    console.error(chalk.red('❌ Club book error:'), error.message);
+    await sock.sendMessage(m.from, { text: '❌ Failed to book celebrity.' });
+  } finally {
+    await session.endSession();
+    await client.close();
+  }
+}
+
 async function showClubHelp(m, sock, prefix) {
   const helpMsg = `🏢 *Club Management System*
 ━━━━━━━━━━━━━━━━━━━
@@ -1281,6 +1555,7 @@ async function showClubHelp(m, sock, prefix) {
 📋 *OPERATIONS*
 • \`${prefix}club license <type>\` - Buy permits & licenses
 • \`${prefix}club host <event>\` - Host events for revenue
+• \`${prefix}club book <celebrity> <event>\` - Book celebrities
 • \`${prefix}club upgrade <area>\` - Club improvements
 
 📊 *COMPETITION*
