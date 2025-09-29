@@ -1,1411 +1,902 @@
-// plugins/mcm.js - Fresh Man Crush Monday Plugin
-import { safeOperation, unifiedUserManager, PluginHelpers } from '../lib/pluginIntegration.js';
+// plugins/mcm_plugin.js - Man Crush Monday Plugin (COMPLETE WITH RESTART RECOVERY)
+import { unifiedUserManager, getDatabase, safeOperation } from '../lib/pluginIntegration.js';
+import sharp from 'sharp';
 import moment from 'moment-timezone';
+import cron from 'node-cron';
 import chalk from 'chalk';
 
-// Plugin metadata for plugin manager recognition
+// Plugin information for your pluginManager
 export const info = {
   name: 'Man Crush Monday (MCM)',
-  version: '2.0.0',
-  author: 'Fresh Implementation',
-  description: 'Weekly Man Crush Monday contest where guys post pictures and ladies rate them from 1-10',
-  category: 'entertainment',
+  version: '2.4.0',
+  author: 'System Rewrite (Complete with Restart Recovery)',
+  description: 'Weekly Man Crush Monday contest with automated scheduling, rating system, rewards, and restart recovery.',
   commands: [
-    {
-      name: 'mcm',
-      aliases: ['mancrush'],
-      description: 'Main MCM command hub'
-    },
-    {
-      name: 'mcmstats',
-      description: 'View MCM statistics'
-    },
-    {
-      name: 'mcmleader',
-      description: 'View MCM leaderboard'
-    }
+    { name: 'mcm', aliases: ['mancrush'], description: 'Access MCM system commands and settings' },
+    { name: 'mcmstats', aliases: ['mcmhistory'], description: 'View MCM statistics and history' },
   ]
 };
 
-// Collections used by MCM
+// --- CONFIGURATION & SETUP ---
+
 const COLLECTIONS = {
-  SETTINGS: 'mcm_settings',
-  SESSIONS: 'mcm_sessions', 
-  PARTICIPANTS: 'mcm_participants',
-  RATINGS: 'mcm_ratings',
-  RECORDS: 'mcm_records'
+  MCM_RECORDS: 'mcm_records',
+  MCM_SETTINGS: 'mcm_settings',
+  MCM_SESSIONS: 'mcm_sessions',
+  MCM_PARTICIPANTS: 'mcm_participants',
+  MCM_RATINGS: 'mcm_ratings'
 };
 
-// Default settings
-const DEFAULT_SETTINGS = {
-  enabled: true,
-  autoStartEnabled: true,
-  startTime: '20:00', // 8 PM
-  endTime: '22:00',   // 10 PM
+const defaultSettings = {
+  startTime: '20:00',
+  endTime: '22:00',
   winnerReward: 12000,
   participationReward: 1000,
   enableParticipationReward: true,
   reminderTimes: ['10:00', '16:00'],
-  adminNumbers: [2348089782988],
+  autoStartEnabled: true,
+  adminNumbers: ['2348089782988'],
   groupJids: [],
-  tagAllMembers: false,
-  allowSelfRating: false,
-  validRatingRange: { min: 1, max: 10 },
+  tagAllMembers: true,
   maxPhotosPerUser: 1,
-  timezone: 'Africa/Lagos'
+  validRatingRange: { min: 1, max: 10 },
+  allowSelfRating: false
 };
 
-let mcmSettings = { ...DEFAULT_SETTINGS };
+// Moved to the top to prevent initialization errors
+let mcmSettings = { ...defaultSettings };
+
+let cronJobs = {
+  reminders: [],
+  startSession: null,
+  endSession: null
+};
+
+// Flag to ensure initialization only runs once.
 let isInitialized = false;
 
-// Store sock instance for scheduled tasks
-let sockInstance = null;
-
-// Nigeria timezone helper
 moment.tz.setDefault('Africa/Lagos');
 
-// =======================================================================
-// CORE UTILITY FUNCTIONS
-// =======================================================================
+// --- UTILITY & DATABASE FUNCTIONS ---
 
-function getCurrentDate() {
-  return moment().tz('Africa/Lagos').format('YYYY-MM-DD');
-}
+function getNigeriaTime() { return moment.tz('Africa/Lagos'); }
+function getCurrentDate() { return getNigeriaTime().format('DD-MM-YYYY'); }
+function isMonday() { return getNigeriaTime().format('dddd').toLowerCase() === 'monday'; }
 
-function isMonday() {
-  return moment().tz('Africa/Lagos').day() === 1;
-}
-
-function getNigeriaTime() {
-  return moment().tz('Africa/Lagos');
+async function initDatabase() {
+  try {
+    await safeOperation(async (db) => {
+      await Promise.all([
+        db.collection(COLLECTIONS.MCM_SESSIONS).createIndex({ date: 1, groupJid: 1 }, { unique: true }),
+        db.collection(COLLECTIONS.MCM_PARTICIPANTS).createIndex({ sessionId: 1, userId: 1 }),
+        db.collection(COLLECTIONS.MCM_RATINGS).createIndex({ sessionId: 1, raterId: 1, participantId: 1 }),
+        db.collection(COLLECTIONS.MCM_RECORDS).createIndex({ date: -1 })
+      ]);
+    });
+    console.log(chalk.green('✅ MCM MongoDB indexes created successfully'));
+  } catch (error) {
+    console.error(chalk.red('❌ MCM MongoDB initialization failed:'), error);
+    throw error;
+  }
 }
 
 async function loadSettings() {
   try {
-    const settings = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.SETTINGS).findOne({ type: 'mcm_config' })
-    );
-    
-    if (settings) {
-      mcmSettings = { ...DEFAULT_SETTINGS, ...settings.data };
-      // Ensure admin numbers are strings
-      mcmSettings.adminNumbers = mcmSettings.adminNumbers.map(num => String(num));
-    }
-    
-    console.log(chalk.green('✅ MCM settings loaded'));
+    await safeOperation(async (db) => {
+      const settings = await db.collection(COLLECTIONS.MCM_SETTINGS).findOne({ type: 'mcm_config' });
+      if (settings) {
+        mcmSettings = { ...defaultSettings, ...settings.data };
+      }
+    });
   } catch (error) {
-    console.error(chalk.red('❌ Error loading MCM settings:'), error);
+    console.error('Error loading MCM settings:', error);
   }
 }
 
 async function saveSettings() {
   try {
-    await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.SETTINGS).replaceOne(
+    await safeOperation(async (db) => {
+      await db.collection(COLLECTIONS.MCM_SETTINGS).replaceOne(
         { type: 'mcm_config' },
         { type: 'mcm_config', data: mcmSettings, updatedAt: new Date() },
         { upsert: true }
-      )
-    );
-    console.log(chalk.green('✅ MCM settings saved'));
+      );
+    });
   } catch (error) {
-    console.error(chalk.red('❌ Error saving MCM settings:'), error);
+    console.error('Error saving MCM settings:', error);
   }
 }
 
-// =======================================================================
-// AUTHORIZATION SYSTEM
-// =======================================================================
+// Database operation with retry mechanism
+async function safeOperationWithRetry(operation, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await safeOperation(operation);
+    } catch (error) {
+      console.error(`Database operation failed (attempt ${i + 1}):`, error);
+      if (i === retries - 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
+    }
+  }
+}
 
-async function isAuthorized(sock, from, sender) {
+// --- AUTHORIZATION ---
+
+async function isAuthorized(sock, from, sender, config) {
   try {
-    const senderPhone = sender.split('@')[0];
+    // Check admin numbers first
+    const senderNumber = sender.split('@')[0];
+    if (mcmSettings.adminNumbers.includes(senderNumber)) return true;
+    if (senderNumber === config.OWNER_NUMBER) return true;
     
-    // Check configured admin numbers
-    if (mcmSettings.adminNumbers.includes(senderPhone)) {
-      console.log(chalk.cyan(`✅ MCM Admin: ${senderPhone}`));
-      return true;
-    }
+    // Only check group admin if it's a group
+    if (!from.endsWith('@g.us')) return false;
+
+    // ✅ FIX: Add timeout and error handling for group metadata
+    const timeout = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Timeout')), 5000)
+    );
     
-    // Check owner from environment
-    const ownerNumber = process.env.OWNER_NUMBER || '';
-    if (senderPhone === ownerNumber) {
-      console.log(chalk.cyan(`✅ MCM Owner: ${senderPhone}`));
-      return true;
-    }
+    const groupMetadata = await Promise.race([
+      sock.groupMetadata(from),
+      timeout
+    ]);
     
-    // Check group admins
-    if (from.endsWith('@g.us')) {
-      const groupMetadata = await sock.groupMetadata(from);
-      const groupAdmins = groupMetadata.participants
-        .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
-        .map(p => p.id);
-      
-      if (groupAdmins.includes(sender)) {
-        console.log(chalk.cyan(`✅ MCM Group Admin: ${senderPhone}`));
-        return true;
-      }
-    }
+    const groupAdmins = groupMetadata.participants
+      .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
+      .map(p => p.id);
     
-    return false;
+    return groupAdmins.includes(sender);
   } catch (error) {
-    console.error(chalk.red('❌ Authorization check failed:'), error);
-    return false;
+    console.error('Error checking authorization:', error);
+    // ✅ FIX: Default to checking if user is in admin numbers only
+    return mcmSettings.adminNumbers.includes(sender.split('@')[0]) || 
+           sender.split('@')[0] === config.OWNER_NUMBER;
   }
 }
 
-// =======================================================================
-// SESSION MANAGEMENT
-// =======================================================================
-
-async function createSession(groupJid) {
-  try {
-    const today = getCurrentDate();
-    const sessionId = `mcm_${today}_${groupJid}`;
-    
-    const existingSession = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.SESSIONS).findOne({ date: today, groupJid, status: 'active' })
-    );
-    
-    if (existingSession) {
-      return existingSession;
-    }
-    
-    const sessionData = {
-      sessionId,
-      date: today,
-      groupJid,
-      status: 'active',
-      startedAt: new Date(),
-      endedAt: null,
-      participants: [],
-      totalRatings: 0,
-      winnerDeclared: false
-    };
-    
-    await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.SESSIONS).insertOne(sessionData)
-    );
-    
-    console.log(chalk.green(`✅ MCM session created: ${sessionId}`));
-    return sessionData;
-  } catch (error) {
-    console.error(chalk.red('❌ Error creating session:'), error);
-    throw error;
-  }
-}
+// --- SESSION & RATING LOGIC ---
 
 async function getCurrentSession(groupJid) {
   try {
     const today = getCurrentDate();
-    return await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.SESSIONS).findOne({ 
-        date: today, 
-        groupJid, 
-        status: 'active' 
+    return await safeOperation(db =>
+      db.collection(COLLECTIONS.MCM_SESSIONS).findOne({
+        date: today,
+        groupJid: groupJid,
+        status: 'active'
       })
     );
   } catch (error) {
-    console.error(chalk.red('❌ Error getting current session:'), error);
+    console.error('Error getting current session:', error);
     return null;
   }
 }
 
-async function endSession(sock, groupJid) {
+// ✅ FIXED: Rating extraction function - simplified and more reliable
+function extractRating(text) {
+  if (!text) return null;
+  
+  // ✅ FIX: Handle 10 emojis properly (check this first)
+  if (text.includes('1️⃣0️⃣')) {
+    return 10;
+  }
+  
+  // ✅ Check for single digit emojis
+  const emojiToNumber = { 
+    '1️⃣': 1, '2️⃣': 2, '3️⃣': 3, '4️⃣': 4, '5️⃣': 5, 
+    '6️⃣': 6, '7️⃣': 7, '8️⃣': 8, '9️⃣': 9, '🔟': 10 
+  };
+  
+  for (const [emoji, number] of Object.entries(emojiToNumber)) {
+    if (text.includes(emoji)) return number;
+  }
+  
+  // ✅ FIX: Better regex for number extraction (handles 10 properly)
+  const numbers = text.match(/\b(10|[1-9])\b/g);
+  if (!numbers) return null;
+  
+  const rating = parseInt(numbers[0]);
+  return (rating >= mcmSettings.validRatingRange.min && rating <= mcmSettings.validRatingRange.max) ? rating : null;
+}
+
+// --- SESSION RECOVERY FUNCTIONS ---
+
+async function checkAndRecoverActiveSessions(sock) {
   try {
-    const session = await getCurrentSession(groupJid);
-    if (!session) return false;
-    
-    // Get all participants sorted by total rating
-    const participants = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.PARTICIPANTS)
-        .find({ sessionId: session.sessionId })
-        .sort({ totalRating: -1, ratingCount: -1 })
-        .toArray()
+    if (!isMonday()) return;
+
+    const today = getCurrentDate();
+    const activeSessions = await safeOperation(db => 
+      db.collection(COLLECTIONS.MCM_SESSIONS).find({
+        date: today,
+        status: 'active'
+      }).toArray()
     );
-    
-    if (participants.length === 0) {
-      await sock.sendMessage(groupJid, { 
-        text: `🕺 *MCM SESSION ENDED* 🕺\n\n❌ No participants today!\n\nBetter luck next Monday! 💪` 
-      });
+
+    if (activeSessions.length === 0) {
+      console.log(chalk.yellow('No active MCM sessions found to recover'));
+      return;
+    }
+
+    const currentTime = getNigeriaTime();
+    const endTime = moment.tz(`${today} ${mcmSettings.endTime}`, 'DD-MM-YYYY HH:mm', 'Africa/Lagos');
+
+    for (const session of activeSessions) {
+      console.log(chalk.blue(`🔄 Recovering MCM session: ${session.sessionId}`));
       
-      await safeOperation(async (db) => 
-        await db.collection(COLLECTIONS.SESSIONS).updateOne(
-          { sessionId: session.sessionId },
-          { $set: { status: 'ended', endedAt: new Date(), winnerDeclared: true } }
-        )
-      );
-      return true;
-    }
-    
-    // Award participation rewards
-    if (mcmSettings.enableParticipationReward) {
-      for (const participant of participants) {
-        await unifiedUserManager.addMoney(
-          participant.userId, 
-          mcmSettings.participationReward, 
-          'MCM participation'
-        );
+      // Check if session should have already ended
+      if (currentTime.isAfter(endTime)) {
+        console.log(chalk.orange(`⏰ Session ${session.sessionId} should have ended, ending now...`));
+        await endMCMSession(sock, session.groupJid);
+        continue;
       }
+
+      // Notify groups that bot is back online
+      try {
+        await sock.sendMessage(session.groupJid, {
+          text: `🤖 *Bot Reconnected!* 🤖\n\n` +
+                `✅ Your MCM session is still ACTIVE!\n` +
+                `⏰ Ends at: ${mcmSettings.endTime}\n` +
+                `📸 Keep submitting photos and ratings!\n\n` +
+                `*Session recovered successfully* 🔄`
+        });
+        
+        console.log(chalk.green(`✅ Notified group ${session.groupJid} of session recovery`));
+      } catch (error) {
+        console.error(`Error notifying group ${session.groupJid}:`, error);
+      }
+
+      // Set up dynamic end job for this specific session
+      setupDynamicEndJob(sock, session);
     }
-    
-    // Determine winners
-    const maxRating = participants[0].totalRating;
-    const winners = participants.filter(p => p.totalRating === maxRating && p.ratingCount > 0);
-    
-    // Announce results
-    await announceResults(sock, groupJid, participants, winners, session);
-    
-    // Save to records
-    await saveSessionRecord(session, participants, winners);
-    
-    // Mark session as ended
-    await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.SESSIONS).updateOne(
-        { sessionId: session.sessionId },
-        { $set: { status: 'ended', endedAt: new Date(), winnerDeclared: true } }
-      )
-    );
-    
-    return true;
+
+    console.log(chalk.green(`✅ Recovered ${activeSessions.length} active MCM sessions`));
   } catch (error) {
-    console.error(chalk.red('❌ Error ending session:'), error);
-    return false;
+    console.error(chalk.red('❌ Error recovering active sessions:'), error);
   }
 }
 
-// =======================================================================
-// PHOTO AND RATING HANDLERS
-// =======================================================================
+function setupDynamicEndJob(sock, session) {
+  try {
+    const today = getCurrentDate();
+    const endTime = moment.tz(`${today} ${mcmSettings.endTime}`, 'DD-MM-YYYY HH:mm', 'Africa/Lagos');
+    const currentTime = getNigeriaTime();
+    
+    if (currentTime.isAfter(endTime)) {
+      // Should have already ended
+      endMCMSession(sock, session.groupJid).catch(console.error);
+      return;
+    }
 
+    const timeUntilEnd = endTime.diff(currentTime);
+    console.log(chalk.blue(`⏰ Setting dynamic end job for session ${session.sessionId} in ${moment.duration(timeUntilEnd).humanize()}`));
+
+    setTimeout(() => {
+      endMCMSession(sock, session.groupJid).catch(error => {
+        console.error(`Error in dynamic end job for ${session.groupJid}:`, error);
+      });
+    }, timeUntilEnd);
+
+  } catch (error) {
+    console.error('Error setting up dynamic end job:', error);
+  }
+}
+
+// --- MESSAGE HANDLERS ---
+
+// ✅ FIXED: Photo submission validation
 async function handlePhotoSubmission(m, sock) {
   try {
-    // Only on Mondays during MCM hours
-    if (!isMonday()) return false;
+    const groupJid = m.from;
+    const senderId = m.sender;
     
-    const now = getNigeriaTime();
-    const startTime = moment(`${getCurrentDate()} ${mcmSettings.startTime}`, 'YYYY-MM-DD HH:mm');
-    const endTime = moment(`${getCurrentDate()} ${mcmSettings.endTime}`, 'YYYY-MM-DD HH:mm');
-    
-    if (now.isBefore(startTime) || now.isSameOrAfter(endTime)) return false;
-    
-    const senderId = m.key.participant || m.key.remoteJid;
-    const groupJid = m.key.remoteJid;
-    
-    // Must be group message with image
-    if (!groupJid.endsWith('@g.us') || !m.message.imageMessage) return false;
-    
+    if (!isMonday() || !groupJid.endsWith('@g.us')) {
+      console.log(`Photo submission rejected: isMonday=${isMonday()}, isGroup=${groupJid.endsWith('@g.us')}`);
+      return false;
+    }
+
     const session = await getCurrentSession(groupJid);
-    if (!session) return false;
+    if (!session) {
+      console.log('No active MCM session found');
+      return false;
+    }
+
+    // ✅ FIX: The original logic was flawed - it required BOTH reply AND keyword
+    const quotedMessageId = m.message?.imageMessage?.contextInfo?.stanzaId;
+    const isReplyingToStartMessage = session.startMessageKey && quotedMessageId === session.startMessageKey.id;
     
-    // Check for existing submission
-    const existing = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.PARTICIPANTS).findOne({
-        sessionId: session.sessionId,
-        userId: senderId
+    const caption = m.message?.imageMessage?.caption || '';
+    const keywords = ['mcm', 'rate', 'crush', 'man', 'monday'];
+    const hasKeyword = keywords.some(keyword => new RegExp(`\\b${keyword}\\b`, 'i').test(caption));
+
+    // ✅ Should be OR condition, not AND
+    if (!isReplyingToStartMessage && !hasKeyword) {
+      console.log(`Photo not qualifying: reply=${isReplyingToStartMessage}, hasKeyword=${hasKeyword}, caption="${caption}"`);
+      return false;
+    }
+
+    const existingParticipant = await safeOperation(db =>
+      db.collection(COLLECTIONS.MCM_PARTICIPANTS).findOne({ 
+        sessionId: session.sessionId, 
+        userId: senderId 
       })
     );
-    
-    if (existing) {
-      await sock.sendMessage(groupJid, { react: { text: '❌', key: m.key } });
-      await sock.sendMessage(groupJid, {
-        text: `🚫 @${senderId.split('@')[0]} - You already submitted your photo! Only one entry per person.`,
-        mentions: [senderId]
-      }, { quoted: m });
+
+    if (existingParticipant) {
+      await m.react('❌');
+      await sock.sendMessage(groupJid, { 
+        text: `🚫 @${senderId.split('@')[0]} - You already submitted your photo!`, 
+        mentions: [senderId] 
+      });
       return true;
     }
-    
-    // Create participant record
-    const participantData = {
-      sessionId: session.sessionId,
-      userId: senderId,
-      userPhone: senderId.split('@')[0],
-      messageKey: m.key,
-      photoSubmittedAt: new Date(),
-      totalRating: 0,
-      averageRating: 0,
-      ratingCount: 0
+
+    const participantData = { 
+      sessionId: session.sessionId, 
+      userId: senderId, 
+      userPhone: senderId.split('@')[0], 
+      messageKey: m.key, 
+      photoSubmittedAt: new Date(), 
+      totalRating: 0, 
+      averageRating: 0, 
+      ratingCount: 0 
     };
-    
-    await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.PARTICIPANTS).insertOne(participantData)
-    );
-    
-    // Update session
-    await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.SESSIONS).updateOne(
-        { sessionId: session.sessionId },
+
+    // ✅ FIX: Better error handling for database operations
+    const insertResult = await safeOperation(async (db) => {
+      const result = await db.collection(COLLECTIONS.MCM_PARTICIPANTS).insertOne(participantData);
+      await db.collection(COLLECTIONS.MCM_SESSIONS).updateOne(
+        { sessionId: session.sessionId }, 
         { $push: { participants: senderId } }
-      )
-    );
-    
-    // Initialize user in unified system
-    await unifiedUserManager.initUser(senderId);
-    
-    // React with success
-    await sock.sendMessage(groupJid, { react: { text: '✅', key: m.key } });
+      );
+      return result;
+    });
+
+    if (!insertResult) {
+      console.error('Failed to insert participant data');
+      await m.react('❌');
+      return false;
+    }
+
+    await m.react('✅');
+    if (mcmSettings.enableParticipationReward) {
+      try {
+        await unifiedUserManager.addMoney(senderId, mcmSettings.participationReward, 'MCM participation');
+      } catch (error) {
+        console.error('Failed to add participation reward:', error);
+        // Don't fail the submission just because reward failed
+      }
+    }
     
     console.log(chalk.green(`📸 MCM photo submitted by ${senderId.split('@')[0]}`));
     return true;
-    
+
   } catch (error) {
-    console.error(chalk.red('❌ Error handling photo:'), error);
+    console.error('Error handling photo submission:', error);
+    await m.react('❌');
     return false;
   }
 }
 
+// ✅ FIXED: Rating submission handler
 async function handleRatingSubmission(m, sock) {
   try {
-    // Only on Mondays during MCM hours
-    if (!isMonday()) return false;
+    const groupJid = m.from;
+    const raterId = m.sender;
     
-    const now = getNigeriaTime();
-    const startTime = moment(`${getCurrentDate()} ${mcmSettings.startTime}`, 'YYYY-MM-DD HH:mm');
-    const endTime = moment(`${getCurrentDate()} ${mcmSettings.endTime}`, 'YYYY-MM-DD HH:mm');
-    
-    if (now.isBefore(startTime) || now.isSameOrAfter(endTime)) return false;
-    
-    const senderId = m.key.participant || m.key.remoteJid;
-    const groupJid = m.key.remoteJid;
-    
-    // Must be group message quoting an image
-    if (!groupJid.endsWith('@g.us') || 
-        !m.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage) {
+    // ✅ Add proper validation
+    if (!m.quoted || !m.quoted.sender) {
+      console.log('No quoted message or sender found for rating');
       return false;
     }
     
-    const participantId = m.message.extendedTextMessage.contextInfo.participant;
-    if (!participantId) return false;
-    
+    const participantId = m.quoted.sender;
+
+    if (!isMonday() || !groupJid.endsWith('@g.us') || !participantId) {
+      console.log(`Rating conditions not met: isMonday=${isMonday()}, isGroup=${groupJid.endsWith('@g.us')}, hasParticipant=${!!participantId}`);
+      return false;
+    }
+
     const session = await getCurrentSession(groupJid);
-    if (!session) return false;
-    
-    // Check if participant exists
-    const participant = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.PARTICIPANTS).findOne({
-        sessionId: session.sessionId,
-        userId: participantId
+    if (!session) {
+      console.log('No active MCM session found for rating');
+      return false;
+    }
+
+    const participant = await safeOperation(db => 
+      db.collection(COLLECTIONS.MCM_PARTICIPANTS).findOne({ 
+        sessionId: session.sessionId, 
+        userId: participantId 
       })
     );
     
-    if (!participant) return false;
-    
-    // Check self-rating
-    if (!mcmSettings.allowSelfRating && senderId === participantId) {
-      await sock.sendMessage(groupJid, { react: { text: '🚫', key: m.key } });
-      await sock.sendMessage(groupJid, {
-        text: `🚫 @${senderId.split('@')[0]} - Self-rating is not allowed!`,
-        mentions: [senderId]
-      }, { quoted: m });
+    if (!participant) {
+      console.log(`Participant ${participantId.split('@')[0]} not found in current session`);
+      return false;
+    }
+
+    if (!mcmSettings.allowSelfRating && raterId === participantId) {
+      await m.react('🚫');
+      console.log(`Self-rating blocked for ${raterId.split('@')[0]}`);
       return true;
     }
-    
-    // Extract rating from message
+
     const rating = extractRating(m.body || '');
-    
     if (!rating) {
-      // Check if message looks like rating attempt
-      if (hasRatingAttempt(m.body || '')) {
-        await sock.sendMessage(groupJid, { react: { text: '❌', key: m.key } });
-        await sock.sendMessage(groupJid, {
-          text: `❌ @${senderId.split('@')[0]} - Invalid rating! Use 1-10 (e.g., "8", "🔟").`,
-          mentions: [senderId]
-        }, { quoted: m });
-        return true;
-      }
+      console.log(`No valid rating found in message: "${m.body}"`);
       return false;
     }
     
-    // Save or update rating
-    const existingRating = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.RATINGS).findOne({
-        sessionId: session.sessionId,
-        raterId: senderId,
-        participantId: participantId
-      })
-    );
-    
-    if (existingRating) {
-      await safeOperation(async (db) => 
-        await db.collection(COLLECTIONS.RATINGS).updateOne(
-          { _id: existingRating._id },
-          { $set: { rating, updatedAt: new Date() } }
-        )
+    // ✅ Add better error handling for database operations
+    const ratingResult = await safeOperation(async (db) => {
+      const result = await db.collection(COLLECTIONS.MCM_RATINGS).updateOne(
+        { sessionId: session.sessionId, raterId, participantId },
+        { 
+          $set: { 
+            rating, 
+            updatedAt: new Date() 
+          } 
+        },
+        { upsert: true }
       );
-    } else {
-      await safeOperation(async (db) => 
-        await db.collection(COLLECTIONS.RATINGS).insertOne({
-          sessionId: session.sessionId,
-          raterId: senderId,
-          raterPhone: senderId.split('@')[0],
-          participantId: participantId,
-          participantPhone: participantId.split('@')[0],
-          rating,
-          createdAt: new Date()
-        })
-      );
+      return result;
+    });
+
+    if (!ratingResult) {
+      console.error('Failed to save rating to database');
+      await m.react('❌');
+      return true;
     }
-    
-    // Update participant ratings
+
+    // ✅ Await the rating update
     await updateParticipantRatings(session.sessionId, participantId);
+    await m.react('✅');
     
-    // React with success
-    await sock.sendMessage(groupJid, { react: { text: '✅', key: m.key } });
-    
-    console.log(chalk.green(`⭐ MCM rating ${rating}/10 from ${senderId.split('@')[0]} to ${participantId.split('@')[0]}`));
+    console.log(chalk.cyan(`⭐ MCM rating ${rating} by ${raterId.split('@')[0]} to ${participantId.split('@')[0]}`));
     return true;
-    
+
   } catch (error) {
-    console.error(chalk.red('❌ Error handling rating:'), error);
+    console.error('Error handling rating submission:', error);
+    await m.react('❌');
     return false;
   }
 }
 
-function extractRating(text) {
-  // Handle special emoji combinations
-  if (text.includes('1️⃣0️⃣')) return 10;
-  
-  // Emoji to number mapping
-  const emojiMap = {
-    '🔟': 10, '9️⃣': 9, '8️⃣': 8, '7️⃣': 7, '6️⃣': 6,
-    '5️⃣': 5, '4️⃣': 4, '3️⃣': 3, '2️⃣': 2, '1️⃣': 1
-  };
-  
-  // Check for emoji ratings
-  for (const [emoji, value] of Object.entries(emojiMap)) {
-    if (text.includes(emoji)) return value;
-  }
-  
-  // Extract numbers from text
-  const numbers = text.match(/\b([1-9]|10)\b/g);
-  if (!numbers) return null;
-  
-  const rating = parseInt(numbers[numbers.length - 1]);
-  return (rating >= 1 && rating <= 10) ? rating : null;
-}
-
-function hasRatingAttempt(text) {
-  return /\b([1-9]|10)\b/.test(text) || 
-         /[🔟9️⃣8️⃣7️⃣6️⃣5️⃣4️⃣3️⃣2️⃣1️⃣]/.test(text) ||
-         text.includes('1️⃣0️⃣');
-}
-
+// ✅ FIXED: Rating update function with better error handling
 async function updateParticipantRatings(sessionId, participantId) {
   try {
-    const ratings = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.RATINGS)
+    await safeOperation(async (db) => {
+      const ratings = await db.collection(COLLECTIONS.MCM_RATINGS)
         .find({ sessionId, participantId })
-        .toArray()
-    );
-    
-    const totalRating = ratings.reduce((sum, r) => sum + r.rating, 0);
-    const ratingCount = ratings.length;
-    const averageRating = ratingCount > 0 ? totalRating / ratingCount : 0;
-    
-    await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.PARTICIPANTS).updateOne(
+        .toArray();
+      
+      const totalRating = ratings.reduce((sum, r) => sum + r.rating, 0);
+      const ratingCount = ratings.length;
+      const averageRating = ratingCount > 0 ? totalRating / ratingCount : 0;
+      
+      const updateResult = await db.collection(COLLECTIONS.MCM_PARTICIPANTS).updateOne(
         { sessionId, userId: participantId },
-        {
-          $set: {
-            totalRating,
-            averageRating: Math.round(averageRating * 100) / 100,
-            ratingCount,
-            updatedAt: new Date()
-          }
+        { 
+          $set: { 
+            totalRating, 
+            averageRating: Math.round(averageRating * 100) / 100, 
+            ratingCount, 
+            updatedAt: new Date() 
+          } 
         }
-      )
-    );
+      );
+      
+      console.log(`Updated ratings for ${participantId.split('@')[0]}: ${averageRating.toFixed(1)}/10 (${ratingCount} ratings)`);
+      return updateResult;
+    });
   } catch (error) {
-    console.error(chalk.red('❌ Error updating ratings:'), error);
+    console.error('Error updating participant ratings:', error);
+    throw error; // Re-throw so caller knows it failed
   }
 }
 
-// =======================================================================
-// ANNOUNCEMENT SYSTEM
-// =======================================================================
+// --- CORE EVENT WORKFLOW ---
 
-async function sendReminders() {
+async function startMCMSession(sock, groupJid) {
   try {
-    if (!sockInstance || !isMonday() || !mcmSettings.enabled) return;
-    
-    const now = getNigeriaTime();
-    const startTime = moment(`${getCurrentDate()} ${mcmSettings.startTime}`, 'YYYY-MM-DD HH:mm');
-    
-    if (now.isSameOrAfter(startTime)) return;
-    
-    const timeUntil = moment.duration(startTime.diff(now)).humanize();
-    const message = `🔥 *MCM COUNTDOWN!* 🔥\n\nGet ready for MAN CRUSH MONDAY in ${timeUntil}!\n\n👑 Guys: Prepare your best photos!\n👀 Ladies: Get ready to rate!\n\n💰 Winner: ₦${mcmSettings.winnerReward.toLocaleString()}\n🎉 Participation: ₦${mcmSettings.participationReward.toLocaleString()}\n\nStarting at 8:00 PM sharp! ⏰`;
-    
-    for (const groupJid of mcmSettings.groupJids) {
-      try {
-        await sockInstance.sendMessage(groupJid, { text: message });
-        console.log(chalk.cyan(`📢 Reminder sent to ${groupJid}`));
-      } catch (error) {
-        console.error(chalk.red(`❌ Failed to send reminder to ${groupJid}:`), error);
-      }
+    // Check if session already exists (restart scenario)
+    const existingSession = await getCurrentSession(groupJid);
+    if (existingSession) {
+      console.log(chalk.yellow(`Session already exists for ${groupJid}, skipping start`));
+      return;
     }
-  } catch (error) {
-    console.error(chalk.red('❌ Error sending reminders:'), error);
-  }
-}
 
-async function autoStartSessions() {
-  try {
-    if (!sockInstance || !isMonday() || !mcmSettings.enabled || !mcmSettings.autoStartEnabled) return;
-    
-    console.log(chalk.blue('🎬 Auto-starting MCM sessions...'));
-    
-    for (const groupJid of mcmSettings.groupJids) {
-      try {
-        const existing = await getCurrentSession(groupJid);
-        if (!existing) {
-          await startSession(sockInstance, groupJid);
-        }
-      } catch (error) {
-        console.error(chalk.red(`❌ Failed to auto-start ${groupJid}:`), error);
-      }
-    }
-  } catch (error) {
-    console.error(chalk.red('❌ Error in auto-start:'), error);
-  }
-}
+    const startMessage = `💪 MAN CRUSH MONDAY IS NOW LIVE! 💪\n\n` +
+         `🔴 LIVE NOW - LIVE NOW - LIVE NOW 🔴\n\n` +
+         `*HOW TO PARTICIPATE:*\n` +
+         `1. *REPLY TO THIS MESSAGE* with your best photo.\n` +
+         `*OR*\n` +
+         `2. Send a photo with a caption like "MCM", "Rate Me", or "My Crush".\n\n` +
+         `👩‍💼 *LADIES:* Rate the gentlemen from 1-10!\n\n` +
+         `⏰ Ends: ${mcmSettings.endTime}\n` +
+         `💰 Winner: ₦${mcmSettings.winnerReward.toLocaleString()}\n` +
+         `🎁 Participation: ₦${mcmSettings.participationReward.toLocaleString()}\n\n` +
+         `💪 Let the competition begin! 💪\n#MCMLive`;
 
-async function autoEndSessions() {
-  try {
-    if (!sockInstance || !isMonday() || !mcmSettings.enabled) return;
-    
-    console.log(chalk.blue('🏁 Auto-ending MCM sessions...'));
-    
-    for (const groupJid of mcmSettings.groupJids) {
-      try {
-        await endSession(sockInstance, groupJid);
-      } catch (error) {
-        console.error(chalk.red(`❌ Failed to auto-end ${groupJid}:`), error);
-      }
-    }
-  } catch (error) {
-    console.error(chalk.red('❌ Error in auto-end:'), error);
-  }
-}
+    const groupMetadata = await sock.groupMetadata(groupJid);
+    const sentMessage = await sock.sendMessage(groupJid, { 
+      text: startMessage, 
+      mentions: groupMetadata.participants.map(p => p.id) 
+    });
 
-async function startSession(sock, groupJid) {
-  try {
-    const session = await createSession(groupJid);
-    
-    const startMessage = `🚨 *MCM IS LIVE!* 🚨\n\nWelcome to MAN CRUSH MONDAY! 🕺💥\n\n🤵 *Guys:* Drop your best photo NOW!\n👩‍⚖️ *Ladies:* Rate from 1-10!\n\n⏰ Ends at 10:00 PM\n💰 Winner: ₦${mcmSettings.winnerReward.toLocaleString()}\n🎉 Participation: ₦${mcmSettings.participationReward.toLocaleString()}\n\n📋 *Rules:*\n• One photo per person\n• Rate by replying to photos with 1-10\n• Self-rating: ${mcmSettings.allowSelfRating ? 'Allowed' : 'Not allowed'}\n\nLet the contest begin! 🌟`;
-    
-    await sock.sendMessage(groupJid, { text: startMessage });
-    
-    console.log(chalk.green(`✅ MCM started for ${groupJid}`));
-    return session;
+    const sessionData = { 
+      sessionId: `mcm_${getCurrentDate()}_${groupJid}`, 
+      date: getCurrentDate(), 
+      groupJid, 
+      status: 'active', 
+      startedAt: new Date(), 
+      startMessageKey: sentMessage.key,
+      participants: [],
+      botRestartRecoverable: true // Flag to help with recovery
+    };
+
+    await safeOperation(db => db.collection(COLLECTIONS.MCM_SESSIONS).insertOne(sessionData));
+    console.log(chalk.green(`✅ MCM session started for ${groupJid}`));
+
+    // Set up dynamic end job for this session
+    setupDynamicEndJob(sock, { groupJid, sessionId: sessionData.sessionId });
+
   } catch (error) {
-    console.error(chalk.red('❌ Error starting session:'), error);
+    console.error('Error starting MCM session:', error);
     throw error;
   }
 }
 
-async function announceResults(sock, groupJid, participants, winners, session) {
-  try {
-    // Results announcement
-    let resultsMsg = `📣 *MCM RESULTS - ${getCurrentDate()}* 📣\n\n📊 *Final Standings:*\n\n`;
-    
+async function endMCMSession(sock, groupJid) {
+  const session = await getCurrentSession(groupJid);
+  if (!session) return false;
+
+  await sock.sendMessage(groupJid, { text: `⏰ MCM HAS OFFICIALLY ENDED! ⏰\n\n🔒 No more entries or ratings!\n\n📊 Counting votes...\n⏳ Results in 1 minute!\n🎭 The suspense is real! 🎭` });
+  
+  const participants = await safeOperation(db => db.collection(COLLECTIONS.MCM_PARTICIPANTS).find({ sessionId: session.sessionId }).toArray());
+  participants.sort((a, b) => b.totalRating - a.totalRating || b.averageRating - a.averageRating);
+  
+  setTimeout(async () => {
+    let resultsMessage = `🎭 MCM COMPETITION RESULTS 🎭\n\n✨ The scores are in! Here are today's final standings:\n\n`;
     participants.forEach((p, i) => {
-      const pos = i + 1;
-      const emoji = pos === 1 ? '👑' : pos === 2 ? '🥈' : pos === 3 ? '🥉' : '🏅';
-      const avg = p.averageRating > 0 ? p.averageRating.toFixed(1) : '0.0';
-      resultsMsg += `${emoji} #${pos} @${p.userPhone}\n   ⭐ ${p.totalRating} pts (${p.ratingCount} votes, avg ${avg}/10)\n\n`;
+      const emoji = i === 0 ? '👑' : i === 1 ? '🥈' : i === 2 ? '🥉' : '🏅';
+      resultsMessage += `${emoji} ${i + 1}. @${p.userPhone}\n   ⭐ Avg: ${p.averageRating.toFixed(1)}/10 (${p.ratingCount} ratings)\n   📊 Total: ${p.totalRating}\n\n`;
     });
-    
-    await sock.sendMessage(groupJid, { 
-      text: resultsMsg,
-      mentions: participants.map(p => p.userId)
-    });
-    
-    // Winner announcement
-    if (winners.length > 0) {
-      const prizePerWinner = mcmSettings.winnerReward / winners.length;
+    await sock.sendMessage(groupJid, { text: resultsMessage, mentions: participants.map(p => p.userId) });
+
+    setTimeout(async () => {
+      const winner = participants.find(p => p.ratingCount > 0);
+      if (winner) await declareWinner(sock, groupJid, winner);
+      else await sock.sendMessage(groupJid, { text: `🤷‍♂️ No winner could be determined.` });
       
-      let winnerMsg = `🎉 *CONGRATULATIONS!* 🎉\n\n`;
-      if (winners.length > 1) {
-        winnerMsg += `👑 *Tied Champions:*\n`;
-        winners.forEach(w => {
-          winnerMsg += `• @${w.userPhone} - ${w.totalRating} points! 🌟\n`;
-        });
-        winnerMsg += `\nEach winner gets ₦${prizePerWinner.toLocaleString()}! 🏆`;
-      } else {
-        winnerMsg += `👑 *MCM Champion: @${winners[0].userPhone}!*\n\n🏆 Prize: ₦${mcmSettings.winnerReward.toLocaleString()}`;
+      setTimeout(() => sock.sendMessage(groupJid, { text: `💪 THANK YOU FOR AN AMAZING MCM! 💪\n\nSee you next Monday!\n#ManCrushMonday` }), 15000);
+    }, 7000);
+  }, 60000);
+
+  await saveSessionRecord(session, participants);
+  return true;
+}
+
+// ✅ FIXED: Winner declaration with better error handling
+async function declareWinner(sock, groupJid, winner) {
+  await unifiedUserManager.addMoney(winner.userId, mcmSettings.winnerReward, 'MCM Winner');
+  
+  let framedBuffer = null;
+  try {
+    // ✅ FIX: Better error handling for message loading
+    if (winner.messageKey && winner.messageKey.remoteJid && winner.messageKey.id) {
+      const quotedMsg = await sock.loadMessage(winner.messageKey.remoteJid, winner.messageKey.id);
+      if (quotedMsg && quotedMsg.message?.imageMessage) {
+        const stream = await sock.downloadMediaMessage(quotedMsg);
+        const chunks = [];
+        for await (const chunk of stream) chunks.push(chunk);
+        framedBuffer = await frameWinnerPhoto(Buffer.concat(chunks));
       }
-      
-      await sock.sendMessage(groupJid, {
-        text: winnerMsg,
-        mentions: winners.map(w => w.userId)
-      });
-      
-      // Award prizes
-      for (const winner of winners) {
-        await unifiedUserManager.addMoney(winner.userId, prizePerWinner, 'MCM winner prize');
-      }
-    } else {
-      await sock.sendMessage(groupJid, { 
-        text: `😔 *No winner today* - No ratings received!\n\nBetter luck next Monday! 🌟` 
-      });
     }
+  } catch (err) {
+    console.error('Error processing winner photo:', err);
+    // Continue without framed photo
+  }
+  
+  const winnerMessage = `👑 AND THE CROWN GOES TO... 👑\n\n` +
+                       `🎉 Congratulations @${winner.userPhone}! You are today's Man Crush King! 🎉\n\n` +
+                       `💰 Prize: ₦${mcmSettings.winnerReward.toLocaleString()} 💰\n` +
+                       `⭐ Total Points: ${winner.totalRating}\n` +
+                       `📊 Average Rating: ${winner.averageRating.toFixed(1)}/10\n` +
+                       `🗳️ Based on ${winner.ratingCount} ratings\n\n` +
+                       `#MCMWinner #KingCrowned`;
+
+  const messagePayload = framedBuffer 
+    ? { image: framedBuffer, caption: winnerMessage, mentions: [winner.userId] }
+    : { text: winnerMessage, mentions: [winner.userId] };
     
-    // Thank you message
-    await sock.sendMessage(groupJid, { 
-      text: `🙌 *Thank you all!* 🙌\n\nSee you next Monday at 8:00 PM for more MCM action! ✨\n#MCM #SeeYouNextWeek` 
-    });
-    
+  await sock.sendMessage(groupJid, messagePayload);
+}
+
+async function frameWinnerPhoto(photoBuffer) {
+  try {
+    const size = 800, margin = 30;
+    const base = await sharp(photoBuffer).resize(size - (margin * 2), size - (margin * 2), { fit: 'cover' }).toBuffer();
+    const border = await sharp({ create: { width: size, height: size, channels: 4, background: { r: 0, g: 123, b: 255, alpha: 1 } } }).png().toBuffer();
+    const composite = await sharp(border).composite([{ input: base, top: margin, left: margin }]).png().toBuffer();
+    const svgText = `<svg width="${size}" height="${size}"><text x="50%" y="95%" font-size="42" font-family="Impact" fill="white" stroke="black" stroke-width="3" text-anchor="middle">🏆 MCM WINNER 🏆</text></svg>`;
+    return await sharp(composite).composite([{ input: Buffer.from(svgText) }]).png().toBuffer();
   } catch (error) {
-    console.error(chalk.red('❌ Error announcing results:'), error);
+    console.error('Error framing photo:', error);
+    return photoBuffer;
   }
 }
 
-async function saveSessionRecord(session, participants, winners) {
+async function saveSessionRecord(session, participants) {
+    const winner = participants.find(p => p.ratingCount > 0);
+    const recordData = { date: getCurrentDate(), groupJid: session.groupJid, sessionId: session.sessionId, totalParticipants: participants.length, winner: winner ? { userId: winner.userId, userPhone: winner.userPhone, averageRating: winner.averageRating, totalRating: winner.totalRating, ratingCount: winner.ratingCount, prizeAwarded: mcmSettings.winnerReward } : null, participants: participants.map(p => ({ userId: p.userId, totalRating: p.totalRating, ratingCount: p.ratingCount })) };
+    await safeOperation(db => db.collection(COLLECTIONS.MCM_RECORDS).insertOne(recordData));
+    await safeOperation(db => db.collection(COLLECTIONS.MCM_SESSIONS).updateOne({ sessionId: session.sessionId }, { $set: { status: 'ended', endedAt: new Date(), winnerDeclared: !!winner } }));
+}
+
+// --- SCHEDULING (CRON JOBS) ---
+
+async function sendMCMReminders(sock) {
+  if (!isMonday()) return;
+  const startTime = moment.tz(`${getCurrentDate()} ${mcmSettings.startTime}`, 'DD-MM-YYYY HH:mm', 'Africa/Lagos');
+  if (getNigeriaTime().isSameOrAfter(startTime)) return;
+  const timeUntil = moment.duration(startTime.diff(getNigeriaTime())).humanize();
+  const reminderMessage = `💪 MCM ALERT! 💪\n\n✨ Get ready! MCM starts in ${timeUntil}! ✨\n\n💰 Winner gets ₦${mcmSettings.winnerReward.toLocaleString()}!\n⏰ Starting at ${mcmSettings.startTime} sharp!`;
+  for (const groupJid of mcmSettings.groupJids) {
+    try {
+      const groupMetadata = await sock.groupMetadata(groupJid);
+      await sock.sendMessage(groupJid, { text: reminderMessage, mentions: groupMetadata.participants.map(p => p.id) });
+      console.log(chalk.blue(`✅ MCM reminder sent to ${groupJid}`));
+    } catch (error) { console.error(`Error sending MCM reminder to ${groupJid}:`, error); }
+  }
+}
+
+// ✅ FIXED: Cron job setup with restart awareness
+function setupMCMCronJobs(sock) {
   try {
-    const record = {
-      date: getCurrentDate(),
-      groupJid: session.groupJid,
-      sessionId: session.sessionId,
-      totalParticipants: participants.length,
-      totalRatings: participants.reduce((sum, p) => sum + p.ratingCount, 0),
-      winners: winners.map(w => ({
-        userId: w.userId,
-        userPhone: w.userPhone,
-        totalRating: w.totalRating,
-        averageRating: w.averageRating,
-        ratingCount: w.ratingCount,
-        prizeAwarded: mcmSettings.winnerReward / winners.length
-      })),
-      participants: participants.map(p => ({
-        userId: p.userId,
-        userPhone: p.userPhone,
-        totalRating: p.totalRating,
-        averageRating: p.averageRating,
-        ratingCount: p.ratingCount
-      })),
-      createdAt: new Date()
+    stopAllCronJobs();
+    
+    // ✅ FIX: Validate time format before creating cron jobs
+    const validateTime = (timeString) => {
+      const [h, m] = timeString.split(':');
+      const hour = parseInt(h);
+      const minute = parseInt(m);
+      return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
     };
     
-    await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.RECORDS).insertOne(record)
-    );
-    
-    console.log(chalk.green(`✅ MCM record saved: ${record.sessionId}`));
-  } catch (error) {
-    console.error(chalk.red('❌ Error saving record:'), error);
-  }
-}
-
-// =======================================================================
-// COMMAND HANDLERS
-// =======================================================================
-
-async function handleMCMCommand(m, sock, config) {
-  const args = m.body.slice(config.PREFIX.length).trim().split(' ');
-  const command = args.shift().toLowerCase();
-  const subCommand = args[0]?.toLowerCase();
-  
-  const senderId = m.key.participant || m.key.remoteJid;
-  const from = m.key.remoteJid;
-  const reply = (text) => sock.sendMessage(from, { text }, { quoted: m });
-  
-  const context = { m, sock, config, senderId, from, reply, args: args.slice(1) };
-  
-  switch (command) {
-    case 'mcm':
-    case 'mancrush':
-      if (!subCommand) {
-        return await showMCMMenu(context);
-      }
-      return await handleSubCommand(subCommand, context);
-      
-    case 'mcmstats':
-      return await handleStats(context);
-      
-    case 'mcmleader':
-      return await handleLeaderboard(context);
-      
-    default:
-      return false;
-  }
-}
-
-async function showMCMMenu(context) {
-  const { reply, config } = context;
-  const nextMCM = moment().day(1).isBefore(moment()) 
-    ? moment().day(1).add(1, 'week').format('dddd, MMMM DD, YYYY')
-    : moment().day(1).format('dddd, MMMM DD, YYYY');
-  
-  const menu = `🕺 *MAN CRUSH MONDAY* 🕺\n\n` +
-    `📊 *Commands:*\n` +
-    `• ${config.PREFIX}mcm current - Current status\n` +
-    `• ${config.PREFIX}mcm stats - Your statistics\n` +
-    `• ${config.PREFIX}mcm history - Recent history\n` +
-    `• ${config.PREFIX}mcmleader - Hall of fame\n\n` +
-    `👑 *Admin:*\n` +
-    `• ${config.PREFIX}mcm start - Start MCM\n` +
-    `• ${config.PREFIX}mcm end - End MCM\n` +
-    `• ${config.PREFIX}mcm addgroup - Add group\n` +
-    `• ${config.PREFIX}mcm settings - Configure\n\n` +
-    `⏰ *Schedule:* Mondays 8PM-10PM\n` +
-    `💰 *Winner:* ₦${mcmSettings.winnerReward.toLocaleString()}\n` +
-    `🎉 *Participation:* ₦${mcmSettings.participationReward.toLocaleString()}\n\n` +
-    `📅 *Next MCM:* ${nextMCM}`;
-    
-  await reply(menu);
-}
-
-async function handleSubCommand(subCommand, context) {
-  switch (subCommand) {
-    case 'current': case 'status': return await handleCurrent(context);
-    case 'start': return await handleStart(context);
-    case 'end': return await handleEnd(context);
-    case 'cancel': return await handleCancel(context);
-    case 'stats': return await handleStats(context);
-    case 'history': return await handleHistory(context);
-    case 'addgroup': return await handleAddGroup(context);
-    case 'removegroup': return await handleRemoveGroup(context);
-    case 'settings': return await handleSettings(context);
-    case 'addadmin': return await handleAddAdmin(context);
-    case 'removeadmin': return await handleRemoveAdmin(context);
-    case 'help': return await showMCMMenu(context);
-    default:
-      await context.reply(`❓ Unknown command: *${subCommand}*\n\nUse *${context.config.PREFIX}mcm help* for available commands.`);
-  }
-}
-
-async function handleCurrent(context) {
-  const { reply, from } = context;
-  
-  if (!from.endsWith('@g.us')) {
-    return reply('❌ MCM status is only available in groups.');
-  }
-  
-  try {
-    const session = await getCurrentSession(from);
-    
-    if (!session) {
-      const nextMCM = isMonday() 
-        ? `Today at ${mcmSettings.startTime}` 
-        : moment().day(1).add(1, 'week').format('dddd, MMMM DD') + ` at ${mcmSettings.startTime}`;
-      
-      return reply(`📅 *No Active MCM*\n\n🕺 *Next:* ${nextMCM}\n💰 *Winner Prize:* ₦${mcmSettings.winnerReward.toLocaleString()}\n🎉 *Participation:* ₦${mcmSettings.participationReward.toLocaleString()}`);
-    }
-    
-    // Get session statistics
-    const participants = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.PARTICIPANTS)
-        .find({ sessionId: session.sessionId })
-        .sort({ totalRating: -1, ratingCount: -1 })
-        .toArray()
-    );
-    
-    const totalRatings = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.RATINGS).countDocuments({ sessionId: session.sessionId })
-    );
-    
-    let statusMsg = `🕺 *MCM LIVE STATUS* 🕺\n\n`;
-    statusMsg += `📅 Date: ${session.date}\n`;
-    statusMsg += `🕐 Started: ${moment(session.startedAt).format('HH:mm')}\n`;
-    statusMsg += `⏰ Ends: ${mcmSettings.endTime}\n\n`;
-    statusMsg += `👥 Participants: ${participants.length}\n`;
-    statusMsg += `⭐ Total Ratings: ${totalRatings}\n\n`;
-    
-    if (participants.length > 0) {
-      statusMsg += `📊 *Current Standings:*\n`;
-      participants.slice(0, 5).forEach((p, i) => {
-        const pos = i + 1;
-        const emoji = pos === 1 ? '👑' : pos === 2 ? '🥈' : pos === 3 ? '🥉' : '🏅';
-        const avg = p.averageRating > 0 ? p.averageRating.toFixed(1) : '0.0';
-        statusMsg += `${emoji} ${pos}. +${p.userPhone} - ${p.totalRating} pts (${p.ratingCount} votes, avg ${avg}/10)\n`;
-      });
-      if (participants.length > 5) {
-        statusMsg += `... and ${participants.length - 5} more participants\n`;
-      }
-    } else {
-      statusMsg += `❌ *No participants yet!*\n`;
-    }
-    
-    statusMsg += `\n💰 *Winner gets ₦${mcmSettings.winnerReward.toLocaleString()}!*`;
-    
-    await reply(statusMsg);
-  } catch (error) {
-    console.error(chalk.red('❌ Error handling current:'), error);
-    await reply('❌ Error loading current status.');
-  }
-}
-
-async function handleStart(context) {
-  const { reply, senderId, sock, from } = context;
-  
-  if (!await isAuthorized(sock, from, senderId)) {
-    return reply('🚫 Only admins can start MCM manually.');
-  }
-  
-  if (!from.endsWith('@g.us')) {
-    return reply('❌ MCM can only be started in groups.');
-  }
-  
-  try {
-    const existing = await getCurrentSession(from);
-    if (existing) {
-      return reply('🕺 MCM is already active in this group!');
-    }
-    
-    await startSession(sock, from);
-    await reply('✅ MCM started manually! Let the contest begin!');
-  } catch (error) {
-    console.error(chalk.red('❌ Error starting MCM:'), error);
-    await reply('❌ Error starting MCM. Please try again.');
-  }
-}
-
-async function handleEnd(context) {
-  const { reply, senderId, sock, from } = context;
-  
-  if (!await isAuthorized(sock, from, senderId)) {
-    return reply('🚫 Only admins can end MCM manually.');
-  }
-  
-  if (!from.endsWith('@g.us')) {
-    return reply('❌ MCM can only be ended in groups.');
-  }
-  
-  try {
-    const success = await endSession(sock, from);
-    if (success) {
-      await reply('✅ MCM session ended and results announced!');
-    } else {
-      await reply('❌ No active MCM session to end.');
-    }
-  } catch (error) {
-    console.error(chalk.red('❌ Error ending MCM:'), error);
-    await reply('❌ Error ending MCM. Please try again.');
-  }
-}
-
-async function handleCancel(context) {
-  const { reply, senderId, sock, from } = context;
-  
-  if (!await isAuthorized(sock, from, senderId)) {
-    return reply('🚫 Only admins can cancel MCM.');
-  }
-  
-  if (!from.endsWith('@g.us')) {
-    return reply('❌ MCM can only be cancelled in groups.');
-  }
-  
-  try {
-    const session = await getCurrentSession(from);
-    if (!session) {
-      return reply('❌ No active MCM session to cancel.');
-    }
-    
-    await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.SESSIONS).updateOne(
-        { sessionId: session.sessionId },
-        { $set: { status: 'cancelled', endedAt: new Date() } }
-      )
-    );
-    
-    await sock.sendMessage(from, { 
-      text: '❌ MCM session has been cancelled by admin.' 
-    });
-    
-    await reply('✅ MCM session cancelled successfully.');
-  } catch (error) {
-    console.error(chalk.red('❌ Error cancelling MCM:'), error);
-    await reply('❌ Error cancelling MCM. Please try again.');
-  }
-}
-
-async function handleStats(context) {
-  const { reply, senderId } = context;
-  
-  try {
-    // Get user participation stats
-    const participationStats = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.RECORDS).aggregate([
-        { $unwind: '$participants' },
-        { $match: { 'participants.userId': senderId } },
-        { $group: {
-          _id: null,
-          participationCount: { $sum: 1 },
-          totalRatingsReceived: { $sum: '$participants.ratingCount' },
-          totalPoints: { $sum: '$participants.totalRating' },
-          bestRating: { $max: '$participants.averageRating' }
-        }}
-      ]).toArray()
-    );
-    
-    // Get win stats
-    const winStats = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.RECORDS).aggregate([
-        { $unwind: '$winners' },
-        { $match: { 'winners.userId': senderId } },
-        { $group: {
-          _id: null,
-          winsCount: { $sum: 1 },
-          totalEarnings: { $sum: '$winners.prizeAwarded' }
-        }}
-      ]).toArray()
-    );
-    
-    const participation = participationStats[0] || {};
-    const wins = winStats[0] || {};
-    
-    const {
-      participationCount = 0,
-      totalRatingsReceived = 0,
-      totalPoints = 0,
-      bestRating = 0
-    } = participation;
-    
-    const { winsCount = 0, totalEarnings = 0 } = wins;
-    
-    const averageRating = totalRatingsReceived > 0 ? (totalPoints / totalRatingsReceived).toFixed(1) : '0.0';
-    const winRate = participationCount > 0 ? ((winsCount / participationCount) * 100).toFixed(1) : '0.0';
-    
-    // Get current balance
-    const userData = await unifiedUserManager.getUserData(senderId);
-    
-    const statsMsg = `📊 *YOUR MCM STATISTICS* 📊\n\n` +
-      `🕺 *Participation:*\n` +
-      `• Total Contests: ${participationCount}\n` +
-      `• Wins: ${winsCount} 👑\n` +
-      `• Win Rate: ${winRate}%\n\n` +
-      `⭐ *Performance:*\n` +
-      `• Ratings Received: ${totalRatingsReceived}\n` +
-      `• Average Rating: ${averageRating}/10\n` +
-      `• Best Rating: ${bestRating.toFixed(1)}/10\n\n` +
-      `💰 *Earnings:*\n` +
-      `• Current Balance: ₦${(userData.balance || 0).toLocaleString()}\n` +
-      `• MCM Winnings: ₦${totalEarnings.toLocaleString()}\n` +
-      `• Participation Rewards: ₦${(participationCount * mcmSettings.participationReward).toLocaleString()}`;
-    
-    await reply(statsMsg);
-  } catch (error) {
-    console.error(chalk.red('❌ Error handling stats:'), error);
-    await reply('❌ Error loading statistics. Please try again.');
-  }
-}
-
-async function handleHistory(context) {
-  const { reply, args } = context;
-  
-  try {
-    const limit = args[0] ? Math.min(parseInt(args[0]), 10) : 5;
-    
-    const records = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.RECORDS)
-        .find({})
-        .sort({ date: -1 })
-        .limit(limit)
-        .toArray()
-    );
-    
-    if (records.length === 0) {
-      return reply('📅 *No MCM history found.*');
-    }
-    
-    let historyMsg = `📚 *MCM HISTORY (Last ${records.length})* 📚\n\n`;
-    
-    records.forEach((record, i) => {
-      historyMsg += `${i + 1}. 📅 ${record.date}\n`;
-      
-      if (record.winners && record.winners.length > 0) {
-        historyMsg += `   👑 Winners:\n`;
-        record.winners.forEach(w => {
-          historyMsg += `     • +${w.userPhone} (${w.totalRating} pts)\n`;
-        });
-        historyMsg += `   💰 Prize: ₦${record.winners[0].prizeAwarded.toLocaleString()} each\n`;
-      } else {
-        historyMsg += `   🤷‍♂️ No winner declared\n`;
-      }
-      
-      historyMsg += `   👥 Participants: ${record.totalParticipants}\n`;
-      historyMsg += `   ⭐ Total Ratings: ${record.totalRatings}\n\n`;
-    });
-    
-    historyMsg += `💡 Use *mcm history [number]* to see more records`;
-    
-    await reply(historyMsg);
-  } catch (error) {
-    console.error(chalk.red('❌ Error handling history:'), error);
-    await reply('❌ Error loading history. Please try again.');
-  }
-}
-
-async function handleLeaderboard(context) {
-  const { reply } = context;
-  
-  try {
-    const leaders = await safeOperation(async (db) => 
-      await db.collection(COLLECTIONS.RECORDS).aggregate([
-        { $unwind: '$winners' },
-        { $group: {
-          _id: '$winners.userId',
-          userPhone: { $first: '$winners.userPhone' },
-          wins: { $sum: 1 },
-          totalEarnings: { $sum: '$winners.prizeAwarded' },
-          bestRating: { $max: '$winners.averageRating' },
-          totalRatings: { $sum: '$winners.ratingCount' },
-          averagePoints: { $avg: '$winners.totalRating' }
-        }},
-        { $sort: { wins: -1, bestRating: -1 } },
-        { $limit: 10 }
-      ]).toArray()
-    );
-    
-    if (leaders.length === 0) {
-      return reply('🏆 *No MCM winners yet!*\n\nBe the first champion! 💪');
-    }
-    
-    let leaderboardMsg = `🏆 *MCM HALL OF FAME* 🏆\n\n👑 *Top 10 Champions:*\n\n`;
-    
-    leaders.forEach((leader, i) => {
-      const pos = i + 1;
-      const emoji = pos === 1 ? '👑' : pos === 2 ? '🥈' : pos === 3 ? '🥉' : '🏅';
-      
-      leaderboardMsg += `${emoji} ${pos}. +${leader.userPhone}\n`;
-      leaderboardMsg += `   🏆 Wins: ${leader.wins}\n`;
-      leaderboardMsg += `   ⭐ Best Rating: ${leader.bestRating.toFixed(1)}/10\n`;
-      leaderboardMsg += `   💰 Total Earned: ₦${leader.totalEarnings.toLocaleString()}\n`;
-      leaderboardMsg += `   📊 Avg Points: ${Math.round(leader.averagePoints)}\n\n`;
-    });
-    
-    leaderboardMsg += `🕺 *Think you can make it to the top?*\nNext MCM: Every Monday 8:00 PM!`;
-    
-    await reply(leaderboardMsg);
-  } catch (error) {
-    console.error(chalk.red('❌ Error handling leaderboard:'), error);
-    await reply('❌ Error loading leaderboard. Please try again.');
-  }
-}
-
-async function handleAddGroup(context) {
-  const { reply, senderId, sock, from } = context;
-  
-  if (!await isAuthorized(sock, from, senderId)) {
-    return reply('🚫 Only admins can add groups to MCM.');
-  }
-  
-  if (!from.endsWith('@g.us')) {
-    return reply('❌ This command can only be used in groups.');
-  }
-  
-  if (mcmSettings.groupJids.includes(from)) {
-    return reply('✅ This group is already registered for MCM.');
-  }
-  
-  mcmSettings.groupJids.push(from);
-  await saveSettings();
-  
-  await reply('✅ Group successfully added to MCM!\n\nMCM will now run automatically every Monday at 8:00 PM in this group.');
-}
-
-async function handleRemoveGroup(context) {
-  const { reply, senderId, sock, from } = context;
-  
-  if (!await isAuthorized(sock, from, senderId)) {
-    return reply('🚫 Only admins can remove groups from MCM.');
-  }
-  
-  if (!from.endsWith('@g.us')) {
-    return reply('❌ This command can only be used in groups.');
-  }
-  
-  const index = mcmSettings.groupJids.indexOf(from);
-  if (index === -1) {
-    return reply('❌ This group is not registered for MCM.');
-  }
-  
-  mcmSettings.groupJids.splice(index, 1);
-  await saveSettings();
-  
-  await reply('✅ Group removed from MCM.\n\nMCM will no longer run automatically in this group.');
-}
-
-async function handleSettings(context) {
-  const { reply, senderId, sock, from, args, config } = context;
-  
-  if (!await isAuthorized(sock, from, senderId)) {
-    return reply('🚫 Only admins can access MCM settings.');
-  }
-  
-  if (args.length === 0) {
-    const settingsMsg = `⚙️ *MCM SETTINGS* ⚙️\n\n` +
-      `🕐 *Schedule:*\n` +
-      `• Start Time: ${mcmSettings.startTime}\n` +
-      `• End Time: ${mcmSettings.endTime}\n` +
-      `• Auto Start: ${mcmSettings.autoStartEnabled ? '✅' : '❌'}\n` +
-      `• Reminders: ${mcmSettings.reminderTimes.join(', ')}\n\n` +
-      `💰 *Rewards:*\n` +
-      `• Winner Prize: ₦${mcmSettings.winnerReward.toLocaleString()}\n` +
-      `• Participation: ₦${mcmSettings.participationReward.toLocaleString()}\n` +
-      `• Participation Enabled: ${mcmSettings.enableParticipationReward ? '✅' : '❌'}\n\n` +
-      `🔧 *Rules:*\n` +
-      `• Self Rating: ${mcmSettings.allowSelfRating ? '✅' : '❌'}\n` +
-      `• Tag All Members: ${mcmSettings.tagAllMembers ? '✅' : '❌'}\n` +
-      `• Enabled: ${mcmSettings.enabled ? '✅' : '❌'}\n\n` +
-      `📊 *Status:*\n` +
-      `• Admin Numbers: ${mcmSettings.adminNumbers.length}\n` +
-      `• Registered Groups: ${mcmSettings.groupJids.length}\n\n` +
-      `📝 *Commands:*\n` +
-      `• ${config.PREFIX}mcm settings prize 15000\n` +
-      `• ${config.PREFIX}mcm settings participation 2000\n` +
-      `• ${config.PREFIX}mcm settings starttime 20:30\n` +
-      `• ${config.PREFIX}mcm settings endtime 22:30\n` +
-      `• ${config.PREFIX}mcm settings autostart on/off\n` +
-      `• ${config.PREFIX}mcm settings enable on/off`;
-    
-    return reply(settingsMsg);
-  }
-  
-  const setting = args[0].toLowerCase();
-  const value = args[1];
-  
-  try {
-    switch (setting) {
-      case 'prize':
-      case 'winner':
-        const prize = parseInt(value);
-        if (isNaN(prize) || prize < 0) {
-          return reply(`⚠️ Invalid amount. Use: ${config.PREFIX}mcm settings prize 15000`);
-        }
-        mcmSettings.winnerReward = prize;
-        await saveSettings();
-        return reply(`✅ Winner prize updated to ₦${prize.toLocaleString()}`);
-        
-      case 'participation':
-        const partReward = parseInt(value);
-        if (isNaN(partReward) || partReward < 0) {
-          return reply(`⚠️ Invalid amount. Use: ${config.PREFIX}mcm settings participation 2000`);
-        }
-        mcmSettings.participationReward = partReward;
-        await saveSettings();
-        return reply(`✅ Participation reward updated to ₦${partReward.toLocaleString()}`);
-        
-      case 'starttime':
-        if (!/^\d{2}:\d{2}$/.test(value)) {
-          return reply(`⚠️ Invalid time format. Use: ${config.PREFIX}mcm settings starttime 20:30`);
-        }
-        mcmSettings.startTime = value;
-        await saveSettings();
-        return reply(`✅ Start time updated to ${value}`);
-        
-      case 'endtime':
-        if (!/^\d{2}:\d{2}$/.test(value)) {
-          return reply(`⚠️ Invalid time format. Use: ${config.PREFIX}mcm settings endtime 22:30`);
-        }
-        mcmSettings.endTime = value;
-        await saveSettings();
-        return reply(`✅ End time updated to ${value}`);
-        
-      case 'autostart':
-        const autostart = ['on', 'true', 'enable', 'yes'].includes(value?.toLowerCase());
-        mcmSettings.autoStartEnabled = autostart;
-        await saveSettings();
-        return reply(`✅ Auto-start ${autostart ? 'enabled' : 'disabled'}`);
-        
-      case 'enable':
-        const enabled = ['on', 'true', 'enable', 'yes'].includes(value?.toLowerCase());
-        mcmSettings.enabled = enabled;
-        await saveSettings();
-        return reply(`✅ MCM ${enabled ? 'enabled' : 'disabled'}`);
-        
-      case 'selfrating':
-        const selfRating = ['on', 'true', 'enable', 'yes'].includes(value?.toLowerCase());
-        mcmSettings.allowSelfRating = selfRating;
-        await saveSettings();
-        return reply(`✅ Self-rating ${selfRating ? 'enabled' : 'disabled'}`);
-        
-      case 'tagall':
-        const tagAll = ['on', 'true', 'enable', 'yes'].includes(value?.toLowerCase());
-        mcmSettings.tagAllMembers = tagAll;
-        await saveSettings();
-        return reply(`✅ Tag all members ${tagAll ? 'enabled' : 'disabled'}`);
-        
-      case 'parreward':
-        const parEnabled = ['on', 'true', 'enable', 'yes'].includes(value?.toLowerCase());
-        mcmSettings.enableParticipationReward = parEnabled;
-        await saveSettings();
-        return reply(`✅ Participation rewards ${parEnabled ? 'enabled' : 'disabled'}`);
-        
-      default:
-        return reply(`⚠️ Unknown setting: ${setting}\n\nAvailable: prize, participation, starttime, endtime, autostart, enable, selfrating, tagall, parreward`);
-    }
-  } catch (error) {
-    console.error(chalk.red('❌ Error updating settings:'), error);
-    await reply('❌ Error updating settings. Please try again.');
-  }
-}
-
-async function handleAddAdmin(context) {
-  const { reply, senderId, sock, from, args } = context;
-  
-  if (!await isAuthorized(sock, from, senderId)) {
-    return reply('🚫 Only admins can add other admins.');
-  }
-  
-  const number = args[0]?.replace(/\D/g, '');
-  if (!number) {
-    return reply('⚠️ Please provide a phone number.\n\nUsage: mcm addadmin 2348123456789');
-  }
-  
-  if (mcmSettings.adminNumbers.includes(number)) {
-    return reply('✅ This number is already an MCM admin.');
-  }
-  
-  mcmSettings.adminNumbers.push(number);
-  await saveSettings();
-  
-  await reply(`✅ Admin added successfully: ${number}\n\nThey can now manage MCM in all groups.`);
-}
-
-async function handleRemoveAdmin(context) {
-  const { reply, senderId, sock, from, args } = context;
-  
-  if (!await isAuthorized(sock, from, senderId)) {
-    return reply('🚫 Only admins can remove other admins.');
-  }
-  
-  const number = args[0]?.replace(/\D/g, '');
-  if (!number) {
-    return reply('⚠️ Please provide a phone number.\n\nUsage: mcm removeadmin 2348123456789');
-  }
-  
-  const index = mcmSettings.adminNumbers.indexOf(number);
-  if (index === -1) {
-    return reply('❌ This number is not an MCM admin.');
-  }
-  
-  mcmSettings.adminNumbers.splice(index, 1);
-  await saveSettings();
-  
-  await reply(`✅ Admin removed successfully: ${number}`);
-}
-
-// =======================================================================
-// MAIN PLUGIN HANDLER 
-// =======================================================================
-
-export default async function mcmPlugin(m, sock, config) {
-  try {
-    // Handle non-command messages (photo submissions and ratings)
-    if (!m.body || !m.body.startsWith(config.PREFIX)) {
-      // Try to handle photo submission
-      if (await handlePhotoSubmission(m, sock)) return;
-      
-      // Try to handle rating submission  
-      if (await handleRatingSubmission(m, sock)) return;
-      
+    if (!validateTime(mcmSettings.startTime) || !validateTime(mcmSettings.endTime)) {
+      console.error('Invalid time format in MCM settings');
       return;
     }
     
-    // Handle command messages
-    const success = await handleMCMCommand(m, sock, config);
-    if (!success) return;
+    // Set up reminder jobs (Monday = 1 in cron)
+    mcmSettings.reminderTimes.forEach(time => {
+      if (validateTime(time)) {
+        const [h, m] = time.split(':');
+        cronJobs.reminders.push(cron.schedule(`${m} ${h} * * 1`, () => {
+          sendMCMReminders(sock).catch(console.error);
+        }, { timezone: 'Africa/Lagos' }));
+      }
+    });
     
+    // 🔄 ENHANCED: Start session job with restart awareness
+    const [startH, startM] = mcmSettings.startTime.split(':');
+    cronJobs.startSession = cron.schedule(`${startM} ${startH} * * 1`, async () => {
+      if (!mcmSettings.autoStartEnabled) return;
+      
+      // Check for existing active sessions before starting new ones
+      for (const groupJid of mcmSettings.groupJids) {
+        try {
+          const existingSession = await getCurrentSession(groupJid);
+          if (existingSession) {
+            console.log(chalk.yellow(`Skipping start for ${groupJid} - session already active`));
+            continue;
+          }
+          await startMCMSession(sock, groupJid);
+        } catch (error) {
+          console.error(`Error starting MCM session in ${groupJid}:`, error);
+        }
+      }
+    }, { timezone: 'Africa/Lagos' });
+    
+    // 🔄 ENHANCED: End session job with better recovery
+    const [endH, endM] = mcmSettings.endTime.split(':');
+    cronJobs.endSession = cron.schedule(`${endM} ${endH} * * 1`, async () => {
+      // End all active sessions for today
+      const today = getCurrentDate();
+      const activeSessions = await safeOperation(db => 
+        db.collection(COLLECTIONS.MCM_SESSIONS).find({
+          date: today,
+          status: 'active'
+        }).toArray()
+      );
+
+      for (const session of activeSessions) {
+        try {
+          await endMCMSession(sock, session.groupJid);
+        } catch (error) {
+          console.error(`Error ending MCM session in ${session.groupJid}:`, error);
+        }
+      }
+    }, { timezone: 'Africa/Lagos' });
+    
+    console.log(chalk.green(`✅ MCM cron jobs scheduled. Session: ${mcmSettings.startTime}-${mcmSettings.endTime}.`));
   } catch (error) {
-    console.error(chalk.red('❌ MCM Plugin Error:'), error.message);
+    console.error('Error setting up MCM cron jobs:', error);
   }
 }
 
-// =======================================================================
-// PLUGIN INITIALIZATION - Called by Plugin Manager
-// =======================================================================
+function stopAllCronJobs() {
+  Object.values(cronJobs).flat().forEach(job => job?.destroy());
+  cronJobs = { reminders: [], startSession: null, endSession: null };
+}
 
-export async function init(sock) {
-  try {
-    console.log(chalk.blue('🔄 Initializing MCM Plugin...'));
-    
-    // Store sock instance for scheduled tasks
-    sockInstance = sock;
-    
-    // Load settings from database
-    await loadSettings();
-    
-    // Mark as initialized
-    isInitialized = true;
-    
-    console.log(chalk.green('✅ MCM Plugin initialized successfully'));
-    console.log(chalk.cyan(`📊 Settings: ${mcmSettings.groupJids.length} groups, ${mcmSettings.adminNumbers.length} admins`));
-    console.log(chalk.cyan(`⏰ Schedule: ${mcmSettings.startTime}-${mcmSettings.endTime} on Mondays`));
-    
-    // Register with plugin communicator if available
+// --- COMMAND HANDLERS ---
+
+async function handleMCMCommand(m, sock, args, config) {
+  const { from, sender } = m;
+  if (args.length === 0) {
+    const session = await getCurrentSession(from);
+    let statusMessage = `💪 *Man Crush Monday System* 💪\n\n` + 
+      `*Status:* ${session ? '🔴 Live' : '⚫ Offline'}\n` + 
+      `*Schedule:* ${mcmSettings.startTime} - ${mcmSettings.endTime}\n\n` + 
+      `Use *${config.PREFIX}mcmstats* to view history.\n` + 
+      ((await isAuthorized(sock, from, sender, config)) ? `*Admin:* Use *${config.PREFIX}mcm help* for commands.` : '');
+    return sock.sendMessage(from, { text: statusMessage });
+  }
+  
+  if (!await isAuthorized(sock, from, sender, config)) {
+    return m.reply('🚫 You are not authorized to use admin commands.');
+  }
+  
+  const subCommand = args[0].toLowerCase();
+  
+  switch (subCommand) {
+    case 'start':
+      if (!isMonday()) return m.reply('📅 MCM can only be started on Mondays!');
+      if (await getCurrentSession(from)) return m.reply('⚠️ A session is already active!');
+      await startMCMSession(sock, from);
+      break;
+      
+    case 'end':
+      if (!await getCurrentSession(from)) return m.reply('⚠️ No active session to end.');
+      await endMCMSession(sock, from);
+      break;
+      
+    case 'recover':
+      // 🔄 NEW: Manual recovery command
+      await m.reply('🔄 Checking for active sessions to recover...');
+      await checkAndRecoverActiveSessions(sock);
+      await m.reply('✅ Session recovery check completed!');
+      break;
+      
+    case 'status':
+      // 🔄 NEW: Detailed status command
+      const session = await getCurrentSession(from);
+      if (!session) {
+        return m.reply('📊 No active MCM session in this group.');
+      }
+      
+      const participants = await safeOperation(db => 
+        db.collection(COLLECTIONS.MCM_PARTICIPANTS)
+          .find({ sessionId: session.sessionId })
+          .toArray()
+      );
+      
+      const totalRatings = await safeOperation(db => 
+        db.collection(COLLECTIONS.MCM_RATINGS)
+          .countDocuments({ sessionId: session.sessionId })
+      );
+      
+      const statusMsg = `📊 *MCM Session Status*\n\n` +
+        `🆔 Session: ${session.sessionId}\n` +
+        `📅 Started: ${moment(session.startedAt).format('HH:mm')}\n` +
+        `👥 Participants: ${participants.length}\n` +
+        `⭐ Total Ratings: ${totalRatings}\n` +
+        `⏰ Ends: ${mcmSettings.endTime}`;
+      
+      await m.reply(statusMsg);
+      break;
+      
+    case 'addgroup':
+      if (mcmSettings.groupJids.includes(from)) return m.reply('⚠️ This group is already in the MCM system!');
+      mcmSettings.groupJids.push(from);
+      await saveSettings();
+      m.reply('✅ This group has been added to the MCM system!');
+      break;
+      
+    case 'removegroup':
+      mcmSettings.groupJids = mcmSettings.groupJids.filter(id => id !== from);
+      await saveSettings();
+      m.reply('✅ This group has been removed from the MCM system!');
+      break;
+      
+    case 'setprize':
+      const prize = parseInt(args[1]);
+      if (isNaN(prize) || prize < 0) return m.reply('❌ Invalid amount.');
+      mcmSettings.winnerReward = prize;
+      await saveSettings();
+      m.reply(`✅ Winner prize set to ₦${prize.toLocaleString()}!`);
+      break;
+      
+    default:
+      m.reply(`*MCM Admin Help*\n\n*Commands:*\n- start\n- end\n- recover\n- status\n- addgroup\n- removegroup\n- setprize <amount>`);
+  }
+}
+
+async function handleMCMStatsCommand(m) {
+  const from = m.from;
+  const statsData = await safeOperation(db => db.collection(COLLECTIONS.MCM_RECORDS).find({ groupJid: from }).sort({ date: -1 }).limit(5).toArray());
+  if (statsData.length === 0) return m.reply('📜 No MCM history found for this group yet.');
+  let statsMessage = `📜 *Recent MCM History*\n\n`;
+  statsData.forEach(session => {
+    statsMessage += `*📅 Date:* ${session.date}\n` + `*👥 Participants:* ${session.totalParticipants}\n` + `*👑 Winner:* ${session.winner ? `@${session.winner.userPhone}` : 'None'}\n\n`;
+  });
+  await m.sock.sendMessage(from, { text: statsMessage, mentions: statsData.map(s => s.winner?.userId).filter(Boolean) });
+}
+
+// --- MAIN PLUGIN INITIALIZER AND HANDLER ---
+
+async function initializePlugin(sock) {
+    if (isInitialized) return;
+    console.log(chalk.blue('🚀 Initializing MCM Plugin...'));
     try {
-      const { pluginCommunicator } = await import('../lib/pluginIntegration.js');
-      pluginCommunicator.registerPlugin('mcm', {
-        name: 'Man Crush Monday',
-        version: info.version,
-        status: mcmSettings.enabled ? 'active' : 'disabled',
-        groups: mcmSettings.groupJids.length,
-        admins: mcmSettings.adminNumbers.length
-      });
+        await initDatabase();
+        await loadSettings();
+        
+        // 🔄 NEW: Check for active sessions before setting up cron jobs
+        await checkAndRecoverActiveSessions(sock);
+        
+        setupMCMCronJobs(sock);
+        isInitialized = true;
+        console.log(chalk.green('✅ MCM Plugin initialized successfully'));
     } catch (error) {
-      console.warn(chalk.yellow('⚠️ Could not register with plugin communicator'));
+        console.error(chalk.red('❌ MCM Plugin initialization failed:'), error);
     }
-    
-  } catch (error) {
-    console.error(chalk.red('❌ MCM Plugin initialization failed:'), error);
-    throw error;
-  }
 }
 
-// =======================================================================
-// SCHEDULED TASK HANDLERS - For Plugin Manager
-// =======================================================================
+// ✅ FIXED: Main handler with improved message flow
+export default async function mcmPlugin(m, sock, config) {
+  try {
+    // One-time initialization on first message.
+    if (!isInitialized) {
+      await initializePlugin(sock);
+    }
 
-export const scheduledTasks = {
-  // Send reminders at 10 AM and 4 PM on Mondays
-  reminder1: {
-    name: 'mcm_reminder_morning',
-    description: 'Send morning MCM reminder',
-    schedule: '0 10 * * 1', // 10:00 AM every Monday
-    timezone: 'Africa/Lagos',
-    handler: sendReminders
-  },
-  
-  reminder2: {
-    name: 'mcm_reminder_afternoon', 
-    description: 'Send afternoon MCM reminder',
-    schedule: '0 16 * * 1', // 4:00 PM every Monday
-    timezone: 'Africa/Lagos',
-    handler: sendReminders
-  },
-  
-  // Auto start MCM at 8 PM on Mondays
-  autoStart: {
-    name: 'mcm_auto_start',
-    description: 'Automatically start MCM sessions',
-    schedule: '0 20 * * 1', // 8:00 PM every Monday
-    timezone: 'Africa/Lagos',
-    handler: autoStartSessions
-  },
-  
-  // Auto end MCM at 10 PM on Mondays
-  autoEnd: {
-    name: 'mcm_auto_end',
-    description: 'Automatically end MCM sessions',
-    schedule: '0 22 * * 1', // 10:00 PM every Monday
-    timezone: 'Africa/Lagos', 
-    handler: autoEndSessions
+    // ✅ FIX: Handle non-command messages first (photos and ratings)
+    if (!m.body?.startsWith(config.PREFIX)) {
+      let handled = false;
+      
+      // Check for photo submissions
+      if (m.message?.imageMessage) {
+        handled = await handlePhotoSubmission(m, sock);
+        if (handled) return; // Exit early if photo was processed
+      }
+      
+      // Check for rating submissions (only if not a photo)
+      if (!handled && m.quoted?.message?.imageMessage) {
+        handled = await handleRatingSubmission(m, sock);
+      }
+      
+      return; // Exit for all non-command messages
+    }
+
+    // Handle commands
+    const args = m.body.slice(config.PREFIX.length).trim().split(/\s+/);
+    const command = args.shift()?.toLowerCase();
+    
+    const commandMap = {
+      'mcm': (m, sock, args, config) => handleMCMCommand(m, sock, args, config),
+      'mancrush': (m, sock, args, config) => handleMCMCommand(m, sock, args, config),
+      'mcmstats': (m) => handleMCMStatsCommand(m),
+      'mcmhistory': (m) => handleMCMStatsCommand(m),
+    };
+    
+    if (commandMap[command]) {
+      await commandMap[command](m, sock, args, config);
+    }
+  } catch (error) {
+    console.error(chalk.red('❌ Error in MCM Plugin main handler:'), error);
   }
-};
-
-// Export scheduled tasks in the format expected by plugin manager
-export { scheduledTasks as tasks };
-
-// Plugin health check
-export function healthCheck() {
-  return {
-    healthy: isInitialized && sockInstance !== null,
-    settings: mcmSettings.enabled,
-    groups: mcmSettings.groupJids.length,
-    admins: mcmSettings.adminNumbers.length,
-    sockAvailable: !!sockInstance,
-    lastCheck: new Date()
-  };
 }
