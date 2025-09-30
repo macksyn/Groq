@@ -386,9 +386,9 @@ function getItemId(inputId) {
 
 // MODIFIED: Cryptocurrency system with price fluctuation properties
 let cryptoData = {
-  BTC: { name: "Bitcoin", price: 45000, volatility: 0.05, trend: 0.001, history: [], lastChange: 'stable' },
-  ETH: { name: "Ethereum", price: 3200, volatility: 0.06, trend: -0.002, history: [], lastChange: 'stable' },
-  SOL: { name: "Solana", price: 120, volatility: 0.08, trend: 0.005, history: [], lastChange: 'stable' },
+  BTC: { name: "Bitcoin", price: 4500, volatility: 0.95, trend: 0.001, history: [], lastChange: 'stable' },
+  ETH: { name: "Ethereum", price: 3200, volatility: 0.6, trend: -0.002, history: [], lastChange: 'stable' },
+  SOL: { name: "Solana", price: 1200, volatility: 0.08, trend: -0.005, history: [], lastChange: 'stable' },
   SHIB: { name: "Shiba Inu", price: 0.00002, volatility: 0.12, trend: 0.01, history: [], lastChange: 'stable' },
   GROQ: { name: "Groq Coin", price: 15, volatility: 0.10, trend: -0.003, history: [], lastChange: 'stable' },
   ADA: { name: "Cardano", price: 0.8, volatility: 0.07, trend: 0.002, history: [], lastChange: 'stable' },
@@ -1214,14 +1214,14 @@ async function handleStocks(context, args) {
     
     // Generate mock stock data
     const stocks = {
-      AAPL: { name: 'Apple Inc.', price: 8500000 + (Math.random() - 0.5) * 30 },
-      GOOGL: { name: 'Alphabet Inc.', price: 8000000 + (Math.random() - 0.5) * 400 },
-      TSLA: { name: 'Tesla Inc.', price: 6900000 + (Math.random() - 0.5) * 200 },
-      COKE: { name: 'Coca-Cola', price: 19000000 + (Math.random() - 0.5) * 200 },
-      META: { name: 'Meta Platforms', price: 7600000 + (Math.random() - 0.5) * 200 },
-      NFLX: { name: 'Netflix', price: 6900000 + (Math.random() - 0.5) * 200 },
-      AMZN: { name: 'Amazon.com Inc.', price: 4300000 + (Math.random() - 0.5) * 500 },
-      MSFT: { name: 'Microsoft Corp.', price: 9000000 + (Math.random() - 0.5) * 50 }
+      AAPL: { name: 'Apple Inc.', price: 850 + (Math.random() - 0.5) * 30 },
+      GOOGL: { name: 'Alphabet Inc.', price: 800 + (Math.random() - 0.5) * 400 },
+      TSLA: { name: 'Tesla Inc.', price: 690 + (Math.random() - 0.5) * 200 },
+      COKE: { name: 'Coca-Cola', price: 190 + (Math.random() - 0.5) * 200 },
+      META: { name: 'Meta Platforms', price: 760 + (Math.random() - 0.5) * 200 },
+      NFLX: { name: 'Netflix', price: 690 + (Math.random() - 0.5) * 200 },
+      AMZN: { name: 'Amazon.com Inc.', price: 430 + (Math.random() - 0.5) * 500 },
+      MSFT: { name: 'Microsoft Corp.', price: 900 + (Math.random() - 0.5) * 50 }
     };
     
     switch (action) {
