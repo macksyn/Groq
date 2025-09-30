@@ -294,7 +294,7 @@ const SHOP_ITEMS = {
   },
   robProtection: {
     name: "Bodyguard",
-    price: 20000,
+    price: 200000,
     description: "Hire a bodyguard to prevent robberies for 48 hours",
     type: "consumable", 
     effect: "robProtection",
@@ -312,7 +312,7 @@ const SHOP_ITEMS = {
   // Permanent Upgrades
   vipStatus: {
     name: "VIP Status",
-    price: 100000,
+    price: 1000000,
     description: "Permanent 25% bonus to all earnings",
     type: "permanent",
     effect: "vipBonus",
@@ -341,7 +341,7 @@ const SHOP_ITEMS = {
   // Cosmetic Items
   goldenCrown: {
     name: "Golden Crown",
-    price: 250000,
+    price: 2500000,
     description: "Shows 👑 next to your name in leaderboards",
     type: "cosmetic",
     effect: "crown",
@@ -349,7 +349,7 @@ const SHOP_ITEMS = {
   },
   customTitle: {
     name: "Custom Title",
-    price: 25000,
+    price: 2500000,
     description: "Set a custom rank title",
     type: "cosmetic",
     effect: "customTitle",
@@ -359,7 +359,7 @@ const SHOP_ITEMS = {
   // Special Items
   marketTip: {
     name: "Market Insider Info",
-    price: 10000,
+    price: 1000000,
     description: "Guarantees profitable investment for 1 trade",
     type: "consumable",
     effect: "marketTip",
@@ -1214,11 +1214,14 @@ async function handleStocks(context, args) {
     
     // Generate mock stock data
     const stocks = {
-      AAPL: { name: 'Apple Inc.', price: 150 + (Math.random() - 0.5) * 30 },
-      GOOGL: { name: 'Alphabet Inc.', price: 2800 + (Math.random() - 0.5) * 400 },
-      TSLA: { name: 'Tesla Inc.', price: 800 + (Math.random() - 0.5) * 200 },
-      AMZN: { name: 'Amazon.com Inc.', price: 3300 + (Math.random() - 0.5) * 500 },
-      MSFT: { name: 'Microsoft Corp.', price: 300 + (Math.random() - 0.5) * 50 }
+      AAPL: { name: 'Apple Inc.', price: 8500000 + (Math.random() - 0.5) * 30 },
+      GOOGL: { name: 'Alphabet Inc.', price: 8000000 + (Math.random() - 0.5) * 400 },
+      TSLA: { name: 'Tesla Inc.', price: 6900000 + (Math.random() - 0.5) * 200 },
+      COKE: { name: 'Coca-Cola', price: 19000000 + (Math.random() - 0.5) * 200 },
+      META: { name: 'Meta Platforms', price: 7600000 + (Math.random() - 0.5) * 200 },
+      NFLX: { name: 'Netflix', price: 6900000 + (Math.random() - 0.5) * 200 },
+      AMZN: { name: 'Amazon.com Inc.', price: 4300000 + (Math.random() - 0.5) * 500 },
+      MSFT: { name: 'Microsoft Corp.', price: 9000000 + (Math.random() - 0.5) * 50 }
     };
     
     switch (action) {

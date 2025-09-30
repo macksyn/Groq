@@ -9,7 +9,7 @@ import chalk from 'chalk';
 export const info = {
   name: 'Man Crush Monday (MCM)',
   version: '2.4.0',
-  author: 'System Rewrite (Complete with Restart Recovery)',
+  author: 'Aled Macksyn',
   description: 'Weekly Man Crush Monday contest with automated scheduling, rating system, rewards, and restart recovery.',
   commands: [
     { name: 'mcm', aliases: ['mancrush'], description: 'Access MCM system commands and settings' },
@@ -227,7 +227,7 @@ async function checkAndRecoverActiveSessions(sock) {
       
       // Check if session should have already ended
       if (currentTime.isAfter(endTime)) {
-        console.log(chalk.orange(`⏰ Session ${session.sessionId} should have ended, ending now...`));
+        console.log(chalk.yellow(`⏰ Session ${session.sessionId} should have ended, ending now...`));
         await endMCMSession(sock, session.groupJid);
         continue;
       }
@@ -235,11 +235,11 @@ async function checkAndRecoverActiveSessions(sock) {
       // Notify groups that bot is back online
       try {
         await sock.sendMessage(session.groupJid, {
-          text: `🤖 *Bot Reconnected!* 🤖\n\n` +
+          text: `🤖 *There Was Network Issue!* 🤖\n\n` +
                 `✅ Your MCM session is still ACTIVE!\n` +
                 `⏰ Ends at: ${mcmSettings.endTime}\n` +
                 `📸 Keep submitting photos and ratings!\n\n` +
-                `*Session recovered successfully* 🔄`
+                `*SESSION recovered successfully* 🔄`
         });
         
         console.log(chalk.green(`✅ Notified group ${session.groupJid} of session recovery`));
