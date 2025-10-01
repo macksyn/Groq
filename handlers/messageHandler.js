@@ -12,8 +12,8 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
     if (messageUpdate.type !== 'notify') return;
     if (!messageUpdate.messages?.[0]) return;
 
-    // Serialize message with helper methods
-    const m = serializeMessage(messageUpdate.messages[0], sock);
+    // Serialize message with helper methods (NOW ASYNC)
+    const m = await serializeMessage(messageUpdate.messages[0], sock);
     if (!m.message) return;
 
     // Handle status broadcasts
