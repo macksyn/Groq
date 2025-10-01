@@ -122,7 +122,8 @@ Take care! 🌟
         }
         
       } catch (error) {
-        console.log(chalk.red(`❌ Group handler error for group ${id}:`), error.message);
+  const { toWhatsAppJID } = await import('../lib/helpers.js');
+  console.log(chalk.red(`❌ Group handler error for group ${toWhatsAppJID(id)}:`), error.message);
       }
     }
     

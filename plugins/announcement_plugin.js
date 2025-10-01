@@ -400,9 +400,10 @@ async function postAnnouncement(sock, sourceGroupJid, content, senderId, senderN
       await announcementsCollection.insertOne(announcementDoc);
     }
     
+    const { toWhatsAppJID } = await import('../lib/helpers.js');
     const logMessage = sourceGroupJid === finalTargetJid 
-      ? `📢 Announcement posted to ${groupName} by ${senderId}`
-      : `📢 Cross-group announcement posted from ${sourceGroupJid} to ${groupName} by ${senderId}`;
+      ? `📢 Announcement posted to ${groupName} by ${toWhatsAppJID(senderId)}`
+      : `📢 Cross-group announcement posted from ${toWhatsAppJID(sourceGroupJid)} to ${groupName} by ${toWhatsAppJID(senderId)}`;
     
     console.log(logMessage);
     

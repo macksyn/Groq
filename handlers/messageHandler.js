@@ -81,7 +81,8 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
     }
 
     // FIXED: Safe rate limiting check with null safety
-    const senderId = m.sender || 'unknown';
+  const { toWhatsAppJID } = await import('../lib/helpers.js');
+  const senderId = m.sender ? toWhatsAppJID(m.sender) : 'unknown';
     if (RateLimitHelpers.isLimited(senderId, 'global', 10, 60000)) {
       return; // Silently ignore rate limited users
     }
