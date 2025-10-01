@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import moment from 'moment-timezone';
 import { handleNewMember } from '../plugins/interview.js';
+import { decodeJid } from '../lib/serializer.js';
 
 export default async function GroupHandler(sock, groupUpdate, config) {
   try {
@@ -15,7 +16,11 @@ export default async function GroupHandler(sock, groupUpdate, config) {
         const groupName = metadata.subject;
         const membersCount = metadata.participants.length;
         
-        for (const jid of participants) {
+        for (const rawJid of participants) {
+          // FIXED: Decode JID properly to get clean phone number
+          const jid = decodeJid(rawJid, sock, id);
+          console.log(chalk.magenta('🔍 GROUP EVENT - Raw JID:'), rawJid, '-> Decoded:', jid);
+          
           const userName = jid.split('@')[0];
           const time = moment().tz('Africa/Lagos').format('HH:mm:ss');
           const date = moment().tz('Africa/Lagos').format('DD/MM/YYYY');
@@ -72,7 +77,7 @@ Enjoy your stay! 🎈
               }
             });
             
-            console.log(chalk.green(`👋 Welcomed ${userName} to ${groupName}`));
+            console.log(chalk.green(`👋 Welcomed ${userName} (${jid}) to ${groupName}`));
 
             // Trigger auto-interview if activated
             await handleNewMember(sock, id, jid, config);
@@ -117,13 +122,12 @@ Take care! 🌟
               }
             });
             
-            console.log(chalk.yellow(`👋 Said goodbye to ${userName} from ${groupName}`));
+            console.log(chalk.yellow(`👋 Said goodbye to ${userName} (${jid}) from ${groupName}`));
           }
         }
         
       } catch (error) {
-  const { toWhatsAppJID } = await import('../lib/helpers.js');
-  console.log(chalk.red(`❌ Group handler error for group ${toWhatsAppJID(id)}:`), error.message);
+        console.log(chalk.red(`❌ Group handler error for group ${id}:`), error.message);
       }
     }
     
