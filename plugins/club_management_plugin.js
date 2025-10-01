@@ -1020,48 +1020,46 @@ async function handleClubHire(m, sock, args, userId) {
   const { MongoClient } = require('mongodb');
   const client = await MongoClient.connect(process.env.MONGO_URI, { useUnifiedTopology: true });
   const session = client.startSession();
+  
   try {
-    await session.withTransaction(async () => {
+    const result = await session.withTransaction(async () => {
       const clubsCollection = client.db().collection('clubs');
       const club = await clubsCollection.findOne({ userId }, { session });
+      
       if (!club) {
-        await sock.sendMessage(m.from, { text: '❌ You don\'t own a club!' });
-        await session.abortTransaction();
-        return;
+        return { error: '❌ You don\'t own a club!' };
       }
+      
       const staffConfig = GAME_CONFIG.STAFF[staffType];
       if (!staffConfig) {
-        await sock.sendMessage(m.from, { text: `❌ Staff type "${staffType}" not found!\n\n*Available:* ${Object.keys(GAME_CONFIG.STAFF).join(', ')}` });
-        await session.abortTransaction();
-        return;
+        return { error: `❌ Staff type "${staffType}" not found!\n\n*Available:* ${Object.keys(GAME_CONFIG.STAFF).join(', ')}` };
       }
+      
       // Check if already have this type of staff (limit 2 per type)
       const existingStaff = (club.staff || []).filter(s => s.type === staffType);
       if (existingStaff.length >= 2) {
-        await sock.sendMessage(m.from, { text: `❌ You already have maximum ${staffType}s (2 max per type)!\n\nUse \`/club fire ${staffType}\` to make room.` });
-        await session.abortTransaction();
-        return;
+        return { error: `❌ You already have maximum ${staffType}s (2 max per type)!\n\nUse \`/club fire ${staffType}\` to make room.` };
       }
+      
       // Hiring cost (4 weeks salary upfront)
       const hiringCost = staffConfig.salary * 4;
       const userBalance = await PluginHelpers.getBalance(userId);
+      
       if (userBalance.wallet < hiringCost) {
-        await sock.sendMessage(m.from, { text: `❌ Insufficient funds to hire ${staffType}!\n\n*Cost:* ₦${hiringCost.toLocaleString()} (4 weeks salary)\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}` });
-        await session.abortTransaction();
-        return;
+        return { error: `❌ Insufficient funds to hire ${staffType}!\n\n*Cost:* ₦${hiringCost.toLocaleString()} (4 weeks salary)\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}` };
       }
+      
       // Special requirements check
       if (staffType === 'stripper') {
         const hasAdultLicense = (club.licenses || []).some(l => l.type === 'adult_entertainment' && l.active);
         if (!hasAdultLicense) {
-          await sock.sendMessage(m.from, { text: '❌ You need an active adult entertainment license to hire strippers!\n\nUse `/club license adult_entertainment` first.' });
-          await session.abortTransaction();
-          return;
+          return { error: '❌ You need an active adult entertainment license to hire strippers!\n\nUse `/club license adult_entertainment` first.' };
         }
       }
+      
       // Generate random staff name
       const names = {
-        dj: ['DJ Neptune', 'DJ cuppy', 'DJ Spinall', 'DJ Big N', 'DJ Xclusive'],
+        dj: ['DJ Neptune', 'DJ Cuppy', 'DJ Spinall', 'DJ Big N', 'DJ Xclusive'],
         bartender: ['Angella', 'Maria', 'Jay', 'Lisa', 'Sandra'],
         bouncer: ['Big Joe', 'Marcus', 'Steel', 'Bruno', 'Tank'],
         cleaner: ['Rosa', 'Ahmed', 'Grace', 'Pedro', 'Kim'],
@@ -1070,7 +1068,10 @@ async function handleClubHire(m, sock, args, userId) {
         technician: ['Tech Sam', 'Engineer Bob', 'Geek Paul', 'Pro Lisa', 'Wizard John']
       };
       const randomName = names[staffType][Math.floor(Math.random() * names[staffType].length)];
+      
+      // Deduct money
       await unifiedUserManager.removeMoney(userId, hiringCost, `Hire ${staffType}: ${randomName}`, { session });
+      
       const newStaff = {
         type: staffType,
         name: randomName,
@@ -1079,6 +1080,7 @@ async function handleClubHire(m, sock, args, userId) {
         performance: Math.floor(Math.random() * 20) + 80,
         salary: staffConfig.salary
       };
+      
       await clubsCollection.updateOne(
         { userId },
         {
@@ -1087,12 +1089,39 @@ async function handleClubHire(m, sock, args, userId) {
         },
         { session }
       );
-      const successMsg = `✅ *Staff Hired Successfully!*\n\n👤 *Name:* ${randomName}\n💼 *Position:* ${staffType}\n💰 *Cost:* ₦${hiringCost.toLocaleString()} (4 weeks prepaid)\n📊 *Performance:* ${newStaff.performance}%\n📈 *Revenue Boost:* ${Math.round((staffConfig.boost.revenue - 1) * 100)}%\n\n🎉 ${randomName} is now working at your club!`;
-      await sock.sendMessage(m.from, { text: successMsg });
+      
+      return {
+        success: true,
+        data: {
+          staffType,
+          randomName,
+          hiringCost,
+          performance: newStaff.performance,
+          revenueBoost: Math.round((staffConfig.boost.revenue - 1) * 100)
+        }
+      };
     });
+    
+    // Send response after transaction completes
+    if (result.error) {
+      await sock.sendMessage(m.from, { text: result.error });
+    } else if (result.success) {
+      const successMsg = `✅ *Staff Hired Successfully!*
+
+👤 *Name:* ${result.data.randomName}
+💼 *Position:* ${result.data.staffType}
+💰 *Cost:* ₦${result.data.hiringCost.toLocaleString()} (4 weeks prepaid)
+📊 *Performance:* ${result.data.performance}%
+📈 *Revenue Boost:* ${result.data.revenueBoost}%
+
+🎉 ${result.data.randomName} is now working at your club!`;
+      
+      await sock.sendMessage(m.from, { text: successMsg });
+    }
+    
   } catch (error) {
     console.error(chalk.red('❌ Club hire error:'), error.message);
-    await sock.sendMessage(m.from, { text: '❌ Failed to hire staff.' });
+    await sock.sendMessage(m.from, { text: '❌ Failed to hire staff. Please try again.' });
   } finally {
     await session.endSession();
     await client.close();
