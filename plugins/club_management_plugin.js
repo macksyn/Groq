@@ -88,72 +88,81 @@ export const info = {
 const GAME_CONFIG = {
   EQUIPMENT: {
     // Sound Equipment (High-end, expensive for economy drain)
-    'jbl_srx815p_speakers': { price: 5000000, durability: 150, category: 'sound', boost: { revenue: 1.3, happiness: 0.12 } },
-    'yamaha_dzr15_speakers': { price: 4500000, durability: 140, category: 'sound', boost: { revenue: 1.25, happiness: 0.1 } },
-    'pioneer_djm900_dj_booth': { price: 8000000, durability: 130, category: 'sound', boost: { revenue: 1.4, happiness: 0.15 } },
-    'bose_l1_pro32_system': { price: 12000000, durability: 160, category: 'sound', boost: { revenue: 1.5, happiness: 0.18 } },
+    'JBL_Arena_Speakers': { price: 5000000, durability: 150, category: 'sound', boost: { revenue: 1.3, happiness: 0.12 } },
+    'JBL_Sumit_Speakers': { price: 5000000, durability: 150, category: 'sound', boost: { revenue: 1.3, happiness: 0.12 } },
+    'JBL_Everest_Speakers': { price: 5000000, durability: 150, category: 'sound', boost: { revenue: 1.3, happiness: 0.12 } },
+    'Yamaha_DZR15_speakers': { price: 4500000, durability: 140, category: 'sound', boost: { revenue: 1.25, happiness: 0.1 } },
+    'Pioneer_DJ_booth': { price: 8000000, durability: 130, category: 'sound', boost: { revenue: 1.4, happiness: 0.15 } },
+    'Samsung_Neo_Speakers': { price: 5000000, durability: 150, category: 'sound', boost: { revenue: 1.3, happiness: 0.12 } },
+    'Samsung_Atmos_Speakers': { price: 5000000, durability: 150, category: 'sound', boost: { revenue: 1.3, happiness: 0.12 } },
+    'Bose_Soundlink_Speakers': { price: 12000000, durability: 160, category: 'sound', boost: { revenue: 1.5, happiness: 0.18 } },
+    'Boss_Max_Speakers': { price: 5000000, durability: 150, category: 'sound', boost: { revenue: 1.3, happiness: 0.12 } },
     
     // Lighting
-    'chauvet_rogue_r2x_beam': { price: 6000000, durability: 120, category: 'lighting', boost: { revenue: 1.35, happiness: 0.14 } },
-    'martin_mac_aura_xb': { price: 10000000, durability: 150, category: 'lighting', boost: { revenue: 1.45, happiness: 0.16 } },
+    'Chauvet_Rogue_Beam': { price: 6000000, durability: 120, category: 'lighting', boost: { revenue: 1.35, happiness: 0.14 } },
+    'Martin_Mac_Aura': { price: 10000000, durability: 150, category: 'lighting', boost: { revenue: 1.45, happiness: 0.16 } },
     
     // Furniture & Comfort
-    'vip_leather_booths': { price: 3000000, durability: 200, category: 'furniture', boost: { revenue: 1.25, happiness: 0.1 } },
-    'chrome_bar_stools': { price: 1500000, durability: 180, category: 'furniture', boost: { revenue: 1.15, happiness: 0.08 } },
+    'Vip_Leather_Booths': { price: 3000000, durability: 200, category: 'furniture', boost: { revenue: 1.25, happiness: 0.1 } },
+    'Chrome_Bar_Stools': { price: 1500000, durability: 180, category: 'furniture', boost: { revenue: 1.15, happiness: 0.08 } },
     
     // Security
-    'hikvision_ds2cd_camera': { price: 2000000, durability: 200, category: 'security', boost: { revenue: 1.2, happiness: 0.1 } },
-    'samsung_qn_security_monitor': { price: 3500000, durability: 180, category: 'security', boost: { revenue: 1.25, happiness: 0.12 } }
+    'Hikvision_Camera': { price: 2000000, durability: 200, category: 'security', boost: { revenue: 1.2, happiness: 0.1 } },
+    'Samsung_Security_Monitor': { price: 3500000, durability: 180, category: 'security', boost: { revenue: 1.25, happiness: 0.12 } }
+  },
+    'Vivotek_CCTV': { price: 3500000, durability: 180, category: 'security', boost: { revenue: 1.25, happiness: 0.12 } }
+  },
+    'SONY_Security_Systems': { price: 3500000, durability: 180, category: 'security', boost: { revenue: 1.25, happiness: 0.12 } }
   },
   
   STAFF: {
-    'dj': { salary: 80000, boost: { revenue: 1.25, happiness: 0.1 }, specialty: 'entertainment' },
+    'DJ': { salary: 80000, boost: { revenue: 1.25, happiness: 0.1 }, specialty: 'entertainment' },
     'bartender': { salary: 50000, boost: { revenue: 1.15, happiness: 0.06 }, specialty: 'service' },
-    'bouncer': { salary: 60000, boost: { revenue: 1.05, happiness: 0.08 }, specialty: 'security' },
-    'cleaner': { salary: 30000, boost: { revenue: 1.03, happiness: 0.04 }, specialty: 'maintenance' },
-    'stripper': { salary: 100000, boost: { revenue: 1.4, happiness: 0.15 }, specialty: 'adult_entertainment' },
-    'waitress': { salary: 40000, boost: { revenue: 1.12, happiness: 0.05 }, specialty: 'service' },
-    'technician': { salary: 70000, boost: { revenue: 1.08, maintenance: 0.2 }, specialty: 'technical' }
+    'Bouncer': { salary: 60000, boost: { revenue: 1.05, happiness: 0.08 }, specialty: 'security' },
+    'Cleaner': { salary: 30000, boost: { revenue: 1.03, happiness: 0.04 }, specialty: 'maintenance' },
+    'Stripper': { salary: 100000, boost: { revenue: 1.4, happiness: 0.15 }, specialty: 'adult_entertainment' },
+    'Waitress': { salary: 40000, boost: { revenue: 1.12, happiness: 0.05 }, specialty: 'service' },
+    'Technician': { salary: 70000, boost: { revenue: 1.08, maintenance: 0.2 }, specialty: 'technical' }
   },
   
   LICENSES: {
-    'business': { price: 500000, duration: 365, required: true, description: 'Basic business operation license' },
-    'liquor': { price: 750000, duration: 365, required: false, description: 'Alcohol serving permit' },
-    'adult_entertainment': { price: 1000000, duration: 180, required: false, description: 'Adult entertainment license' },
-    'noise_permit': { price: 250000, duration: 180, required: false, description: 'Late night noise permit' },
-    'food_service': { price: 400000, duration: 365, required: false, description: 'Food service permit' }
+    'Business': { price: 500000, duration: 365, required: true, description: 'Basic business operation license' },
+    'Liquor': { price: 750000, duration: 365, required: false, description: 'Alcohol serving permit' },
+    'Adult_Entertainment': { price: 1000000, duration: 180, required: false, description: 'Adult entertainment license' },
+    'Noise_Permit': { price: 250000, duration: 180, required: false, description: 'Late night noise permit' },
+    'Food_Service': { price: 400000, duration: 365, required: false, description: 'Food service permit' }
   },
   
   UPGRADES: {
-    'premium_interior': { price: 800000, boost: { revenue: 1.3, happiness: 0.12 } },
-    'vip_lounge': { price: 1200000, boost: { revenue: 1.5, happiness: 0.18 } },
-    'rooftop_terrace': { price: 1500000, boost: { revenue: 1.4, happiness: 0.15 } },
-    'private_rooms': { price: 2000000, boost: { revenue: 1.6, happiness: 0.2 } }
+    'Premium_Interior': { price: 800000, boost: { revenue: 1.3, happiness: 0.12 } },
+    'VIP_Lounge': { price: 1200000, boost: { revenue: 1.5, happiness: 0.18 } },
+    'Rooftop_Terrace': { price: 1500000, boost: { revenue: 1.4, happiness: 0.15 } },
+    'Private_Rooms': { price: 2000000, boost: { revenue: 1.6, happiness: 0.2 } }
   },
   
   EVENTS: {
-    'house_party': { cost: 50000, duration: 4, min_equipment: 2, revenue_multiplier: 1.2 },
-    'themed_night': { cost: 80000, duration: 6, min_equipment: 3, revenue_multiplier: 1.4 },
-    'concert': { cost: 150000, duration: 8, min_equipment: 5, revenue_multiplier: 1.8 },
-    'exclusive_event': { cost: 250000, duration: 12, min_equipment: 8, revenue_multiplier: 2.5 }
+    'House_Party': { cost: 50000, duration: 4, min_equipment: 2, revenue_multiplier: 1.2 },
+    'Themed_Night': { cost: 80000, duration: 6, min_equipment: 3, revenue_multiplier: 1.4 },
+    'Concert': { cost: 150000, duration: 8, min_equipment: 5, revenue_multiplier: 1.8 },
+    'Exclusive_Event': { cost: 250000, duration: 12, min_equipment: 8, revenue_multiplier: 2.5 }
   },
   
   CELEBRITIES: {
-    'burna_boy': { fee: 80000000, boost: { revenue: 2.5, happiness: 0.3 }, availability: 0.5, genre: 'afro_fusion' },
-    'wizkid': { fee: 70000000, boost: { revenue: 2.3, happiness: 0.28 }, availability: 0.6, genre: 'afrobeats' },
-    'davido': { fee: 60000000, boost: { revenue: 2.2, happiness: 0.25 }, availability: 0.7, genre: 'afrobeats' },
-    'rema': { fee: 40000000, boost: { revenue: 2.0, happiness: 0.22 }, availability: 0.8, genre: 'afro_rave' },
-    'fireboy_dml': { fee: 30000000, boost: { revenue: 1.8, happiness: 0.2 }, availability: 0.85, genre: 'afrobeats_rnb' },
-    'asake': { fee: 35000000, boost: { revenue: 1.9, happiness: 0.21 }, availability: 0.75, genre: 'fuji_afrobeats' },
-    'olamide': { fee: 25000000, boost: { revenue: 1.7, happiness: 0.18 }, availability: 0.9, genre: 'street_hop' },
-    'ayra_starr': { fee: 30000000, boost: { revenue: 1.8, happiness: 0.2 }, availability: 0.8, genre: 'afropop_rnb' },
-    'tems': { fee: 45000000, boost: { revenue: 2.1, happiness: 0.23 }, availability: 0.7, genre: 'alternative_rnb' },
-    'tiwa_savage': { fee: 40000000, boost: { revenue: 2.0, happiness: 0.22 }, availability: 0.75, genre: 'afrobeats' },
-    'seyi_vibez': { fee: 20000000, boost: { revenue: 1.6, happiness: 0.15 }, availability: 0.9, genre: 'fuji_street_hop' },
-    'oxlade': { fee: 15000000, boost: { revenue: 1.5, happiness: 0.14 }, availability: 0.95, genre: 'afrobeats_rnb' },
-    'joeboy': { fee: 18000000, boost: { revenue: 1.55, happiness: 0.16 }, availability: 0.9, genre: 'afrobeats_pop' },
-    'omah_lay': { fee: 22000000, boost: { revenue: 1.65, happiness: 0.17 }, availability: 0.85, genre: 'afrobeats_soul' },
-    'ckay': { fee: 25000000, boost: { revenue: 1.7, happiness: 0.18 }, availability: 0.8, genre: 'afrobeats_pop' }
+    'Burna_Boy': { fee: 80000000, boost: { revenue: 2.5, happiness: 0.3 }, availability: 0.5, genre: 'afro_fusion' },
+    'Wizkid': { fee: 70000000, boost: { revenue: 2.3, happiness: 0.28 }, availability: 0.6, genre: 'afrobeats' },
+    'Davido': { fee: 60000000, boost: { revenue: 2.2, happiness: 0.25 }, availability: 0.7, genre: 'afrobeats' },
+    'Rema': { fee: 40000000, boost: { revenue: 2.0, happiness: 0.22 }, availability: 0.8, genre: 'afro_rave' },
+    'Fireboy_DML': { fee: 30000000, boost: { revenue: 1.8, happiness: 0.2 }, availability: 0.85, genre: 'afrobeats_rnb' },
+    'Asake': { fee: 35000000, boost: { revenue: 1.9, happiness: 0.21 }, availability: 0.75, genre: 'fuji_afrobeats' },
+    'Olamide': { fee: 25000000, boost: { revenue: 1.7, happiness: 0.18 }, availability: 0.9, genre: 'street_hop' },
+    'Ayra_starr': { fee: 30000000, boost: { revenue: 1.8, happiness: 0.2 }, availability: 0.8, genre: 'afropop_rnb' },
+    'Tems': { fee: 45000000, boost: { revenue: 2.1, happiness: 0.23 }, availability: 0.7, genre: 'alternative_rnb' },
+    'Tiwa_Savage': { fee: 40000000, boost: { revenue: 2.0, happiness: 0.22 }, availability: 0.75, genre: 'afrobeats' },
+    'Seyi_Vibez': { fee: 20000000, boost: { revenue: 1.6, happiness: 0.15 }, availability: 0.9, genre: 'fuji_street_hop' },
+    'Oxlade': { fee: 15000000, boost: { revenue: 1.5, happiness: 0.14 }, availability: 0.95, genre: 'afrobeats_rnb' },
+    'Joeboy': { fee: 18000000, boost: { revenue: 1.55, happiness: 0.16 }, availability: 0.9, genre: 'afrobeats_pop' },
+    'Omah_Lay': { fee: 22000000, boost: { revenue: 1.65, happiness: 0.17 }, availability: 0.85, genre: 'afrobeats_soul' },
+    'CKay': { fee: 25000000, boost: { revenue: 1.7, happiness: 0.18 }, availability: 0.8, genre: 'afrobeats_pop' }
   },
 
   UTILITIES_BASE_COST: 2000000, // Base weekly utilities/rent, scales with club size
