@@ -482,9 +482,18 @@ const backupManager = new BackupManager();
 const logManager = new LogManager();
 
 // Helper Functions
+function normalizeId(id) {
+  // Handles JID, LID, and plain numbers
+  if (!id) return '';
+  // Remove WhatsApp JID suffixes
+  id = id.replace(/@(s|lid)\.whatsapp\.net$/, '');
+  // Remove any non-digit characters
+  return id.replace(/\D/g, '');
+}
+
 function isOwner(userId, ownerNumber) {
-  const cleanUserId = userId.replace('@s.whatsapp.net', '');
-  const cleanOwnerNumber = ownerNumber.replace('@s.whatsapp.net', '');
+  const cleanUserId = normalizeId(userId);
+  const cleanOwnerNumber = normalizeId(ownerNumber);
   return cleanUserId === cleanOwnerNumber;
 }
 
