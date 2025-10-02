@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { serializeMessage } from '../lib/serializer.js';
-import { PermissionHelpers, RateLimitHelpers, OwnerHelpers, normalizeJID } from '../lib/helpers.js';
+import { PermissionHelpers, RateLimitHelpers, OwnerHelpers } from '../lib/helpers.js';
 import PluginManager from '../lib/pluginManager.js';
 
 // Auto reaction emojis
@@ -12,8 +12,8 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
     if (messageUpdate.type !== 'notify') return;
     if (!messageUpdate.messages?.[0]) return;
 
-    // Serialize message with helper methods (NOW ASYNC)
-    const m = await serializeMessage(messageUpdate.messages[0], sock);
+    // Serialize message with helper methods
+    const m = serializeMessage(messageUpdate.messages[0], sock);
     if (!m.message) return;
 
     // Handle status broadcasts
@@ -29,39 +29,20 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       await sock.readMessages([m.key]);
     }
 
-    // DEBUG: Log raw sender info to diagnose the issue
-    console.log(chalk.magenta('🔍 DEBUG - Raw sender info:'), {
-      sender: m.sender,
-      keyParticipant: m.key?.participant,
-      keyRemoteJid: m.key?.remoteJid,
-      isGroup: m.isGroup,
-      isSelf: m.isSelf
-    });
-
-    // FIXED: Normalize sender for consistent comparison
-    const senderPhone = normalizeJID(m.sender || '');
-    const ownerPhone = normalizeJID(config.OWNER_NUMBER);
-
-    console.log(chalk.cyan('🔍 DEBUG - Normalized comparison:'), {
-      senderPhone,
-      ownerPhone,
-      configAdmins: config.ADMIN_NUMBERS
-    });
-
-    // FIXED: Safe permission checks with normalized JIDs
-    const isOwner = senderPhone === ownerPhone;
+    // FIXED: Safe permission checks with null safety
+    const isOwner = PermissionHelpers.isOwner(m.sender || '', config.OWNER_NUMBER + '@s.whatsapp.net');
     
-    // FIXED: Check for multiple admin numbers (config admins) with normalized comparison
+    // FIXED: Check for multiple admin numbers (config admins)
     let isConfigAdmin = isOwner;
-    if (config.ADMIN_NUMBERS && !isOwner) {
+    if (config.ADMIN_NUMBERS) {
       const adminNumbers = Array.isArray(config.ADMIN_NUMBERS) 
         ? config.ADMIN_NUMBERS 
         : config.ADMIN_NUMBERS.split(',').map(num => num.trim());
       
-      isConfigAdmin = adminNumbers.some(adminNum => {
-        const cleanAdminNum = normalizeJID(adminNum);
-        console.log(chalk.yellow('🔍 Comparing:'), senderPhone, '===', cleanAdminNum, '?', senderPhone === cleanAdminNum);
-        return senderPhone === cleanAdminNum;
+      const senderNumber = (m.sender || '').replace('@s.whatsapp.net', '');
+      isConfigAdmin = isOwner || adminNumbers.some(adminNum => {
+        const cleanAdminNum = adminNum.replace('@s.whatsapp.net', '');
+        return senderNumber === cleanAdminNum;
       });
     }
 
@@ -69,33 +50,14 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
     let isDbAdmin = false;
     try {
       const dbAdmins = await OwnerHelpers.getAdmins();
-      isDbAdmin = dbAdmins.some(admin => {
-        const adminPhone = normalizeJID(admin.phone);
-        return senderPhone === adminPhone;
-      });
+      const senderPhone = (m.sender || '').replace('@s.whatsapp.net', '');
+      isDbAdmin = dbAdmins.some(admin => admin.phone === senderPhone);
     } catch (error) {
       console.warn(chalk.yellow('⚠️ Error checking database admins:'), error.message);
     }
 
     // Combined admin check (either config admin or database admin)
     const isAdmin = isConfigAdmin || isDbAdmin;
-    
-    // ENHANCED: Check if user is banned
-    let isBanned = false;
-    try {
-      const bannedUsers = await OwnerHelpers.getBannedUsers();
-      isBanned = bannedUsers.some(banned => {
-        const bannedPhone = normalizeJID(banned.phone);
-        return senderPhone === bannedPhone;
-      });
-      
-      if (isBanned && !isOwner) {
-        // Silently ignore banned users
-        return;
-      }
-    } catch (error) {
-      console.warn(chalk.yellow('⚠️ Error checking banned users:'), error.message);
-    }
     
     // ENHANCED: Check bot mode from database instead of config
     let isPublic = true;
@@ -118,8 +80,8 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       return;
     }
 
-    // FIXED: Safe rate limiting check with normalized JID
-    const senderId = senderPhone || 'unknown';
+    // FIXED: Safe rate limiting check with null safety
+    const senderId = m.sender || 'unknown';
     if (RateLimitHelpers.isLimited(senderId, 'global', 10, 60000)) {
       return; // Silently ignore rate limited users
     }
@@ -139,14 +101,14 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
 
     // Log incoming message with safety checks
     const senderName = m.isGroup 
-      ? `${senderPhone} in ${(m.from || 'unknown').split('@')[0]}` 
-      : senderPhone;
+      ? `${(m.sender || 'unknown').split('@')[0]} in ${(m.from || 'unknown').split('@')[0]}` 
+      : (m.sender || 'unknown').split('@')[0];
     
     if (messageBody && messageBody.startsWith(config.PREFIX)) {
       const displayMessage = messageBody.length > 50 
         ? messageBody.substring(0, 50) + '...' 
         : messageBody;
-      console.log(chalk.blue(`📨 Command from ${senderName}: ${displayMessage} [Owner: ${isOwner}, Admin: ${isAdmin}, Mode: ${isPublic ? 'Public' : 'Private'}]`));
+      console.log(chalk.blue(`📨 Command from ${senderName}: ${displayMessage} [Mode: ${isPublic ? 'Public' : 'Private'}]`));
     }
 
     // Auto react to messages (only for non-commands and random chance)
@@ -209,8 +171,7 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
     // Optional: Send error notification to owner (with safety checks)
     if (config.OWNER_NUMBER && error.message) {
       try {
-        const ownerJID = normalizeJID(config.OWNER_NUMBER) + '@s.whatsapp.net';
-        await sock.sendMessage(ownerJID, {
+        await sock.sendMessage(config.OWNER_NUMBER + '@s.whatsapp.net', {
           text: `🚨 Bot Error Alert\n\n❌ Error: ${error.message}\n📍 Location: Message Handler\n⏰ Time: ${new Date().toLocaleString()}`
         });
       } catch (notifyError) {
@@ -218,4 +179,4 @@ export default async function MessageHandler(messageUpdate, sock, logger, config
       }
     }
   }
-}
+                                                        }
