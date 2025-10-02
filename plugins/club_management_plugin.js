@@ -933,75 +933,82 @@ async function handleClubRepair(m, sock, args, userId) {
   
   const itemName = args.join('_').toLowerCase();
   
-  const { MongoClient } = require('mongodb');
-  const client = await MongoClient.connect(process.env.MONGO_URI, { useUnifiedTopology: true });
-  const session = client.startSession();
   try {
-    await session.withTransaction(async () => {
-      const clubsCollection = client.db().collection('clubs');
-      const club = await clubsCollection.findOne({ userId }, { session });
-      if (!club) {
-        await sock.sendMessage(m.from, {
-          text: '❌ You don\'t own a club!'
-        });
-        await session.abortTransaction();
-        return;
+    const clubsCollection = await getCollection('clubs');
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await sock.sendMessage(m.from, { text: '❌ You don\'t own a club!' });
+      return;
+    }
+    
+    const equipment = club.equipment || [];
+    const itemIndex = equipment.findIndex(eq => eq.type === itemName);
+    
+    if (itemIndex === -1) {
+      await sock.sendMessage(m.from, {
+        text: `❌ You don't own "${itemName.replace(/_/g, ' ')}" equipment!`
+      });
+      return;
+    }
+    
+    const item = equipment[itemIndex];
+    
+    if (!item.broken && item.currentDurability >= item.maxDurability * 0.9) {
+      await sock.sendMessage(m.from, {
+        text: `❌ "${itemName.replace(/_/g, ' ')}" doesn't need repair!\n\nCurrent durability: ${item.currentDurability}/${item.maxDurability}`
+      });
+      return;
+    }
+    
+    const equipmentConfig = GAME_CONFIG.EQUIPMENT[itemName];
+    const repairCost = Math.floor(equipmentConfig.price * 0.5);
+    const userBalance = await PluginHelpers.getBalance(userId);
+    
+    if (userBalance.wallet < repairCost) {
+      await sock.sendMessage(m.from, {
+        text: `❌ Insufficient funds for repair!\n\n*Repair Cost:* ₦${repairCost.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`
+      });
+      return;
+    }
+    
+    // Deduct money first
+    const moneyRemoved = await unifiedUserManager.removeMoney(userId, repairCost, `Repair: ${itemName}`);
+    
+    if (!moneyRemoved) {
+      await sock.sendMessage(m.from, { text: '❌ Failed to deduct repair cost. Please try again.' });
+      return;
+    }
+    
+    equipment[itemIndex].currentDurability = item.maxDurability;
+    equipment[itemIndex].broken = false;
+    equipment[itemIndex].timesRepaired = (item.timesRepaired || 0) + 1;
+    equipment[itemIndex].lastRepairedAt = new Date();
+    
+    await clubsCollection.updateOne(
+      { userId },
+      {
+        $set: {
+          equipment: equipment,
+          updatedAt: new Date()
+        }
       }
-      const equipment = club.equipment || [];
-      const itemIndex = equipment.findIndex(eq => eq.type === itemName);
-      if (itemIndex === -1) {
-        await sock.sendMessage(m.from, {
-          text: `❌ You don't own "${itemName.replace(/_/g, ' ')}" equipment!`
-        });
-        await session.abortTransaction();
-        return;
-      }
-      const item = equipment[itemIndex];
-      if (!item.broken && item.currentDurability >= item.maxDurability * 0.9) {
-        await sock.sendMessage(m.from, {
-          text: `❌ "${itemName.replace(/_/g, ' ')}" doesn't need repair!\n\nCurrent durability: ${item.currentDurability}/${item.maxDurability}`
-        });
-        await session.abortTransaction();
-        return;
-      }
-      // Calculate repair cost (50% of original price)
-      const equipmentConfig = GAME_CONFIG.EQUIPMENT[itemName];
-      const repairCost = Math.floor(equipmentConfig.price * 0.5);
-      const userBalance = await PluginHelpers.getBalance(userId);
-      if (userBalance.wallet < repairCost) {
-        await sock.sendMessage(m.from, {
-          text: `❌ Insufficient funds for repair!\n\n*Repair Cost:* ₦${repairCost.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`
-        });
-        await session.abortTransaction();
-        return;
-      }
-      // Deduct money and repair equipment atomically
-      await unifiedUserManager.removeMoney(userId, repairCost, `Repair: ${itemName}`, { session });
-      equipment[itemIndex].currentDurability = item.maxDurability;
-      equipment[itemIndex].broken = false;
-      equipment[itemIndex].timesRepaired = (item.timesRepaired || 0) + 1;
-      equipment[itemIndex].lastRepairedAt = new Date();
-      await clubsCollection.updateOne(
-        { userId },
-        {
-          $set: {
-            equipment: equipment,
-            updatedAt: new Date()
-          }
-        },
-        { session }
-      );
-      const successMsg = `🔧 *Equipment Repaired!*\n\nItem: ${itemName.replace(/_/g, ' ')}\nCost: ₦${repairCost.toLocaleString()}\nNew Durability: ${item.maxDurability}/${item.maxDurability}\nTimes Repaired: ${equipment[itemIndex].timesRepaired}\n\nYour equipment is now fully operational!`;
-      await sock.sendMessage(m.from, { text: successMsg });
-    });
+    );
+    
+    const successMsg = `🔧 *Equipment Repaired!*
+
+🛍️ *Item:* ${itemName.replace(/_/g, ' ')}
+💰 *Cost:* ₦${repairCost.toLocaleString()}
+🔧 *New Durability:* ${item.maxDurability}/${item.maxDurability}
+🔄 *Times Repaired:* ${equipment[itemIndex].timesRepaired}
+
+✅ Your equipment is now fully operational!`;
+
+    await sock.sendMessage(m.from, { text: successMsg });
+    
   } catch (error) {
     console.error(chalk.red('❌ Club repair error:'), error.message);
-    await sock.sendMessage(m.from, {
-      text: '❌ Failed to repair equipment.'
-    });
-  } finally {
-    await session.endSession();
-    await client.close();
+    await sock.sendMessage(m.from, { text: '❌ Failed to repair equipment.' });
   }
 }
 
@@ -1014,117 +1021,106 @@ async function handleClubHire(m, sock, args, userId) {
     return;
   }
   
-  // Sanitize staff type: allow only letters and underscores
   const staffType = args[0].replace(/[^a-zA-Z_]/g, '').toLowerCase();
-
-  const { MongoClient } = require('mongodb');
-  const client = await MongoClient.connect(process.env.MONGO_URI, { useUnifiedTopology: true });
-  const session = client.startSession();
   
   try {
-    const result = await session.withTransaction(async () => {
-      const clubsCollection = client.db().collection('clubs');
-      const club = await clubsCollection.findOne({ userId }, { session });
-      
-      if (!club) {
-        return { error: '❌ You don\'t own a club!' };
-      }
-      
-      const staffConfig = GAME_CONFIG.STAFF[staffType];
-      if (!staffConfig) {
-        return { error: `❌ Staff type "${staffType}" not found!\n\n*Available:* ${Object.keys(GAME_CONFIG.STAFF).join(', ')}` };
-      }
-      
-      // Check if already have this type of staff (limit 2 per type)
-      const existingStaff = (club.staff || []).filter(s => s.type === staffType);
-      if (existingStaff.length >= 2) {
-        return { error: `❌ You already have maximum ${staffType}s (2 max per type)!\n\nUse \`/club fire ${staffType}\` to make room.` };
-      }
-      
-      // Hiring cost (4 weeks salary upfront)
-      const hiringCost = staffConfig.salary * 4;
-      const userBalance = await PluginHelpers.getBalance(userId);
-      
-      if (userBalance.wallet < hiringCost) {
-        return { error: `❌ Insufficient funds to hire ${staffType}!\n\n*Cost:* ₦${hiringCost.toLocaleString()} (4 weeks salary)\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}` };
-      }
-      
-      // Special requirements check
-      if (staffType === 'stripper') {
-        const hasAdultLicense = (club.licenses || []).some(l => l.type === 'adult_entertainment' && l.active);
-        if (!hasAdultLicense) {
-          return { error: '❌ You need an active adult entertainment license to hire strippers!\n\nUse `/club license adult_entertainment` first.' };
-        }
-      }
-      
-      // Generate random staff name
-      const names = {
-        dj: ['DJ Neptune', 'DJ Cuppy', 'DJ Spinall', 'DJ Big N', 'DJ Xclusive'],
-        bartender: ['Angella', 'Maria', 'Jay', 'Lisa', 'Sandra'],
-        bouncer: ['Big Joe', 'Marcus', 'Steel', 'Bruno', 'Tank'],
-        cleaner: ['Rosa', 'Ahmed', 'Grace', 'Pedro', 'Kim'],
-        stripper: ['Diamond', 'Cherry', 'Angel', 'Raven', 'Candy'],
-        waitress: ['Sophie', 'Emma', 'Olivia', 'Mia', 'Ava'],
-        technician: ['Tech Sam', 'Engineer Bob', 'Geek Paul', 'Pro Lisa', 'Wizard John']
-      };
-      const randomName = names[staffType][Math.floor(Math.random() * names[staffType].length)];
-      
-      // Deduct money
-      await unifiedUserManager.removeMoney(userId, hiringCost, `Hire ${staffType}: ${randomName}`, { session });
-      
-      const newStaff = {
-        type: staffType,
-        name: randomName,
-        hiredAt: new Date(),
-        weeksHired: 4,
-        performance: Math.floor(Math.random() * 20) + 80,
-        salary: staffConfig.salary
-      };
-      
-      await clubsCollection.updateOne(
-        { userId },
-        {
-          $push: { staff: newStaff },
-          $set: { updatedAt: new Date() }
-        },
-        { session }
-      );
-      
-      return {
-        success: true,
-        data: {
-          staffType,
-          randomName,
-          hiringCost,
-          performance: newStaff.performance,
-          revenueBoost: Math.round((staffConfig.boost.revenue - 1) * 100)
-        }
-      };
-    });
+    const clubsCollection = await getCollection('clubs');
+    const club = await clubsCollection.findOne({ userId });
     
-    // Send response after transaction completes
-    if (result.error) {
-      await sock.sendMessage(m.from, { text: result.error });
-    } else if (result.success) {
-      const successMsg = `✅ *Staff Hired Successfully!*
-
-👤 *Name:* ${result.data.randomName}
-💼 *Position:* ${result.data.staffType}
-💰 *Cost:* ₦${result.data.hiringCost.toLocaleString()} (4 weeks prepaid)
-📊 *Performance:* ${result.data.performance}%
-📈 *Revenue Boost:* ${result.data.revenueBoost}%
-
-🎉 ${result.data.randomName} is now working at your club!`;
-      
-      await sock.sendMessage(m.from, { text: successMsg });
+    if (!club) {
+      await sock.sendMessage(m.from, { text: '❌ You don\'t own a club!' });
+      return;
     }
+    
+    const staffConfig = GAME_CONFIG.STAFF[staffType];
+    if (!staffConfig) {
+      await sock.sendMessage(m.from, { 
+        text: `❌ Staff type "${staffType}" not found!\n\n*Available:* ${Object.keys(GAME_CONFIG.STAFF).join(', ')}` 
+      });
+      return;
+    }
+    
+    const existingStaff = (club.staff || []).filter(s => s.type === staffType);
+    if (existingStaff.length >= 2) {
+      await sock.sendMessage(m.from, { 
+        text: `❌ You already have maximum ${staffType}s (2 max per type)!\n\nUse \`/club fire ${staffType}\` to make room.` 
+      });
+      return;
+    }
+    
+    const hiringCost = staffConfig.salary * 4;
+    const userBalance = await PluginHelpers.getBalance(userId);
+    
+    if (userBalance.wallet < hiringCost) {
+      await sock.sendMessage(m.from, { 
+        text: `❌ Insufficient funds to hire ${staffType}!\n\n*Cost:* ₦${hiringCost.toLocaleString()} (4 weeks salary)\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}` 
+      });
+      return;
+    }
+    
+    if (staffType === 'stripper') {
+      const hasAdultLicense = (club.licenses || []).some(l => l.type === 'adult_entertainment' && l.active);
+      if (!hasAdultLicense) {
+        await sock.sendMessage(m.from, { 
+          text: '❌ You need an active adult entertainment license to hire strippers!\n\nUse `/club license adult_entertainment` first.' 
+        });
+        return;
+      }
+    }
+    
+    const names = {
+      dj: ['DJ Neptune', 'DJ Cuppy', 'DJ Spinall', 'DJ Big N', 'DJ Xclusive'],
+      bartender: ['Angella', 'Maria', 'Jay', 'Lisa', 'Sandra'],
+      bouncer: ['Big Joe', 'Marcus', 'Steel', 'Bruno', 'Tank'],
+      cleaner: ['Rosa', 'Ahmed', 'Grace', 'Pedro', 'Kim'],
+      stripper: ['Diamond', 'Cherry', 'Angel', 'Raven', 'Candy'],
+      waitress: ['Sophie', 'Emma', 'Olivia', 'Mia', 'Ava'],
+      technician: ['Tech Sam', 'Engineer Bob', 'Geek Paul', 'Pro Lisa', 'Wizard John']
+    };
+    const randomName = names[staffType][Math.floor(Math.random() * names[staffType].length)];
+    
+    // Deduct money first
+    const moneyRemoved = await unifiedUserManager.removeMoney(userId, hiringCost, `Hire ${staffType}: ${randomName}`);
+    
+    if (!moneyRemoved) {
+      await sock.sendMessage(m.from, { 
+        text: '❌ Failed to deduct hiring cost. Please try again.' 
+      });
+      return;
+    }
+    
+    const newStaff = {
+      type: staffType,
+      name: randomName,
+      hiredAt: new Date(),
+      weeksHired: 4,
+      performance: Math.floor(Math.random() * 20) + 80,
+      salary: staffConfig.salary
+    };
+    
+    await clubsCollection.updateOne(
+      { userId },
+      {
+        $push: { staff: newStaff },
+        $set: { updatedAt: new Date() }
+      }
+    );
+    
+    const successMsg = `✅ *Staff Hired Successfully!*
+
+👤 *Name:* ${randomName}
+💼 *Position:* ${staffType}
+💰 *Cost:* ₦${hiringCost.toLocaleString()} (4 weeks prepaid)
+📊 *Performance:* ${newStaff.performance}%
+📈 *Revenue Boost:* ${Math.round((staffConfig.boost.revenue - 1) * 100)}%
+
+🎉 ${randomName} is now working at your club!`;
+    
+    await sock.sendMessage(m.from, { text: successMsg });
     
   } catch (error) {
     console.error(chalk.red('❌ Club hire error:'), error.message);
     await sock.sendMessage(m.from, { text: '❌ Failed to hire staff. Please try again.' });
-  } finally {
-    await session.endSession();
-    await client.close();
   }
 }
 
@@ -1443,98 +1439,94 @@ async function handleClubBook(m, sock, args, userId) {
   const celebName = args[0].toLowerCase();
   const eventType = args[1].toLowerCase();
   
-  const { MongoClient } = require('mongodb');
-  const client = await MongoClient.connect(process.env.MONGO_URI, { useUnifiedTopology: true });
-  const session = client.startSession();
   try {
-    await session.withTransaction(async () => {
-      const clubsCollection = client.db().collection('clubs');
-      const celebritiesCollection = client.db().collection('celebrities');
-      const club = await clubsCollection.findOne({ userId }, { session });
-      
-      if (!club) {
-        await sock.sendMessage(m.from, { text: '❌ You don\'t own a club!' });
-        await session.abortTransaction();
-        return;
-      }
-      
-      const celebConfig = GAME_CONFIG.CELEBRITIES[celebName];
-      if (!celebConfig) {
-        await sock.sendMessage(m.from, { text: `❌ Celebrity "${celebName.replace(/_/g, ' ')}" not found!\n\nView available: /club market` });
-        await session.abortTransaction();
-        return;
-      }
-      
-      const eventConfig = GAME_CONFIG.EVENTS[eventType];
-      if (!eventConfig) {
-        await sock.sendMessage(m.from, { text: `❌ Event "${eventType}" not found!\n\nView available: /club host` });
-        await session.abortTransaction();
-        return;
-      }
-      
-      // Get current availability
-      const celebData = await celebritiesCollection.findOne({ name: celebName }) || { availability: celebConfig.availability };
-      
-      // Roll for success
-      if (Math.random() > celebData.availability) {
-        // Failure: lose 50% fee
-        const deposit = Math.floor(celebConfig.fee * 0.5);
-        await unifiedUserManager.removeMoney(userId, deposit, `Failed booking deposit: ${celebName}`, { session });
-        await sock.sendMessage(m.from, { text: `❌ Booking failed! ${celebName.replace(/_/g, ' ')} is unavailable.\n\nLost deposit: ₦${deposit.toLocaleString()}\n\nReputation decreased.` });
-        
-        // Decrease reputation
-        await clubsCollection.updateOne(
-          { userId },
-          { $inc: { reputation: -10 } },
-          { session }
-        );
-        
-        // Add violation
-        const violations = club.violations || [];
-        violations.push({
-          type: 'failed_booking',
-          description: `Failed to book ${celebName}`,
-          date: new Date()
-        });
-        await clubsCollection.updateOne(
-          { userId },
-          { $set: { violations } },
-          { session }
-        );
-        
-        await session.commitTransaction();
-        return;
-      }
-      
-      const userBalance = await PluginHelpers.getBalance(userId);
-      if (userBalance.wallet < celebConfig.fee) {
-        await sock.sendMessage(m.from, { text: `❌ Insufficient funds!\n\n*Fee:* ₦${celebConfig.fee.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}` });
-        await session.abortTransaction();
-        return;
-      }
-      
-      // Book successfully - apply boost to event
-      await unifiedUserManager.removeMoney(userId, celebConfig.fee, `Book ${celebName} for ${eventType}`, { session });
-      
-      // Store booking in club (for event boost)
-      const newBooking = {
-        celebrity: celebName,
-        event: eventType,
-        bookedAt: new Date(),
-        boost: celebConfig.boost
-      };
+    const clubsCollection = await getCollection('clubs');
+    const celebritiesCollection = await getCollection('celebrities');
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await sock.sendMessage(m.from, { text: '❌ You don\'t own a club!' });
+      return;
+    }
+    
+    const celebConfig = GAME_CONFIG.CELEBRITIES[celebName];
+    if (!celebConfig) {
+      await sock.sendMessage(m.from, { 
+        text: `❌ Celebrity "${celebName.replace(/_/g, ' ')}" not found!\n\nView available: /club market` 
+      });
+      return;
+    }
+    
+    const eventConfig = GAME_CONFIG.EVENTS[eventType];
+    if (!eventConfig) {
+      await sock.sendMessage(m.from, { 
+        text: `❌ Event "${eventType}" not found!\n\nView available: /club host` 
+      });
+      return;
+    }
+    
+    const celebData = await celebritiesCollection.findOne({ name: celebName }) || { availability: celebConfig.availability };
+    
+    // Roll for success
+    if (Math.random() > celebData.availability) {
+      const deposit = Math.floor(celebConfig.fee * 0.5);
+      await unifiedUserManager.removeMoney(userId, deposit, `Failed booking deposit: ${celebName}`);
       
       await clubsCollection.updateOne(
         { userId },
-        { 
-          $push: { bookings: newBooking },
-          $inc: { reputation: 20 }, // Boost reputation
-          $set: { updatedAt: new Date() }
-        },
-        { session }
+        { $inc: { reputation: -10 } }
       );
       
-      const successMsg = `✅ *Celebrity Booked!*
+      const violations = club.violations || [];
+      violations.push({
+        type: 'failed_booking',
+        description: `Failed to book ${celebName}`,
+        date: new Date()
+      });
+      await clubsCollection.updateOne(
+        { userId },
+        { $set: { violations } }
+      );
+      
+      await sock.sendMessage(m.from, { 
+        text: `❌ Booking failed! ${celebName.replace(/_/g, ' ')} is unavailable.\n\nLost deposit: ₦${deposit.toLocaleString()}\n\nReputation decreased.` 
+      });
+      return;
+    }
+    
+    const userBalance = await PluginHelpers.getBalance(userId);
+    if (userBalance.wallet < celebConfig.fee) {
+      await sock.sendMessage(m.from, { 
+        text: `❌ Insufficient funds!\n\n*Fee:* ₦${celebConfig.fee.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}` 
+      });
+      return;
+    }
+    
+    // Deduct money first
+    const moneyRemoved = await unifiedUserManager.removeMoney(userId, celebConfig.fee, `Book ${celebName} for ${eventType}`);
+    
+    if (!moneyRemoved) {
+      await sock.sendMessage(m.from, { text: '❌ Failed to deduct booking fee. Please try again.' });
+      return;
+    }
+    
+    const newBooking = {
+      celebrity: celebName,
+      event: eventType,
+      bookedAt: new Date(),
+      boost: celebConfig.boost
+    };
+    
+    await clubsCollection.updateOne(
+      { userId },
+      { 
+        $push: { bookings: newBooking },
+        $inc: { reputation: 20 },
+        $set: { updatedAt: new Date() }
+      }
+    );
+    
+    const successMsg = `✅ *Celebrity Booked!*
 
 ⭐ *Celebrity:* ${celebName.replace(/_/g, ' ')}
 🎪 *For Event:* ${eventType.replace(/_/g, ' ')}
@@ -1543,14 +1535,11 @@ async function handleClubBook(m, sock, args, userId) {
 
 💡 Host the event to apply the boost!`;
 
-      await sock.sendMessage(m.from, { text: successMsg });
-    });
+    await sock.sendMessage(m.from, { text: successMsg });
+    
   } catch (error) {
     console.error(chalk.red('❌ Club book error:'), error.message);
     await sock.sendMessage(m.from, { text: '❌ Failed to book celebrity.' });
-  } finally {
-    await session.endSession();
-    await client.close();
   }
 }
 
