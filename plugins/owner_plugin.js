@@ -2,6 +2,7 @@
 import chalk from 'chalk';
 import moment from 'moment-timezone';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
+import { resolveGroupMemberIds } from '../lib/serializer.js';
 
 // Plugin Information
 export const info = {
@@ -482,18 +483,24 @@ const backupManager = new BackupManager();
 const logManager = new LogManager();
 
 // Helper Functions
-function normalizeId(id) {
-  // Handles JID, LID, and plain numbers
+async function normalizeId(id, sock = null, groupId = null) {
   if (!id) return '';
+  // If LID, resolve to JID using group metadata
+  if (id.endsWith('@lid.whatsapp.net') && sock && groupId) {
+    const resolved = await resolveGroupMemberIds(sock, groupId, [id]);
+    if (resolved && resolved[0]) {
+      id = resolved[0];
+    }
+  }
   // Remove WhatsApp JID suffixes
   id = id.replace(/@(s|lid)\.whatsapp\.net$/, '');
   // Remove any non-digit characters
   return id.replace(/\D/g, '');
 }
 
-function isOwner(userId, ownerNumber) {
-  const cleanUserId = normalizeId(userId);
-  const cleanOwnerNumber = normalizeId(ownerNumber);
+async function isOwner(userId, ownerNumber, sock = null, groupId = null) {
+  const cleanUserId = await normalizeId(userId, sock, groupId);
+  const cleanOwnerNumber = await normalizeId(ownerNumber);
   return cleanUserId === cleanOwnerNumber;
 }
 
