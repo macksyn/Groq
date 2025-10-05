@@ -1002,41 +1002,68 @@ async function updateStats(groupId, updates, session) {
   await saveStats(groupId, stats);
 }
 
-function isAdmin(userId, groupId, config) {
+// COMPLETE REPLACEMENT for isAdmin function in interview.js
+// Replace the entire existing isAdmin function with this version
+
+async function isAdmin(userId, groupId) {
   try {
     if (!userId || typeof userId !== 'string') return false;
+    
+    // Extract bare number consistently (same method as attendance plugin)
+    const bareNumber = userId.split('@')[0];
 
-    const cleanUserId = userId.replace('@s.whatsapp.net', '');
-    
-    const ownerNumber = config.OWNER_NUMBER?.replace('@s.whatsapp.net', '');
-    if (ownerNumber && cleanUserId === ownerNumber) return true;
-    
-    if (config.ADMIN_NUMBERS) {
-      let adminNumbers = [];
-      if (typeof config.ADMIN_NUMBERS === 'string') {
-        adminNumbers = config.ADMIN_NUMBERS.split(',').map(num => num.trim().replace('@s.whatsapp.net', ''));
-      } else if (Array.isArray(config.ADMIN_NUMBERS)) {
-        adminNumbers = config.ADMIN_NUMBERS.map(num => String(num).replace('@s.whatsapp.net', ''));
+    // 1. Check owner from ENV directly (PRIMARY SOURCE)
+    const ownerNumber = process.env.OWNER_NUMBER || '';
+    if (ownerNumber && bareNumber === ownerNumber.split('@')[0]) {
+      return true;
+    }
+
+    // 2. Check admin numbers from ENV directly (PRIMARY SOURCE)
+    const adminNumbersEnv = process.env.ADMIN_NUMBERS || '';
+    if (adminNumbersEnv) {
+      const adminNumbers = adminNumbersEnv.split(',').map(num => num.trim().split('@')[0]);
+      if (adminNumbers.includes(bareNumber)) {
+        return true;
       }
-      if (adminNumbers.length > 0 && adminNumbers.includes(cleanUserId)) return true;
     }
-    
-    if (config.MODS && Array.isArray(config.MODS)) {
-      const cleanMods = config.MODS.map(mod => String(mod).replace('@s.whatsapp.net', ''));
-      if (cleanMods.includes(cleanUserId)) return true;
+
+    // 3. Check database admins (SECONDARY SOURCE)
+    try {
+      const dbAdmins = await OwnerHelpers.getAdmins();
+      if (dbAdmins && dbAdmins.some(admin => {
+        const adminPhone = admin.phone ? admin.phone.split('@')[0] : '';
+        return adminPhone === bareNumber;
+      })) {
+        return true;
+      }
+    } catch (dbError) {
+      console.error('Database admin check failed:', dbError);
+      // Continue to other checks even if DB fails
     }
-    
+
+    // 4. Check group-specific admins from interview settings (TERTIARY SOURCE)
     const settings = groupSettings.get(groupId);
-    if (settings && Array.isArray(settings.adminIds) && settings.adminIds.length > 0) {
-      const cleanGroupAdmins = settings.adminIds.map(admin => String(admin).replace('@s.whatsapp.net', ''));
-      if (cleanGroupAdmins.includes(cleanUserId)) return true;
+    if (settings?.adminIds?.length > 0) {
+      const cleanGroupAdmins = settings.adminIds.map(admin => String(admin).split('@')[0]);
+      if (cleanGroupAdmins.includes(bareNumber)) {
+        return true;
+      }
     }
-    
+
     return false;
   } catch (error) {
-    console.error('isAdmin function error:', error);
+    console.error('isAdmin error:', error);
     return false;
   }
+}
+
+// BONUS: You can also remove/simplify the initialize function since we're not using botConfig anymore
+// The initialize function can now be simplified or removed:
+
+export function initialize(config) {
+  // Keep this minimal or empty since we read from ENV directly
+  botConfig = config; // Keep for backward compatibility if needed elsewhere
+  console.log('✅ Interview plugin initialized (reading admins from ENV)');
 }
 
 async function handleAdminCommand(command, args, m, sock, config, groupId) {
