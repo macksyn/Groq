@@ -1,6 +1,5 @@
 import chalk from 'chalk';
 import moment from 'moment-timezone';
-import { handleNewMember } from '../plugins/interview.js';
 
 export default async function GroupHandler(sock, groupUpdate, config) {
   try {
@@ -73,9 +72,6 @@ Enjoy your stay! 🎈
             });
             
             console.log(chalk.green(`👋 Welcomed ${userName} to ${groupName}`));
-
-            // Trigger auto-interview if activated
-            await handleNewMember(sock, id, jid, config);
           }
           
           if (action === 'remove') {
