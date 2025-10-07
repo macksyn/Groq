@@ -1184,7 +1184,7 @@ Use: \`/club shop 2\` for next page`;
 async function handleClubBuy(m, sock, args, userId) {
   if (args.length === 0) {
     await sock.sendMessage(m.from, {
-      text: '❌ Usage: `/club buy <ID or name>`\n\nExample: `/club buy S1` or `/club buy premium_sound`'
+      text: '❌ Usage: `/club buy <ID or name>`\n\nExample: `/club buy S1` or `/club buy premium_sound`\n\nView shop: `/club shop`'
     });
     return;
   }
@@ -1196,7 +1196,9 @@ async function handleClubBuy(m, sock, args, userId) {
     const club = await clubsCollection.findOne({ userId });
     
     if (!club) {
-      await sock.sendMessage(m.from, { text: '❌ No club found!' });
+      await sock.sendMessage(m.from, { 
+        text: '❌ You don\'t own a club!\n\nRegister first: `/club register <name>`\n\nExample: `/club register My Club`' 
+      });
       return;
     }
     
@@ -1564,43 +1566,668 @@ async function showClubHelp(m, sock, args, prefix) {
   }
 }
 
-// Export placeholder handlers (implement with similar enhanced UI)
+// COMPLETE HANDLER IMPLEMENTATIONS
+
 async function handleClubRepair(m, sock, args, userId) {
-  await sock.sendMessage(m.from, { text: '🔧 Repair feature - Enhanced version coming soon!' });
+  if (args.length === 0) {
+    await sock.sendMessage(m.from, {
+      text: '❌ Usage: `/club repair <ID or name>`\n\nExample: `/club repair S1`'
+    });
+    return;
+  }
+  
+  const input = args.join('_').toLowerCase();
+  
+  try {
+    const clubsCollection = await getCollection('clubs');
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await sock.sendMessage(m.from, { text: '❌ You don\'t own a club! Register first: `/club register <name>`' });
+      return;
+    }
+    
+    const equipment = club.equipment || [];
+    
+    // Find by ID or name
+    const itemIndex = equipment.findIndex(eq => 
+      eq.id?.toLowerCase() === input || eq.type === input
+    );
+    
+    if (itemIndex === -1) {
+      await sock.sendMessage(m.from, {
+        text: `❌ Equipment not found: "${input}"\n\nUse \`/club info\` to see your equipment`
+      });
+      return;
+    }
+    
+    const item = equipment[itemIndex];
+    const equipmentConfig = GAME_CONFIG.EQUIPMENT[item.type];
+    
+    if (!item.broken && item.currentDurability >= item.maxDurability * 0.9) {
+      await sock.sendMessage(m.from, {
+        text: `✅ Equipment is in good condition!\n\n*Durability:* ${item.currentDurability}/${item.maxDurability}\n\nNo repair needed.`
+      });
+      return;
+    }
+    
+    const repairCost = Math.floor(equipmentConfig.price * 0.4);
+    const userBalance = await PluginHelpers.getBalance(userId);
+    
+    if (userBalance.wallet < repairCost) {
+      await sock.sendMessage(m.from, {
+        text: `❌ Insufficient funds!\n\n*Repair Cost:* ${formatMoney(repairCost)}\n*Your Wallet:* ${formatMoney(userBalance.wallet)}`
+      });
+      return;
+    }
+    
+    const moneyRemoved = await unifiedUserManager.removeMoney(userId, repairCost, `Repair: ${item.type}`);
+    
+    if (!moneyRemoved) {
+      await sock.sendMessage(m.from, { text: '❌ Payment failed. Try again.' });
+      return;
+    }
+    
+    equipment[itemIndex].currentDurability = item.maxDurability;
+    equipment[itemIndex].broken = false;
+    equipment[itemIndex].timesRepaired = (item.timesRepaired || 0) + 1;
+    equipment[itemIndex].lastRepairedAt = new Date();
+    
+    await clubsCollection.updateOne(
+      { userId },
+      { $set: { equipment, updatedAt: new Date() } }
+    );
+    
+    const msg = `🔧 *REPAIR COMPLETE!*
+
+🛍️ *Equipment:* ${item.type.replace(/_/g, ' ').toUpperCase()}
+💰 *Cost:* ${formatMoney(repairCost)}
+🔧 *Durability:* ${item.maxDurability}/${item.maxDurability} (100%)
+🔄 *Times Repaired:* ${equipment[itemIndex].timesRepaired}
+
+✅ Back to perfect condition!`;
+
+    await sock.sendMessage(m.from, { text: msg });
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Repair error:'), error.message);
+    await sock.sendMessage(m.from, { text: '❌ Repair failed. Try again.' });
+  }
 }
 
 async function handleClubHire(m, sock, args, userId) {
-  await sock.sendMessage(m.from, { text: '👥 Hire feature - Use /club staff to view and hire!' });
+  if (args.length === 0) {
+    await sock.sendMessage(m.from, {
+      text: '❌ Usage: `/club hire <ID or name>`\n\nExample: `/club hire ST1` or `/club hire dj`\n\nView staff: `/club shop staff`'
+    });
+    return;
+  }
+  
+  const input = args[0].toLowerCase();
+  
+  try {
+    const clubsCollection = await getCollection('clubs');
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await sock.sendMessage(m.from, { text: '❌ You don\'t own a club! Register first: `/club register <name>`' });
+      return;
+    }
+    
+    // Find staff by ID or name
+    const staffEntry = Object.entries(GAME_CONFIG.STAFF).find(([key, s]) => 
+      s.id.toLowerCase() === input || key === input
+    );
+    
+    if (!staffEntry) {
+      await sock.sendMessage(m.from, { 
+        text: `❌ Staff type not found: "${input}"\n\nUse \`/club shop staff\`` 
+      });
+      return;
+    }
+    
+    const [staffType, staffConfig] = staffEntry;
+    
+    // Check if license required
+    if (staffConfig.requires) {
+      const hasLicense = (club.licenses || []).some(l => l.type === staffConfig.requires && l.active);
+      if (!hasLicense) {
+        await sock.sendMessage(m.from, { 
+          text: `❌ You need "${staffConfig.requires}" license to hire ${staffType}!\n\nUse \`/club license ${staffConfig.requires}\`` 
+        });
+        return;
+      }
+    }
+    
+    const existingStaff = (club.staff || []).filter(s => s.type === staffType);
+    if (existingStaff.length >= 3) {
+      await sock.sendMessage(m.from, { 
+        text: `❌ Maximum ${staffType}s reached (3 per type)!\n\nFire someone first: \`/club fire <name>\`` 
+      });
+      return;
+    }
+    
+    if ((club.staff || []).length >= 15) {
+      await sock.sendMessage(m.from, { text: '❌ Maximum staff limit reached (15 total)!' });
+      return;
+    }
+    
+    const hiringCost = staffConfig.salary * 4;
+    const userBalance = await PluginHelpers.getBalance(userId);
+    
+    if (userBalance.wallet < hiringCost) {
+      await sock.sendMessage(m.from, { 
+        text: `❌ Insufficient funds!\n\n*Cost:* ${formatMoney(hiringCost)} (4 weeks prepaid)\n*Your Wallet:* ${formatMoney(userBalance.wallet)}` 
+      });
+      return;
+    }
+    
+    const names = {
+      dj: ['DJ Neptune', 'DJ Cuppy', 'DJ Spinall', 'DJ Xclusive', 'DJ BigN'],
+      bartender: ['Angela', 'Maria', 'Jay', 'Lisa', 'Sandra'],
+      bouncer: ['Big Joe', 'Marcus', 'Steel', 'Bruno', 'Tank'],
+      cleaner: ['Rosa', 'Ahmed', 'Grace', 'Pedro', 'Kim'],
+      dancer: ['Diamond', 'Cherry', 'Angel', 'Raven', 'Star'],
+      server: ['Sophie', 'Emma', 'Olivia', 'Mia', 'Ava'],
+      technician: ['Tech Sam', 'Bob', 'Paul', 'Lisa', 'John'],
+      manager: ['Mr. Williams', 'Ms. Johnson', 'Mr. Brown', 'Ms. Davis']
+    };
+    const randomName = names[staffType] 
+      ? names[staffType][Math.floor(Math.random() * names[staffType].length)]
+      : `Staff ${Date.now().toString().slice(-4)}`;
+    
+    const moneyRemoved = await unifiedUserManager.removeMoney(userId, hiringCost, `Hire ${staffType}: ${randomName}`);
+    
+    if (!moneyRemoved) {
+      await sock.sendMessage(m.from, { text: '❌ Payment failed. Try again.' });
+      return;
+    }
+    
+    const newStaff = {
+      type: staffType,
+      id: staffConfig.id,
+      name: randomName,
+      hiredAt: new Date(),
+      weeksHired: 4,
+      performance: Math.floor(Math.random() * 20) + 80,
+      salary: staffConfig.salary
+    };
+    
+    await clubsCollection.updateOne(
+      { userId },
+      {
+        $push: { staff: newStaff },
+        $set: { updatedAt: new Date() }
+      }
+    );
+    
+    const msg = `✅ *HIRED SUCCESSFULLY!*
+
+👤 *Name:* ${randomName}
+💼 *Position:* ${staffType.toUpperCase()}
+🆔 *ID:* ${staffConfig.id}
+💰 *Cost:* ${formatMoney(hiringCost)} (4 weeks prepaid)
+📊 *Performance:* ${newStaff.performance}%
+📈 *Revenue Boost:* +${Math.round((staffConfig.boost.revenue - 1) * 100)}%
+
+🎉 ${randomName} is now working at your club!`;
+    
+    await sock.sendMessage(m.from, { text: msg });
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Hire error:'), error.message);
+    await sock.sendMessage(m.from, { text: '❌ Hiring failed. Try again.' });
+  }
 }
 
 async function handleClubFire(m, sock, args, userId) {
-  await sock.sendMessage(m.from, { text: '🔥 Fire feature - Enhanced version coming soon!' });
+  if (args.length === 0) {
+    await sock.sendMessage(m.from, {
+      text: '❌ Usage: `/club fire <number or name>`\n\nExample: `/club fire 1` or `/club fire Angela`\n\nView staff: `/club staff`'
+    });
+    return;
+  }
+  
+  const input = args.join(' ').toLowerCase();
+  
+  try {
+    const clubsCollection = await getCollection('clubs');
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await sock.sendMessage(m.from, { text: '❌ You don\'t own a club!' });
+      return;
+    }
+    
+    if (!club.staff || club.staff.length === 0) {
+      await sock.sendMessage(m.from, { text: '❌ You have no staff to fire!' });
+      return;
+    }
+    
+    // Find by number or name
+    let staffIndex = -1;
+    const numInput = parseInt(input);
+    
+    if (!isNaN(numInput) && numInput >= 1 && numInput <= club.staff.length) {
+      staffIndex = numInput - 1;
+    } else {
+      staffIndex = club.staff.findIndex(s => s.name.toLowerCase().includes(input));
+    }
+    
+    if (staffIndex === -1) {
+      await sock.sendMessage(m.from, {
+        text: `❌ Staff member not found: "${input}"\n\nUse \`/club staff\` to see your team`
+      });
+      return;
+    }
+    
+    const firedStaff = club.staff[staffIndex];
+    club.staff.splice(staffIndex, 1);
+    
+    await clubsCollection.updateOne(
+      { userId },
+      { $set: { staff: club.staff, updatedAt: new Date() } }
+    );
+    
+    const msg = `🔥 *STAFF FIRED!*
+
+👤 *Name:* ${firedStaff.name}
+💼 *Position:* ${firedStaff.type}
+📅 *Worked:* ${moment(firedStaff.hiredAt).fromNow(true)}
+
+💰 No refund for prepaid salary.`;
+
+    await sock.sendMessage(m.from, { text: msg });
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Fire error:'), error.message);
+    await sock.sendMessage(m.from, { text: '❌ Failed to fire staff.' });
+  }
 }
 
 async function handleClubHost(m, sock, args, userId) {
-  await sock.sendMessage(m.from, { text: '🎪 Host event - Enhanced version coming soon!' });
+  try {
+    const clubsCollection = await getCollection('clubs');
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await sock.sendMessage(m.from, { text: '❌ You don\'t own a club!' });
+      return;
+    }
+    
+    if (args.length === 0) {
+      let eventMsg = `🎪 *AVAILABLE EVENTS*
+━━━━━━━━━━━━━━━━━━━━━━
+
+`;
+      
+      Object.entries(GAME_CONFIG.EVENTS).forEach(([key, event]) => {
+        eventMsg += `*[${event.id}]* ${key.replace(/_/g, ' ').toUpperCase()}
+├ Cost: ${formatMoney(event.cost)}
+├ Duration: ${event.duration} hours
+├ Min Equipment: ${event.min_equipment}
+└ Revenue Multiplier: ${event.revenue_multiplier}x
+
+`;
+      });
+      
+      eventMsg += `*HOST:* \`/club host <ID or name>\`
+*Example:* \`/club host E1\` or \`/club host casual_night\``;
+      
+      await sock.sendMessage(m.from, { text: eventMsg });
+      return;
+    }
+    
+    const input = args[0].toLowerCase();
+    
+    // Find event by ID or name
+    const eventEntry = Object.entries(GAME_CONFIG.EVENTS).find(([key, e]) => 
+      e.id.toLowerCase() === input || key === input
+    );
+    
+    if (!eventEntry) {
+      await sock.sendMessage(m.from, {
+        text: `❌ Event not found: "${input}"\n\nUse \`/club host\` to see events`
+      });
+      return;
+    }
+    
+    const [eventType, eventConfig] = eventEntry;
+    
+    const hasBusinessLicense = (club.licenses || []).some(l => l.type === 'business' && l.active);
+    if (!hasBusinessLicense) {
+      await sock.sendMessage(m.from, {
+        text: '❌ You need an active business license!\n\nGet one: `/club license business`'
+      });
+      return;
+    }
+    
+    const workingEquipment = (club.equipment || []).filter(e => !e.broken);
+    if (workingEquipment.length < eventConfig.min_equipment) {
+      await sock.sendMessage(m.from, {
+        text: `❌ Not enough equipment!\n\n*Required:* ${eventConfig.min_equipment} working items\n*You have:* ${workingEquipment.length}\n\nBuy or repair equipment!`
+      });
+      return;
+    }
+    
+    const userBalance = await PluginHelpers.getBalance(userId);
+    
+    if (userBalance.wallet < eventConfig.cost) {
+      await sock.sendMessage(m.from, {
+        text: `❌ Insufficient funds!\n\n*Event Cost:* ${formatMoney(eventConfig.cost)}\n*Your Wallet:* ${formatMoney(userBalance.wallet)}`
+      });
+      return;
+    }
+    
+    // Calculate revenue
+    let baseRevenue = eventConfig.cost * eventConfig.revenue_multiplier;
+    
+    for (const equipment of workingEquipment) {
+      const config = GAME_CONFIG.EQUIPMENT[equipment.type];
+      if (config) {
+        baseRevenue *= config.boost.revenue || 1.0;
+      }
+    }
+    
+    for (const staff of club.staff || []) {
+      const config = GAME_CONFIG.STAFF[staff.type];
+      if (config) {
+        baseRevenue *= config.boost.revenue || 1.0;
+      }
+    }
+    
+    const finalRevenue = Math.floor(baseRevenue);
+    const profit = finalRevenue - eventConfig.cost;
+    
+    await unifiedUserManager.removeMoney(userId, eventConfig.cost, `Host: ${eventType}`);
+    await unifiedUserManager.addMoney(userId, Math.floor(finalRevenue * 0.4), `Event revenue: ${eventType}`);
+    
+    await clubsCollection.updateOne(
+      { userId },
+      { 
+        $inc: { 
+          balance: finalRevenue,
+          totalRevenue: finalRevenue,
+          weeklyRevenue: finalRevenue,
+          weeklyEvents: 1,
+          totalEvents: 1
+        },
+        $set: { 
+          lastEventAt: new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+    
+    // Random equipment damage
+    if (Math.random() < 0.2 && workingEquipment.length > 0) {
+      const randomEquipment = workingEquipment[Math.floor(Math.random() * workingEquipment.length)];
+      randomEquipment.currentDurability = Math.max(0, randomEquipment.currentDurability - 20);
+      
+      if (randomEquipment.currentDurability <= 0) {
+        randomEquipment.broken = true;
+      }
+      
+      const updatedEquipment = club.equipment.map(e => 
+        e.type === randomEquipment.type ? randomEquipment : e
+      );
+      
+      await clubsCollection.updateOne(
+        { userId },
+        { $set: { equipment: updatedEquipment } }
+      );
+    }
+    
+    const msg = `🎉 *EVENT HOSTED!*
+
+🎪 *Event:* ${eventType.replace(/_/g, ' ').toUpperCase()}
+💰 *Investment:* ${formatMoney(eventConfig.cost)}
+📈 *Revenue:* ${formatMoney(finalRevenue)}
+💵 *Profit:* ${formatMoney(profit)}
+⏰ *Duration:* ${eventConfig.duration} hours
+
+${profit > eventConfig.cost ? '🎊 Great success!' : '📊 Consider improving equipment for better returns.'}`;
+
+    await sock.sendMessage(m.from, { text: msg });
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Host error:'), error.message);
+    await sock.sendMessage(m.from, { text: '❌ Failed to host event.' });
+  }
 }
 
 async function handleClubEvents(m, sock, userId) {
-  await sock.sendMessage(m.from, { text: '📅 Events calendar - Coming soon!' });
+  try {
+    const clubsCollection = await getCollection('clubs');
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await sock.sendMessage(m.from, { text: '❌ You don\'t own a club!' });
+      return;
+    }
+    
+    const eventsMsg = `📅 *EVENT HISTORY*
+━━━━━━━━━━━━━━━━━━━━━━
+
+📊 *Statistics:*
+├ Total Events: ${club.totalEvents || 0}
+├ Weekly Events: ${club.weeklyEvents || 0}
+├ Last Event: ${club.lastEventAt ? moment(club.lastEventAt).fromNow() : 'Never'}
+└ Total Revenue: ${formatMoney(club.totalRevenue || 0)}
+
+🎪 *Host new event:* \`/club host\``;
+
+    await sock.sendMessage(m.from, { text: eventsMsg });
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Events error:'), error.message);
+    await sock.sendMessage(m.from, { text: '❌ Failed to load events.' });
+  }
 }
 
 async function handleClubBillboard(m, sock, userId) {
-  await sock.sendMessage(m.from, { text: '📊 Billboard - Enhanced version coming soon!' });
+  try {
+    const billboardCollection = await getCollection('club_billboard');
+    const latestBillboard = await billboardCollection.findOne({}, { sort: { updatedAt: -1 } });
+    
+    if (!latestBillboard) {
+      await sock.sendMessage(m.from, {
+        text: '📊 No billboard data yet!\n\nCheck back after the first weekly update.'
+      });
+      return;
+    }
+    
+    let billboardMsg = `📊 *WEEKLY BILLBOARD*
+Week ${latestBillboard.week}, ${latestBillboard.year}
+━━━━━━━━━━━━━━━━━━━━━━
+
+🏆 *TOP EARNERS*
+
+`;
+
+    latestBillboard.topEarners.slice(0, 10).forEach((club, index) => {
+      const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+      billboardMsg += `${medal} *${club.clubName}*
+   Owner: @${club.owner}
+   Revenue: ${formatMoney(club.revenue)}
+   Rating: ${club.rating}/100 ${getRatingEmoji(club.rating)}
+
+`;
+    });
+    
+    const userClub = latestBillboard.topEarners.find(c => c.owner === userId.split('@')[0]);
+    if (userClub) {
+      billboardMsg += `📍 *Your Position:* #${userClub.rank}`;
+    } else {
+      billboardMsg += `📍 *Your club not in top 10*`;
+    }
+
+    await sock.sendMessage(m.from, { text: billboardMsg });
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Billboard error:'), error.message);
+    await sock.sendMessage(m.from, { text: '❌ Failed to load billboard.' });
+  }
 }
 
 async function handleClubLicense(m, sock, args, userId) {
-  await sock.sendMessage(m.from, { text: '📋 License system - Enhanced version coming soon!' });
+  try {
+    const clubsCollection = await getCollection('clubs');
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await sock.sendMessage(m.from, { text: '❌ You don\'t own a club!' });
+      return;
+    }
+    
+    if (args.length === 0) {
+      let licenseMsg = `📋 *AVAILABLE LICENSES*
+━━━━━━━━━━━━━━━━━━━━━━
+
+`;
+      
+      Object.entries(GAME_CONFIG.LICENSES).forEach(([key, license]) => {
+        const required = license.required ? ' ⚠️ REQUIRED' : '';
+        const hasActive = (club.licenses || []).some(l => l.type === key && l.active);
+        const status = hasActive ? ' ✅' : '';
+        
+        licenseMsg += `*[${license.id}]* ${key.replace(/_/g, ' ').toUpperCase()}${required}${status}
+├ Price: ${formatMoney(license.price)}
+├ Duration: ${license.duration} days
+└ ${license.description}
+
+`;
+      });
+      
+      licenseMsg += `*BUY:* \`/club license <ID or name>\`
+*Example:* \`/club license L1\` or \`/club license business\``;
+      
+      await sock.sendMessage(m.from, { text: licenseMsg });
+      return;
+    }
+    
+    const input = args[0].toLowerCase();
+    
+    const licenseEntry = Object.entries(GAME_CONFIG.LICENSES).find(([key, l]) => 
+      l.id.toLowerCase() === input || key === input
+    );
+    
+    if (!licenseEntry) {
+      await sock.sendMessage(m.from, {
+        text: `❌ License not found: "${input}"\n\nUse \`/club license\``
+      });
+      return;
+    }
+    
+    const [licenseType, licenseConfig] = licenseEntry;
+    
+    const existingLicense = (club.licenses || []).find(l => l.type === licenseType && l.active);
+    if (existingLicense) {
+      const daysLeft = Math.ceil((new Date(existingLicense.expiresAt) - new Date()) / (1000 * 60 * 60 * 24));
+      await sock.sendMessage(m.from, {
+        text: `✅ You already have this license!\n\n*Expires in:* ${daysLeft} days`
+      });
+      return;
+    }
+    
+    const userBalance = await PluginHelpers.getBalance(userId);
+    
+    if (userBalance.wallet < licenseConfig.price) {
+      await sock.sendMessage(m.from, {
+        text: `❌ Insufficient funds!\n\n*License:* ${licenseType}\n*Price:* ${formatMoney(licenseConfig.price)}\n*Your Wallet:* ${formatMoney(userBalance.wallet)}`
+      });
+      return;
+    }
+    
+    await unifiedUserManager.removeMoney(userId, licenseConfig.price, `License: ${licenseType}`);
+    
+    const newLicense = {
+      type: licenseType,
+      id: licenseConfig.id,
+      purchasedAt: new Date(),
+      expiresAt: new Date(Date.now() + licenseConfig.duration * 24 * 60 * 60 * 1000),
+      active: true,
+      price: licenseConfig.price
+    };
+    
+    await clubsCollection.updateOne(
+      { userId },
+      { 
+        $push: { licenses: newLicense },
+        $set: { updatedAt: new Date() }
+      }
+    );
+    
+    const msg = `✅ *LICENSE PURCHASED!*
+
+📋 *Type:* ${licenseType.replace(/_/g, ' ').toUpperCase()}
+🆔 *ID:* ${licenseConfig.id}
+💰 *Cost:* ${formatMoney(licenseConfig.price)}
+⏰ *Duration:* ${licenseConfig.duration} days
+📅 *Expires:* ${moment(newLicense.expiresAt).format('DD/MM/YYYY')}
+
+${licenseConfig.required ? '🎉 Your club is now legal!' : '🌟 New opportunities unlocked!'}`;
+
+    await sock.sendMessage(m.from, { text: msg });
+    
+  } catch (error) {
+    console.error(chalk.red('❌ License error:'), error.message);
+    await sock.sendMessage(m.from, { text: '❌ Failed to purchase license.' });
+  }
 }
 
 async function handleClubUpgrade(m, sock, args, userId) {
-  await sock.sendMessage(m.from, { text: '⬆️ Upgrades - Enhanced version coming soon!' });
+  await sock.sendMessage(m.from, { text: '⬆️ Upgrades system coming soon!' });
 }
 
 async function handleClubLeaderboard(m, sock, userId) {
-  await sock.sendMessage(m.from, { text: '🏆 Leaderboard - Enhanced version coming soon!' });
+  try {
+    const clubsCollection = await getCollection('clubs');
+    const topClubs = await clubsCollection
+      .find({})
+      .sort({ totalRevenue: -1 })
+      .limit(15)
+      .toArray();
+    
+    if (topClubs.length === 0) {
+      await sock.sendMessage(m.from, {
+        text: '📊 No clubs yet!\n\nBe the first: `/club register <name>`'
+      });
+      return;
+    }
+    
+    let leaderboardMsg = `🏆 *ALL-TIME LEADERBOARD*
+━━━━━━━━━━━━━━━━━━━━━━
+
+`;
+
+    topClubs.forEach((club, index) => {
+      const medal = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+      const rating = calculateClubRating(club);
+      
+      leaderboardMsg += `${medal} *${club.name}*
+   Revenue: ${formatMoney(club.totalRevenue)}
+   Rating: ${rating}/100 ${getRatingEmoji(rating)}
+
+`;
+    });
+    
+    const userClub = topClubs.find(c => c.userId === userId);
+    if (userClub) {
+      const position = topClubs.indexOf(userClub) + 1;
+      leaderboardMsg += `📍 *Your Position:* #${position}`;
+    } else {
+      leaderboardMsg += `📍 *Not in top 15*`;
+    }
+
+    await sock.sendMessage(m.from, { text: leaderboardMsg });
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Leaderboard error:'), error.message);
+    await sock.sendMessage(m.from, { text: '❌ Failed to load leaderboard.' });
+  }
 }
 
 async function handleClubBook(m, sock, args, userId) {
-  await sock.sendMessage(m.from, { text: '⭐ Celebrity booking - Enhanced version coming soon!' });
+  await sock.sendMessage(m.from, { text: '⭐ Celebrity booking coming soon!' });
 }
