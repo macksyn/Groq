@@ -6,9 +6,9 @@ import { PluginHelpers } from '../lib/pluginIntegration.js';
 // Plugin Information
 export const info = {
   name: 'Owner Plugin',
-  version: '2.0.0',
+  version: '2.1.0',
   author: 'Bot Framework',
-  description: 'Complete owner and admin management system with database persistence',
+  description: 'Complete owner and admin management system with database persistence and ENV support',
   category: 'admin',
   commands: [
     'owner', 'admin', 'unadmin', 'admins', 'mode', 'settings', 'backup', 'restore',
@@ -50,6 +50,66 @@ const COLLECTIONS = {
   BACKUPS: 'bot_backups',
   LOGS: 'bot_logs'
 };
+
+// ENV Admin Parser
+class EnvAdminManager {
+  constructor() {
+    this.envAdmins = new Set();
+    this.loadEnvAdmins();
+  }
+
+  loadEnvAdmins() {
+    try {
+      // Read from ADMIN_NUMBERS env variable (comma-separated)
+      // Format: ADMIN_NUMBERS=1234567890,9876543210,1122334455
+      const adminNumbers = process.env.ADMIN_NUMBERS || '';
+      
+      if (adminNumbers.trim()) {
+        const numbers = adminNumbers.split(',').map(n => n.trim()).filter(n => n);
+        
+        numbers.forEach(number => {
+          // Remove any non-digit characters
+          const cleanNumber = number.replace(/\D/g, '');
+          
+          if (cleanNumber && cleanNumber.length >= 10) {
+            const userId = cleanNumber + '@s.whatsapp.net';
+            this.envAdmins.add(userId);
+            console.log(chalk.green(`✅ ENV Admin loaded: ${cleanNumber}`));
+          } else {
+            console.warn(chalk.yellow(`⚠️ Invalid admin number in ENV: ${number}`));
+          }
+        });
+
+        console.log(chalk.blue(`📋 Loaded ${this.envAdmins.size} admin(s) from ENV`));
+      } else {
+        console.log(chalk.cyan('ℹ️ No ADMIN_NUMBERS found in ENV'));
+      }
+    } catch (error) {
+      console.error(chalk.red('❌ Error loading ENV admins:'), error.message);
+    }
+  }
+
+  isEnvAdmin(userId) {
+    const cleanUserId = userId.includes('@') ? userId : userId + '@s.whatsapp.net';
+    return this.envAdmins.has(cleanUserId);
+  }
+
+  getEnvAdmins() {
+    return Array.from(this.envAdmins);
+  }
+
+  getEnvAdminCount() {
+    return this.envAdmins.size;
+  }
+
+  reload() {
+    this.envAdmins.clear();
+    this.loadEnvAdmins();
+  }
+}
+
+// Initialize ENV Admin Manager
+const envAdminManager = new EnvAdminManager();
 
 // Settings Manager Class
 class SettingsManager {
@@ -159,7 +219,7 @@ class SettingsManager {
   }
 }
 
-// Admin Manager Class
+// Admin Manager Class (Enhanced with ENV support)
 class AdminManager {
   constructor() {
     this.cache = new Set();
@@ -169,6 +229,11 @@ class AdminManager {
 
   async addAdmin(userId, addedBy) {
     try {
+      // Check if it's an ENV admin
+      if (envAdminManager.isEnvAdmin(userId)) {
+        throw new Error('This user is already an admin via ENV configuration');
+      }
+
       await PluginHelpers.safeDBOperation(async (db, collection) => {
         const existingAdmin = await collection.findOne({ userId });
         if (existingAdmin) {
@@ -181,6 +246,7 @@ class AdminManager {
           addedBy,
           addedAt: new Date(),
           status: 'active',
+          source: 'database', // Mark as database admin
           permissions: {
             canManagePlugins: true,
             canManageUsers: true,
@@ -202,6 +268,11 @@ class AdminManager {
 
   async removeAdmin(userId) {
     try {
+      // Prevent removing ENV admins from database
+      if (envAdminManager.isEnvAdmin(userId)) {
+        throw new Error('Cannot remove ENV admin. Update ADMIN_NUMBERS environment variable instead.');
+      }
+
       const result = await PluginHelpers.safeDBOperation(async (db, collection) => {
         const deleteResult = await collection.deleteOne({ userId });
         return deleteResult.deletedCount > 0;
@@ -219,11 +290,34 @@ class AdminManager {
     }
   }
 
-  async getAdmins() {
+  async getAdmins(includeEnv = true) {
     try {
-      return await PluginHelpers.safeDBOperation(async (db, collection) => {
+      const dbAdmins = await PluginHelpers.safeDBOperation(async (db, collection) => {
         return await collection.find({ status: 'active' }).toArray();
       }, COLLECTIONS.ADMINS);
+
+      // Add ENV admins if requested
+      if (includeEnv) {
+        const envAdmins = envAdminManager.getEnvAdmins().map(userId => ({
+          userId,
+          phone: userId.replace('@s.whatsapp.net', ''),
+          addedBy: 'ENV',
+          addedAt: new Date(0), // Epoch time for ENV admins
+          status: 'active',
+          source: 'env', // Mark as ENV admin
+          permissions: {
+            canManagePlugins: true,
+            canManageUsers: true,
+            canAccessLogs: true,
+            canExecuteCode: false,
+            canManageSettings: true
+          }
+        }));
+
+        return [...envAdmins, ...dbAdmins];
+      }
+
+      return dbAdmins;
     } catch (error) {
       console.error(chalk.red('❌ Error getting admins:'), error.message);
       return [];
@@ -231,7 +325,12 @@ class AdminManager {
   }
 
   async isAdmin(userId) {
-    // Check cache first
+    // Check ENV admins first (faster)
+    if (envAdminManager.isEnvAdmin(userId)) {
+      return true;
+    }
+
+    // Check cache
     const now = Date.now();
     if (now - this.lastCacheUpdate < this.cacheTimeout) {
       return this.cache.has(userId);
@@ -244,7 +343,7 @@ class AdminManager {
 
   async refreshCache() {
     try {
-      const admins = await this.getAdmins();
+      const admins = await this.getAdmins(true); // Include ENV admins
       this.cache.clear();
       
       admins.forEach(admin => {
@@ -260,6 +359,55 @@ class AdminManager {
   invalidateCache() {
     this.cache.clear();
     this.lastCacheUpdate = 0;
+  }
+
+  // Sync ENV admins to database (optional, for persistence)
+  async syncEnvAdminsToDatabase() {
+    try {
+      const envAdmins = envAdminManager.getEnvAdmins();
+      let synced = 0;
+
+      for (const userId of envAdmins) {
+        try {
+          const exists = await PluginHelpers.safeDBOperation(async (db, collection) => {
+            return await collection.findOne({ userId });
+          }, COLLECTIONS.ADMINS);
+
+          if (!exists) {
+            await PluginHelpers.safeDBOperation(async (db, collection) => {
+              await collection.insertOne({
+                userId,
+                phone: userId.replace('@s.whatsapp.net', ''),
+                addedBy: 'ENV_AUTO_SYNC',
+                addedAt: new Date(),
+                status: 'active',
+                source: 'env_synced',
+                permissions: {
+                  canManagePlugins: true,
+                  canManageUsers: true,
+                  canAccessLogs: true,
+                  canExecuteCode: false,
+                  canManageSettings: true
+                }
+              });
+            }, COLLECTIONS.ADMINS);
+            synced++;
+          }
+        } catch (error) {
+          console.warn(chalk.yellow(`⚠️ Failed to sync ENV admin ${userId.split('@')[0]}:`, error.message));
+        }
+      }
+
+      if (synced > 0) {
+        console.log(chalk.green(`✅ Synced ${synced} ENV admin(s) to database`));
+        this.invalidateCache();
+      }
+
+      return synced;
+    } catch (error) {
+      console.error(chalk.red('❌ Error syncing ENV admins:'), error.message);
+      return 0;
+    }
   }
 }
 
@@ -351,9 +499,10 @@ class BackupManager {
         createdAt: new Date(),
         collections: {},
         metadata: {
-          version: '2.0.0',
+          version: '2.1.0',
           totalCollections: collections.length,
-          botName: process.env.BOT_NAME || 'WhatsApp Bot'
+          botName: process.env.BOT_NAME || 'WhatsApp Bot',
+          envAdminCount: envAdminManager.getEnvAdminCount()
         }
       };
 
@@ -542,7 +691,7 @@ const commands = {
 👤 *Name:* ${config.OWNER_NAME}
 📱 *Contact:* +${config.OWNER_NUMBER}
 🤖 *Bot:* ${config.BOT_NAME}
-⚙️ *Version:* 2.0.0
+⚙️ *Version:* 2.1.0
 
 🌐 *GitHub:* github.com/whatsapp-bot
 💬 *Support:* Contact owner for assistance
@@ -688,7 +837,9 @@ Thank you for your service! 🙏`
     }
 
     try {
-      const adminList = await adminManager.getAdmins();
+      const adminList = await adminManager.getAdmins(true); // Include ENV admins
+      const envAdminCount = envAdminManager.getEnvAdminCount();
+      const dbAdminCount = adminList.filter(a => a.source !== 'env').length;
       
       let message = `╭─────────────────────╮
 │    👥 ADMIN LIST     │
@@ -703,15 +854,32 @@ Thank you for your service! 🙏`
       } else {
         message += `🛡️ *Admins (${adminList.length}):*\n\n`;
         
-        adminList.forEach((admin, index) => {
-          const addedDate = moment(admin.addedAt).format('DD/MM/YYYY');
-          message += `${index + 1}. +${admin.phone}\n   📅 Added: ${addedDate}\n\n`;
-        });
+        // Separate ENV and DB admins
+        const envAdmins = adminList.filter(a => a.source === 'env');
+        const dbAdmins = adminList.filter(a => a.source !== 'env');
+
+        if (envAdmins.length > 0) {
+          message += `🌍 *From ENV (${envAdmins.length}):*\n`;
+          envAdmins.forEach((admin, index) => {
+            message += `${index + 1}. +${admin.phone} 🔐\n`;
+          });
+          message += '\n';
+        }
+
+        if (dbAdmins.length > 0) {
+          message += `💾 *From Database (${dbAdmins.length}):*\n`;
+          dbAdmins.forEach((admin, index) => {
+            const addedDate = moment(admin.addedAt).format('DD/MM/YYYY');
+            message += `${index + 1}. +${admin.phone}\n   📅 Added: ${addedDate}\n\n`;
+          });
+        }
       }
 
       message += `\n╭─────────────────────╮
-│   Total: ${adminList.length + 1} (1 owner + ${adminList.length} admins)   │
-╰─────────────────────╯`;
+│   Total: ${adminList.length + 1} (1 owner + ${envAdminCount} ENV + ${dbAdminCount} DB)   │
+╰─────────────────────╯
+
+💡 ENV admins cannot be removed via commands`;
 
       await sock.sendMessage(m.from, { text: message });
 
@@ -780,7 +948,9 @@ Thank you for your service! 🙏`
     try {
       const memUsage = process.memoryUsage();
       const uptime = process.uptime() * 1000;
-      const adminList = await adminManager.getAdmins();
+      const adminList = await adminManager.getAdmins(true);
+      const envAdminCount = envAdminManager.getEnvAdminCount();
+      const dbAdminCount = adminList.filter(a => a.source !== 'env').length;
       const bannedUsers = await banManager.getBannedUsers();
       const settings = await settingsManager.getAllSettings();
 
@@ -802,7 +972,7 @@ Thank you for your service! 🙏`
 
 🤖 *Bot Info:*
 • Name: ${config.BOT_NAME}
-• Version: 2.0.0
+• Version: 2.1.0
 • Mode: ${settings.botMode?.toUpperCase() || 'PUBLIC'} ${settings.botMode === 'private' ? '🔒' : '🌐'}
 • Prefix: ${config.PREFIX}
 • Timezone: ${settings.timezone || 'Africa/Lagos'}
@@ -815,7 +985,9 @@ Thank you for your service! 🙏`
 
 👥 *Users & Access:*
 • Owner: 1
-• Admins: ${adminList.length}
+• ENV Admins: ${envAdminCount} 🔐
+• DB Admins: ${dbAdminCount} 💾
+• Total Admins: ${adminList.length}
 • Banned Users: ${bannedUsers.length}
 
 🗄️ *Database:*
