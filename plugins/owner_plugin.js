@@ -51,60 +51,31 @@ const COLLECTIONS = {
   LOGS: 'bot_logs'
 };
 
-// ENV Admin Parser
-class EnvAdminManager {
-  constructor() {
-    this.envAdmins = new Set();
-    this.loadEnvAdmins();
+// Simple ENV admin check function (like attendance plugin)
+function getEnvAdmins() {
+  try {
+    const adminNumbers = process.env.ADMIN_NUMBERS || '';
+    if (!adminNumbers.trim()) return [];
+    
+    return adminNumbers
+      .split(',')
+      .map(n => n.trim())
+      .filter(n => n && n.length >= 10)
+      .map(n => n.replace(/\D/g, '')) // Remove non-digits
+      .filter(n => n.length >= 10);
+  } catch (error) {
+    console.error(chalk.red('❌ Error loading ENV admins:'), error.message);
+    return [];
   }
+}
 
-  loadEnvAdmins() {
-    try {
-      // Read from ADMIN_NUMBERS env variable (comma-separated)
-      // Format: ADMIN_NUMBERS=1234567890,9876543210,1122334455
-      const adminNumbers = process.env.ADMIN_NUMBERS || '';
-      
-      if (adminNumbers.trim()) {
-        const numbers = adminNumbers.split(',').map(n => n.trim()).filter(n => n);
-        
-        numbers.forEach(number => {
-          // Remove any non-digit characters
-          const cleanNumber = number.replace(/\D/g, '');
-          
-          if (cleanNumber && cleanNumber.length >= 10) {
-            const userId = cleanNumber + '@s.whatsapp.net';
-            this.envAdmins.add(userId);
-            console.log(chalk.green(`✅ ENV Admin loaded: ${cleanNumber}`));
-          } else {
-            console.warn(chalk.yellow(`⚠️ Invalid admin number in ENV: ${number}`));
-          }
-        });
-
-        console.log(chalk.blue(`📋 Loaded ${this.envAdmins.size} admin(s) from ENV`));
-      } else {
-        console.log(chalk.cyan('ℹ️ No ADMIN_NUMBERS found in ENV'));
-      }
-    } catch (error) {
-      console.error(chalk.red('❌ Error loading ENV admins:'), error.message);
-    }
-  }
-
-  isEnvAdmin(userId) {
-    const cleanUserId = userId.includes('@') ? userId : userId + '@s.whatsapp.net';
-    return this.envAdmins.has(cleanUserId);
-  }
-
-  getEnvAdmins() {
-    return Array.from(this.envAdmins);
-  }
-
-  getEnvAdminCount() {
-    return this.envAdmins.size;
-  }
-
-  reload() {
-    this.envAdmins.clear();
-    this.loadEnvAdmins();
+function isEnvAdmin(userId) {
+  try {
+    const bareNumber = userId.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+    const envAdmins = getEnvAdmins();
+    return envAdmins.includes(bareNumber);
+  } catch (error) {
+    return false;
   }
 }
 
@@ -227,10 +198,10 @@ class AdminManager {
     this.cacheTimeout = 5 * 60 * 1000; // 5 minutes
   }
 
-  async addAdmin(userId, addedBy) {
+   async addAdmin(userId, addedBy) {
     try {
       // Check if it's an ENV admin
-      if (envAdminManager.isEnvAdmin(userId)) {
+      if (isEnvAdmin(userId)) {
         throw new Error('This user is already an admin via ENV configuration');
       }
 
@@ -246,12 +217,12 @@ class AdminManager {
           addedBy,
           addedAt: new Date(),
           status: 'active',
-          source: 'database', // Mark as database admin
+          source: 'database',
           permissions: {
             canManagePlugins: true,
             canManageUsers: true,
             canAccessLogs: true,
-            canExecuteCode: false, // Only owner by default
+            canExecuteCode: false,
             canManageSettings: true
           }
         });
@@ -265,11 +236,11 @@ class AdminManager {
       throw error;
     }
   }
-
+  
   async removeAdmin(userId) {
     try {
-      // Prevent removing ENV admins from database
-      if (envAdminManager.isEnvAdmin(userId)) {
+      // Prevent removing ENV admins
+      if (isEnvAdmin(userId)) {
         throw new Error('Cannot remove ENV admin. Update ADMIN_NUMBERS environment variable instead.');
       }
 
@@ -298,13 +269,14 @@ class AdminManager {
 
       // Add ENV admins if requested
       if (includeEnv) {
-        const envAdmins = envAdminManager.getEnvAdmins().map(userId => ({
-          userId,
-          phone: userId.replace('@s.whatsapp.net', ''),
+        const envAdminNumbers = getEnvAdmins();
+        const envAdmins = envAdminNumbers.map(number => ({
+          userId: number + '@s.whatsapp.net',
+          phone: number,
           addedBy: 'ENV',
-          addedAt: new Date(0), // Epoch time for ENV admins
+          addedAt: new Date(0),
           status: 'active',
-          source: 'env', // Mark as ENV admin
+          source: 'env',
           permissions: {
             canManagePlugins: true,
             canManageUsers: true,
@@ -325,12 +297,13 @@ class AdminManager {
   }
 
   async isAdmin(userId) {
-    // Check ENV admins first (faster)
-    if (envAdminManager.isEnvAdmin(userId)) {
+    // Check ENV admins first (simpler approach)
+    if (isEnvAdmin(userId)) {
+      console.log(chalk.green(`✅ ENV Admin recognized: ${userId.split('@')[0]}`));
       return true;
     }
 
-    // Check cache
+    // Check cache for database admins
     const now = Date.now();
     if (now - this.lastCacheUpdate < this.cacheTimeout) {
       return this.cache.has(userId);
@@ -638,7 +611,20 @@ function isOwner(userId, ownerNumber) {
 }
 
 async function isAdminOrOwner(userId, config) {
-  if (isOwner(userId, config.OWNER_NUMBER + '@s.whatsapp.net')) return true;
+  // Check owner first
+  const ownerNumber = (config.OWNER_NUMBER || '').replace(/\D/g, '');
+  const userNumber = userId.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+  
+  if (userNumber === ownerNumber) {
+    return true;
+  }
+  
+  // Check ENV admin
+  if (isEnvAdmin(userId)) {
+    return true;
+  }
+  
+  // Check database admin
   return await adminManager.isAdmin(userId);
 }
 
@@ -830,18 +816,18 @@ Thank you for your service! 🙏`
 
   // List admins
   admins: async (m, sock, config) => {
-    if (!await isAdminOrOwner(m.sender, config)) {
-      return await sock.sendMessage(m.from, { 
-        text: '❌ Only admins can view the admin list.' 
-      });
-    }
+  if (!await isAdminOrOwner(m.sender, config)) {
+    return await sock.sendMessage(m.from, { 
+      text: '❌ Only admins can view the admin list.' 
+    });
+  }
 
-    try {
-      const adminList = await adminManager.getAdmins(true); // Include ENV admins
-      const envAdminCount = envAdminManager.getEnvAdminCount();
-      const dbAdminCount = adminList.filter(a => a.source !== 'env').length;
-      
-      let message = `╭─────────────────────╮
+  try {
+    const adminList = await adminManager.getAdmins(true);
+    const envAdmins = getEnvAdmins();
+    const dbAdmins = adminList.filter(a => a.source !== 'env');
+    
+    let message = `╭─────────────────────╮
 │    👥 ADMIN LIST     │
 ╰─────────────────────╯
 
@@ -849,46 +835,42 @@ Thank you for your service! 🙏`
 
 `;
 
-      if (adminList.length === 0) {
-        message += '📝 No admins added yet.';
-      } else {
-        message += `🛡️ *Admins (${adminList.length}):*\n\n`;
-        
-        // Separate ENV and DB admins
-        const envAdmins = adminList.filter(a => a.source === 'env');
-        const dbAdmins = adminList.filter(a => a.source !== 'env');
-
-        if (envAdmins.length > 0) {
-          message += `🌍 *From ENV (${envAdmins.length}):*\n`;
-          envAdmins.forEach((admin, index) => {
-            message += `${index + 1}. +${admin.phone} 🔐\n`;
-          });
-          message += '\n';
-        }
-
-        if (dbAdmins.length > 0) {
-          message += `💾 *From Database (${dbAdmins.length}):*\n`;
-          dbAdmins.forEach((admin, index) => {
-            const addedDate = moment(admin.addedAt).format('DD/MM/YYYY');
-            message += `${index + 1}. +${admin.phone}\n   📅 Added: ${addedDate}\n\n`;
-          });
-        }
+    if (adminList.length === 0) {
+      message += '📝 No admins added yet.';
+    } else {
+      message += `🛡️ *Admins (${adminList.length}):*\n\n`;
+      
+      if (envAdmins.length > 0) {
+        message += `🌍 *From ENV (${envAdmins.length}):*\n`;
+        envAdmins.forEach((number, index) => {
+          message += `${index + 1}. +${number} 🔐\n`;
+        });
+        message += '\n';
       }
 
-      message += `\n╭─────────────────────╮
-│   Total: ${adminList.length + 1} (1 owner + ${envAdminCount} ENV + ${dbAdminCount} DB)   │
+      if (dbAdmins.length > 0) {
+        message += `💾 *From Database (${dbAdmins.length}):*\n`;
+        dbAdmins.forEach((admin, index) => {
+          const addedDate = moment(admin.addedAt).format('DD/MM/YYYY');
+          message += `${index + 1}. +${admin.phone}\n   📅 Added: ${addedDate}\n\n`;
+        });
+      }
+    }
+
+    message += `\n╭─────────────────────╮
+│   Total: ${adminList.length + 1} (Owner + ${envAdmins.length} ENV + ${dbAdmins.length} DB)   │
 ╰─────────────────────╯
 
 💡 ENV admins cannot be removed via commands`;
 
-      await sock.sendMessage(m.from, { text: message });
+    await sock.sendMessage(m.from, { text: message });
 
-    } catch (error) {
-      await sock.sendMessage(m.from, { 
-        text: `❌ Failed to get admin list: ${error.message}` 
-      });
-    }
-  },
+  } catch (error) {
+    await sock.sendMessage(m.from, { 
+      text: `❌ Failed to get admin list: ${error.message}` 
+    });
+  }
+},
 
   // Change bot mode
   mode: async (m, sock, config, args) => {
