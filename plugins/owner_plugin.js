@@ -69,6 +69,10 @@ function getEnvAdmins() {
   }
 }
 
+function getEnvAdminCount() {
+  return getEnvAdmins().length;
+}
+
 function isEnvAdmin(userId) {
   try {
     const bareNumber = userId.replace('@s.whatsapp.net', '').replace(/\D/g, '');
@@ -337,7 +341,7 @@ class AdminManager {
   // Sync ENV admins to database (optional, for persistence)
   async syncEnvAdminsToDatabase() {
     try {
-      const envAdmins = envAdminManager.getEnvAdmins();
+      const envAdmins = getEnvAdmins().map(num => num + '@s.whatsapp.net')
       let synced = 0;
 
       for (const userId of envAdmins) {
@@ -475,7 +479,7 @@ class BackupManager {
           version: '2.1.0',
           totalCollections: collections.length,
           botName: process.env.BOT_NAME || 'WhatsApp Bot',
-          envAdminCount: envAdminManager.getEnvAdminCount()
+          envAdminCount: getEnvAdminCount()
         }
       };
 
@@ -931,7 +935,7 @@ Thank you for your service! 🙏`
       const memUsage = process.memoryUsage();
       const uptime = process.uptime() * 1000;
       const adminList = await adminManager.getAdmins(true);
-      const envAdminCount = envAdminManager.getEnvAdminCount();
+      const envAdminCount = getEnvAdminCount();
       const dbAdminCount = adminList.filter(a => a.source !== 'env').length;
       const bannedUsers = await banManager.getBannedUsers();
       const settings = await settingsManager.getAllSettings();
