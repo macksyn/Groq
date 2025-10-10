@@ -84,7 +84,7 @@ function isEnvAdmin(userId) {
 }
 
 // Initialize ENV Admin Manager
-const envAdminManager = new EnvAdminManager();
+// const envAdminManager = new EnvAdminManager();
 
 // Settings Manager Class
 class SettingsManager {
