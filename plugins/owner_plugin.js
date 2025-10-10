@@ -1,12 +1,7 @@
 // plugins/owner.js - Advanced Owner & Admin Management Plugin
 import chalk from 'chalk';
 import moment from 'moment-timezone';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
-import { resolveGroupMemberIds } from '../lib/serializer.js';
-
-const execAsync = promisify(exec);
 
 // Plugin Information
 export const info = {
@@ -81,6 +76,7 @@ class SettingsManager {
   }
 
   async getSetting(key) {
+    // Check cache first
     const cached = this.cache.get(key);
     if (cached && Date.now() - cached.timestamp < this.cacheTimeout) {
       return cached.value;
@@ -92,6 +88,7 @@ class SettingsManager {
         return setting ? setting.value : this.defaultSettings[key];
       }, COLLECTIONS.SETTINGS);
 
+      // Cache the result
       this.cache.set(key, {
         value: result,
         timestamp: Date.now()
@@ -121,6 +118,7 @@ class SettingsManager {
         );
       }, COLLECTIONS.SETTINGS);
 
+      // Update cache
       this.cache.set(key, {
         value,
         timestamp: Date.now()
@@ -167,28 +165,6 @@ class AdminManager {
     this.cache = new Set();
     this.lastCacheUpdate = 0;
     this.cacheTimeout = 5 * 60 * 1000; // 5 minutes
-    this.envAdmins = new Set();
-  }
-
-  // Load admins from environment variable
-  loadEnvAdmins(config) {
-    this.envAdmins.clear();
-    
-    // Check for ADMIN_NUMBERS in config/env
-    const adminNumbers = config.ADMIN_NUMBERS || process.env.ADMIN_NUMBERS || '';
-    
-    if (adminNumbers) {
-      const numbers = adminNumbers.split(',').map(n => n.trim());
-      numbers.forEach(num => {
-        if (num && /^\d+$/.test(num)) {
-          this.envAdmins.add(num + '@s.whatsapp.net');
-        }
-      });
-      
-      if (this.envAdmins.size > 0) {
-        console.log(chalk.green(`✅ Loaded ${this.envAdmins.size} admin(s) from environment`));
-      }
-    }
   }
 
   async addAdmin(userId, addedBy) {
@@ -209,7 +185,7 @@ class AdminManager {
             canManagePlugins: true,
             canManageUsers: true,
             canAccessLogs: true,
-            canExecuteCode: false,
+            canExecuteCode: false, // Only owner by default
             canManageSettings: true
           }
         });
@@ -226,11 +202,6 @@ class AdminManager {
 
   async removeAdmin(userId) {
     try {
-      // Don't allow removing env admins
-      if (this.envAdmins.has(userId)) {
-        throw new Error('Cannot remove admin from environment variables');
-      }
-
       const result = await PluginHelpers.safeDBOperation(async (db, collection) => {
         const deleteResult = await collection.deleteOne({ userId });
         return deleteResult.deletedCount > 0;
@@ -250,27 +221,9 @@ class AdminManager {
 
   async getAdmins() {
     try {
-      const dbAdmins = await PluginHelpers.safeDBOperation(async (db, collection) => {
+      return await PluginHelpers.safeDBOperation(async (db, collection) => {
         return await collection.find({ status: 'active' }).toArray();
       }, COLLECTIONS.ADMINS);
-
-      // Combine DB admins with env admins
-      const allAdmins = [...dbAdmins];
-      
-      this.envAdmins.forEach(envAdmin => {
-        if (!allAdmins.find(a => a.userId === envAdmin)) {
-          allAdmins.push({
-            userId: envAdmin,
-            phone: envAdmin.replace('@s.whatsapp.net', ''),
-            addedBy: 'environment',
-            addedAt: new Date(),
-            status: 'active',
-            source: 'env'
-          });
-        }
-      });
-
-      return allAdmins;
     } catch (error) {
       console.error(chalk.red('❌ Error getting admins:'), error.message);
       return [];
@@ -278,12 +231,7 @@ class AdminManager {
   }
 
   async isAdmin(userId) {
-    // Check env admins first (faster)
-    if (this.envAdmins.has(userId)) {
-      return true;
-    }
-
-    // Check cache
+    // Check cache first
     const now = Date.now();
     if (now - this.lastCacheUpdate < this.cacheTimeout) {
       return this.cache.has(userId);
@@ -395,6 +343,7 @@ class BackupManager {
       const backupId = `backup_${Date.now()}`;
       const db = await PluginHelpers.getDB();
       
+      // Get all collections
       const collections = await db.listCollections().toArray();
       const backupData = {
         id: backupId,
@@ -408,6 +357,7 @@ class BackupManager {
         }
       };
 
+      // Backup each collection
       for (const collectionInfo of collections) {
         const collectionName = collectionInfo.name;
         console.log(chalk.cyan(`📄 Backing up: ${collectionName}`));
@@ -418,6 +368,7 @@ class BackupManager {
         console.log(chalk.green(`✅ ${collectionName}: ${data.length} documents`));
       }
 
+      // Save backup metadata
       await PluginHelpers.safeDBOperation(async (db, collection) => {
         await collection.insertOne({
           id: backupId,
@@ -429,6 +380,7 @@ class BackupManager {
         });
       }, COLLECTIONS.BACKUPS);
 
+      // Update last backup setting
       const settingsManager = new SettingsManager();
       await settingsManager.setSetting('lastBackup', new Date());
 
@@ -469,6 +421,7 @@ class LogManager {
         });
       }, COLLECTIONS.LOGS);
 
+      // Also log to console
       const colorMap = {
         INFO: chalk.blue,
         WARN: chalk.yellow,
@@ -529,15 +482,9 @@ const backupManager = new BackupManager();
 const logManager = new LogManager();
 
 // Helper Functions
-function normalizeId(id) {
-  if (!id) return '';
-  id = id.replace(/@(s|lid)\.whatsapp\.net$/, '');
-  return id.replace(/\D/g, '');
-}
-
 function isOwner(userId, ownerNumber) {
-  const cleanUserId = normalizeId(userId);
-  const cleanOwnerNumber = normalizeId(ownerNumber);
+  const cleanUserId = userId.replace('@s.whatsapp.net', '');
+  const cleanOwnerNumber = ownerNumber.replace('@s.whatsapp.net', '');
   return cleanUserId === cleanOwnerNumber;
 }
 
@@ -547,14 +494,17 @@ async function isAdminOrOwner(userId, config) {
 }
 
 function extractUserFromMessage(m, args) {
+  // From mention
   if (m.mentionedJid && m.mentionedJid.length > 0) {
     return m.mentionedJid[0];
   }
   
+  // From argument (phone number)
   if (args[0] && /^\d+$/.test(args[0])) {
     return args[0] + '@s.whatsapp.net';
   }
   
+  // From quoted message
   if (m.quoted && m.quoted.sender) {
     return m.quoted.sender;
   }
@@ -583,14 +533,15 @@ function formatBytes(bytes) {
 
 // Command Handlers
 const commands = {
+  // Owner contact information
   owner: async (m, sock, config) => {
     const ownerMessage = `╭─────────────────────╮
 │      👨‍💻 BOT OWNER      │
 ╰─────────────────────╯
 
-👤 *Name:* ${config.OWNER_NAME || 'Bot Owner'}
+👤 *Name:* ${config.OWNER_NAME}
 📱 *Contact:* +${config.OWNER_NUMBER}
-🤖 *Bot:* ${config.BOT_NAME || 'WhatsApp Bot'}
+🤖 *Bot:* ${config.BOT_NAME}
 ⚙️ *Version:* 2.0.0
 
 🌐 *GitHub:* github.com/whatsapp-bot
@@ -600,7 +551,19 @@ const commands = {
 │   Powered by Node.js   │
 ╰─────────────────────╯`;
 
-    await sock.sendMessage(m.from, { text: ownerMessage });
+    await sock.sendMessage(m.from, {
+      text: ownerMessage,
+      contextInfo: {
+        externalAdReply: {
+          title: '👨‍💻 Bot Owner Information',
+          body: `${config.BOT_NAME} - Advanced WhatsApp Bot`,
+          thumbnailUrl: 'https://i.ibb.co/XYZ123/owner.jpg',
+          mediaType: 1,
+          renderLargerThumbnail: true,
+          sourceUrl: 'https://github.com/whatsapp-bot'
+        }
+      }
+    });
 
     await logManager.log('info', 'Owner contact info requested', 'owner_plugin', {
       userId: m.sender,
@@ -608,6 +571,7 @@ const commands = {
     });
   },
 
+  // Add admin
   admin: async (m, sock, config, args) => {
     if (!isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net')) {
       return await sock.sendMessage(m.from, { 
@@ -636,6 +600,7 @@ const commands = {
         mentions: [targetUser]
       });
 
+      // Notify the new admin
       await sock.sendMessage(targetUser, {
         text: `🎉 *Admin Privileges Granted!*
 
@@ -646,7 +611,7 @@ You have been promoted to admin by the bot owner.
 🔹 Use your powers responsibly!
 
 Welcome to the admin team! 🚀`
-      }).catch(() => {});
+      });
 
       await logManager.log('success', `Admin added: ${targetUser.split('@')[0]}`, 'owner_plugin', {
         userId: m.sender,
@@ -661,6 +626,7 @@ Welcome to the admin team! 🚀`
     }
   },
 
+  // Remove admin
   unadmin: async (m, sock, config, args) => {
     if (!isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net')) {
       return await sock.sendMessage(m.from, { 
@@ -684,6 +650,7 @@ Welcome to the admin team! 🚀`
           mentions: [targetUser]
         });
 
+        // Notify the removed admin
         await sock.sendMessage(targetUser, {
           text: `📢 *Admin Status Removed*
 
@@ -691,7 +658,7 @@ Your admin privileges have been revoked by the bot owner.
 
 You can no longer use admin commands.
 Thank you for your service! 🙏`
-        }).catch(() => {});
+        });
 
         await logManager.log('success', `Admin removed: ${targetUser.split('@')[0]}`, 'owner_plugin', {
           userId: m.sender,
@@ -712,6 +679,7 @@ Thank you for your service! 🙏`
     }
   },
 
+  // List admins
   admins: async (m, sock, config) => {
     if (!await isAdminOrOwner(m.sender, config)) {
       return await sock.sendMessage(m.from, { 
@@ -737,8 +705,7 @@ Thank you for your service! 🙏`
         
         adminList.forEach((admin, index) => {
           const addedDate = moment(admin.addedAt).format('DD/MM/YYYY');
-          const source = admin.source === 'env' ? '🔧 (ENV)' : '';
-          message += `${index + 1}. +${admin.phone} ${source}\n   📅 Added: ${addedDate}\n\n`;
+          message += `${index + 1}. +${admin.phone}\n   📅 Added: ${addedDate}\n\n`;
         });
       }
 
@@ -755,6 +722,7 @@ Thank you for your service! 🙏`
     }
   },
 
+  // Change bot mode
   mode: async (m, sock, config, args) => {
     if (!await isAdminOrOwner(m.sender, config)) {
       return await sock.sendMessage(m.from, { 
@@ -801,6 +769,7 @@ Thank you for your service! 🙏`
     }
   },
 
+  // Bot statistics
   stats: async (m, sock, config) => {
     if (!await isAdminOrOwner(m.sender, config)) {
       return await sock.sendMessage(m.from, { 
@@ -815,12 +784,24 @@ Thank you for your service! 🙏`
       const bannedUsers = await banManager.getBannedUsers();
       const settings = await settingsManager.getAllSettings();
 
+      // Get database stats if available
+      let dbStats = 'Not available';
+      try {
+        const mongoManager = PluginHelpers.getDB();
+        if (mongoManager && mongoManager.stats) {
+          const stats = await mongoManager.stats();
+          dbStats = `${stats.collections || 0} collections, ${formatBytes(stats.dataSize || 0)}`;
+        }
+      } catch (error) {
+        dbStats = 'Error retrieving stats';
+      }
+
       const statsMessage = `╭─────────────────────╮
 │    📊 BOT STATISTICS    │
 ╰─────────────────────╯
 
 🤖 *Bot Info:*
-• Name: ${config.BOT_NAME || 'WhatsApp Bot'}
+• Name: ${config.BOT_NAME}
 • Version: 2.0.0
 • Mode: ${settings.botMode?.toUpperCase() || 'PUBLIC'} ${settings.botMode === 'private' ? '🔒' : '🌐'}
 • Prefix: ${config.PREFIX}
@@ -830,6 +811,7 @@ Thank you for your service! 🙏`
 • Uptime: ${formatUptime(uptime)}
 • Memory: ${formatBytes(memUsage.heapUsed)} / ${formatBytes(memUsage.heapTotal)}
 • RSS: ${formatBytes(memUsage.rss)}
+• CPU Usage: ${process.cpuUsage().user / 1000}ms
 
 👥 *Users & Access:*
 • Owner: 1
@@ -837,6 +819,7 @@ Thank you for your service! 🙏`
 • Banned Users: ${bannedUsers.length}
 
 🗄️ *Database:*
+• Status: ${dbStats}
 • Last Backup: ${settings.lastBackup ? moment(settings.lastBackup).fromNow() : 'Never'}
 
 🔧 *Features:*
@@ -845,6 +828,7 @@ Thank you for your service! 🙏`
 • Welcome: ${settings.welcome ? '✅' : '❌'}
 • Antilink: ${settings.antilink ? '✅' : '❌'}
 • Reject Calls: ${settings.rejectCall ? '✅' : '❌'}
+• Auto Bio: ${settings.autoBio ? '✅' : '❌'}
 
 📅 *Timestamps:*
 • Started: ${moment().subtract(uptime, 'milliseconds').format('DD/MM/YYYY HH:mm:ss')}
@@ -868,6 +852,7 @@ Thank you for your service! 🙏`
     }
   },
 
+  // Ping command
   ping: async (m, sock, config) => {
     const startTime = Date.now();
     
@@ -875,6 +860,7 @@ Thank you for your service! 🙏`
     const endTime = Date.now();
     const latency = endTime - startTime;
 
+    // Get database ping if available
     let dbPing = 'N/A';
     try {
       const dbStartTime = Date.now();
@@ -901,6 +887,7 @@ ${latency < 100 ? '🟢 Excellent' : latency < 300 ? '🟡 Good' : '🔴 Poor'} 
     });
   },
 
+  // Settings management
   settings: async (m, sock, config, args) => {
     if (!await isAdminOrOwner(m.sender, config)) {
       return await sock.sendMessage(m.from, { 
@@ -909,6 +896,7 @@ ${latency < 100 ? '🟢 Excellent' : latency < 300 ? '🟡 Good' : '🔴 Poor'} 
     }
 
     if (!args[0]) {
+      // Show all settings
       try {
         const settings = await settingsManager.getAllSettings();
         
@@ -947,6 +935,7 @@ Usage: \`${config.PREFIX}settings <key> <value>\``;
     }
 
     if (!args[1]) {
+      // Get specific setting
       try {
         const value = await settingsManager.getSetting(args[0]);
         await sock.sendMessage(m.from, { 
@@ -960,9 +949,11 @@ Usage: \`${config.PREFIX}settings <key> <value>\``;
       return;
     }
 
+    // Set setting value
     const key = args[0];
     let value = args.slice(1).join(' ');
 
+    // Parse boolean values
     if (value === 'true') value = true;
     else if (value === 'false') value = false;
     else if (!isNaN(value)) value = Number(value);
@@ -987,6 +978,7 @@ Usage: \`${config.PREFIX}settings <key> <value>\``;
     }
   },
 
+  // Plugin management
   plugins: async (m, sock, config) => {
     if (!await isAdminOrOwner(m.sender, config)) {
       return await sock.sendMessage(m.from, { 
@@ -995,6 +987,7 @@ Usage: \`${config.PREFIX}settings <key> <value>\``;
     }
 
     try {
+      // Get plugin manager from bot instance
       const pluginManager = global.bot?.getPluginManager();
       if (!pluginManager) {
         return await sock.sendMessage(m.from, { 
@@ -1038,6 +1031,7 @@ Usage: \`${config.PREFIX}settings <key> <value>\``;
     }
   },
 
+  // Enable plugin
   enable: async (m, sock, config, args) => {
     if (!await isAdminOrOwner(m.sender, config)) {
       return await sock.sendMessage(m.from, { 
@@ -1085,6 +1079,7 @@ Usage: \`${config.PREFIX}settings <key> <value>\``;
     }
   },
 
+  // Disable plugin
   disable: async (m, sock, config, args) => {
     if (!await isAdminOrOwner(m.sender, config)) {
       return await sock.sendMessage(m.from, { 
@@ -1100,7 +1095,8 @@ Usage: \`${config.PREFIX}settings <key> <value>\``;
 
     const pluginName = args[0];
     
-    if (pluginName === 'owner.js' || pluginName === 'owner' || pluginName === 'owner_plugin.js') {
+    // Prevent disabling owner plugin
+    if (pluginName === 'owner.js' || pluginName === 'owner') {
       return await sock.sendMessage(m.from, { 
         text: '❌ Cannot disable the owner plugin for security reasons.' 
       });
@@ -1139,6 +1135,7 @@ Usage: \`${config.PREFIX}settings <key> <value>\``;
     }
   },
 
+  // Reload plugin
   reload: async (m, sock, config, args) => {
     if (!await isAdminOrOwner(m.sender, config)) {
       return await sock.sendMessage(m.from, { 
@@ -1208,6 +1205,7 @@ Usage: \`${config.PREFIX}settings <key> <value>\``;
     }
   },
 
+  // Database backup
   backup: async (m, sock, config) => {
     if (!isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net')) {
       return await sock.sendMessage(m.from, { 
@@ -1247,6 +1245,7 @@ Usage: \`${config.PREFIX}settings <key> <value>\``;
     }
   },
 
+  // Ban user
   ban: async (m, sock, config, args) => {
     if (!await isAdminOrOwner(m.sender, config)) {
       return await sock.sendMessage(m.from, { 
@@ -1283,6 +1282,7 @@ Usage: \`${config.PREFIX}settings <key> <value>\``;
         mentions: [targetUser]
       });
 
+      // Notify banned user
       await sock.sendMessage(targetUser, {
         text: `🚫 *You have been banned from using this bot*
 
@@ -1291,7 +1291,7 @@ Usage: \`${config.PREFIX}settings <key> <value>\``;
 📅 **Date:** ${moment().format('DD/MM/YYYY HH:mm:ss')}
 
 To appeal this ban, contact the bot owner.`
-      }).catch(() => {});
+      });
 
       await logManager.log('success', `User banned: ${targetUser.split('@')[0]} - ${reason}`, 'owner_plugin', {
         userId: m.sender,
@@ -1307,6 +1307,7 @@ To appeal this ban, contact the bot owner.`
     }
   },
 
+  // Unban user
   unban: async (m, sock, config, args) => {
     if (!await isAdminOrOwner(m.sender, config)) {
       return await sock.sendMessage(m.from, { 
@@ -1330,6 +1331,7 @@ To appeal this ban, contact the bot owner.`
           mentions: [targetUser]
         });
 
+        // Notify unbanned user
         await sock.sendMessage(targetUser, {
           text: `✅ *Ban Lifted*
 
@@ -1338,7 +1340,7 @@ You can now use the bot again.
 
 Please follow the rules to avoid future bans.
 Welcome back! 🎉`
-        }).catch(() => {});
+        });
 
         await logManager.log('success', `User unbanned: ${targetUser.split('@')[0]}`, 'owner_plugin', {
           userId: m.sender,
@@ -1359,6 +1361,7 @@ Welcome back! 🎉`
     }
   },
 
+  // Broadcast message
   broadcast: async (m, sock, config, args) => {
     if (!isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net')) {
       return await sock.sendMessage(m.from, { 
@@ -1378,13 +1381,14 @@ Welcome back! 🎉`
 ${message}
 
 ────────────────────
-🤖 ${config.BOT_NAME || 'WhatsApp Bot'} Official`;
+🤖 ${config.BOT_NAME} Official`;
 
     try {
       await sock.sendMessage(m.from, { 
         text: '📡 Starting broadcast... This may take some time.' 
       });
 
+      // Get all groups where bot is a member
       const groups = Object.keys(await sock.groupFetchAllParticipating());
       let successCount = 0;
       let failCount = 0;
@@ -1394,6 +1398,7 @@ ${message}
           await sock.sendMessage(groupId, { text: broadcastMsg });
           successCount++;
           
+          // Add delay to avoid spam detection
           await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (error) {
           failCount++;
@@ -1427,6 +1432,7 @@ ${message}
     }
   },
 
+  // Code evaluation (DANGEROUS - Owner only)
   eval: async (m, sock, config, args) => {
     if (!isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net')) {
       return await sock.sendMessage(m.from, { 
@@ -1489,6 +1495,7 @@ ${error.message}
     }
   },
 
+  // System command execution (DANGEROUS - Owner only)
   exec: async (m, sock, config, args) => {
     if (!isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net')) {
       return await sock.sendMessage(m.from, { 
@@ -1505,6 +1512,10 @@ ${error.message}
     const command = args.join(' ');
 
     try {
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+
       await sock.sendMessage(m.from, { 
         text: `⚡ Executing system command...\n\n\`${command}\`\n\n⚠️ **Warning:** System command execution!` 
       });
@@ -1537,6 +1548,7 @@ ${output.length > 1500 ? output.substring(0, 1500) + '...(truncated)' : output}
     }
   },
 
+  // Force garbage collection
   gc: async (m, sock, config) => {
     if (!await isAdminOrOwner(m.sender, config)) {
       return await sock.sendMessage(m.from, { 
@@ -1583,6 +1595,7 @@ ${freed > 0 ? '✅ Memory cleaned successfully!' : '📝 No significant memory f
     }
   },
 
+  // View logs
   logs: async (m, sock, config, args) => {
     if (!await isAdminOrOwner(m.sender, config)) {
       return await sock.sendMessage(m.from, { 
@@ -1592,7 +1605,7 @@ ${freed > 0 ? '✅ Memory cleaned successfully!' : '📝 No significant memory f
 
     try {
       const limit = parseInt(args[0]) || 20;
-      const logs = await logManager.getLogs(Math.min(limit, 50));
+      const logs = await logManager.getLogs(Math.min(limit, 50)); // Max 50 logs
 
       if (logs.length === 0) {
         return await sock.sendMessage(m.from, { 
@@ -1633,6 +1646,7 @@ ${freed > 0 ? '✅ Memory cleaned successfully!' : '📝 No significant memory f
     }
   },
 
+  // Restart bot
   restart: async (m, sock, config) => {
     if (!isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net')) {
       return await sock.sendMessage(m.from, { 
@@ -1652,11 +1666,12 @@ ${freed > 0 ? '✅ Memory cleaned successfully!' : '📝 No significant memory f
         command: 'restart'
       });
 
+      // Give time for message to send
       setTimeout(() => {
         if (global.bot && global.bot.emit) {
           global.bot.emit('restart');
         } else {
-          process.exit(1);
+          process.exit(1); // Force restart
         }
       }, 3000);
 
@@ -1667,6 +1682,7 @@ ${freed > 0 ? '✅ Memory cleaned successfully!' : '📝 No significant memory f
     }
   },
 
+  // Shutdown bot
   shutdown: async (m, sock, config) => {
     if (!isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net')) {
       return await sock.sendMessage(m.from, { 
@@ -1684,6 +1700,7 @@ ${freed > 0 ? '✅ Memory cleaned successfully!' : '📝 No significant memory f
         command: 'shutdown'
       });
 
+      // Give time for message to send
       setTimeout(() => {
         if (global.bot && global.bot.emit) {
           global.bot.emit('shutdown');
@@ -1702,15 +1719,17 @@ ${freed > 0 ? '✅ Memory cleaned successfully!' : '📝 No significant memory f
 
 // Helper functions for export
 export const OwnerHelpers = {
+  // Check if bot is in public mode
   isBotPublic: async () => {
     try {
       const mode = await settingsManager.getSetting('botMode');
       return mode === 'public';
     } catch (error) {
-      return true;
+      return true; // Default to public if error
     }
   },
 
+  // Get all admins
   getAdmins: async () => {
     try {
       return await adminManager.getAdmins();
@@ -1719,6 +1738,7 @@ export const OwnerHelpers = {
     }
   },
 
+  // Check if user is admin
   isAdmin: async (userId) => {
     try {
       return await adminManager.isAdmin(userId);
@@ -1727,6 +1747,7 @@ export const OwnerHelpers = {
     }
   },
 
+  // Check if user is banned
   isBanned: async (userId) => {
     try {
       return await banManager.isBanned(userId);
@@ -1735,6 +1756,7 @@ export const OwnerHelpers = {
     }
   },
 
+  // Get bot setting
   getSetting: async (key) => {
     try {
       return await settingsManager.getSetting(key);
@@ -1743,6 +1765,7 @@ export const OwnerHelpers = {
     }
   },
 
+  // Set bot setting
   setSetting: async (key, value) => {
     try {
       return await settingsManager.setSetting(key, value);
@@ -1751,6 +1774,7 @@ export const OwnerHelpers = {
     }
   },
 
+  // Log to database
   log: async (level, message, source = 'system', metadata = {}) => {
     try {
       return await logManager.log(level, message, source, metadata);
@@ -1760,13 +1784,10 @@ export const OwnerHelpers = {
   }
 };
 
-// Initialize function
+// Initialize function (called when plugin loads)
 export async function initialize(config) {
   try {
     console.log(chalk.blue('🔧 Initializing Owner Plugin...'));
-
-    // Load admins from environment
-    adminManager.loadEnvAdmins(config);
 
     // Initialize default settings
     const defaultSettings = settingsManager.defaultSettings;
@@ -1786,6 +1807,7 @@ export async function initialize(config) {
 
     console.log(chalk.green('✅ Owner Plugin initialized successfully'));
     
+    // Log initialization
     await logManager.log('success', 'Owner plugin initialized', 'owner_plugin', {
       version: info.version
     });
@@ -1822,7 +1844,7 @@ function startCleanupTasks() {
 export const scheduledTasks = [
   {
     name: 'cleanup_logs',
-    schedule: '0 2 * * *',
+    schedule: '0 2 * * *', // Daily at 2 AM
     description: 'Clean up old log entries',
     handler: async () => {
       try {
@@ -1835,7 +1857,7 @@ export const scheduledTasks = [
   },
   {
     name: 'cache_refresh',
-    schedule: '*/30 * * * *',
+    schedule: '*/30 * * * *', // Every 30 minutes
     description: 'Refresh admin and settings cache',
     handler: async () => {
       try {
@@ -1849,7 +1871,7 @@ export const scheduledTasks = [
   },
   {
     name: 'auto_backup',
-    schedule: '0 4 * * 0',
+    schedule: '0 4 * * 0', // Weekly on Sunday at 4 AM
     description: 'Automatic database backup',
     handler: async () => {
       try {
@@ -1863,10 +1885,42 @@ export const scheduledTasks = [
   }
 ];
 
+// Permission middleware
+async function checkPermissions(m, sock, config, requiredLevel = 'admin') {
+  const userId = m.sender;
+
+  // Check if user is banned
+  if (await banManager.isBanned(userId)) {
+    await sock.sendMessage(m.from, { 
+      text: '🚫 You are banned from using this bot.\n\nContact the bot owner to appeal.' 
+    });
+    return false;
+  }
+
+  // Check permission levels
+  if (requiredLevel === 'owner') {
+    if (!isOwner(userId, config.OWNER_NUMBER + '@s.whatsapp.net')) {
+      await sock.sendMessage(m.from, { 
+        text: '❌ This command requires owner privileges.' 
+      });
+      return false;
+    }
+  } else if (requiredLevel === 'admin') {
+    if (!await isAdminOrOwner(userId, config)) {
+      await sock.sendMessage(m.from, { 
+        text: '❌ This command requires admin privileges.' 
+      });
+      return false;
+    }
+  }
+
+  return true;
+}
+
 // Main plugin handler
 export default async function OwnerPlugin(m, sock, config, bot) {
   try {
-    // Set global bot reference
+    // Set global bot reference for cross-plugin access
     if (bot && !global.bot) {
       global.bot = bot;
     }
@@ -1885,13 +1939,14 @@ export default async function OwnerPlugin(m, sock, config, bot) {
     await logManager.log('info', `Command executed: ${command}`, 'owner_plugin', {
       userId: m.sender,
       command,
-      args: args.slice(0, 3),
+      args: args.slice(0, 3), // Only log first 3 args for privacy
       from: m.from,
       isGroup: m.isGroup
     });
 
     // Execute command
     if (commands[command]) {
+      // Add small delay to prevent spam
       await new Promise(resolve => setTimeout(resolve, 100));
       
       await commands[command](m, sock, config, args, bot);
@@ -1900,6 +1955,7 @@ export default async function OwnerPlugin(m, sock, config, bot) {
   } catch (error) {
     console.error(chalk.red('❌ Owner Plugin error:'), error.message);
     
+    // Log error
     await logManager.log('error', `Plugin error: ${error.message}`, 'owner_plugin', {
       userId: m.sender,
       command: m.body?.slice(config.PREFIX.length).trim().split(/ +/)[0],
@@ -1907,6 +1963,7 @@ export default async function OwnerPlugin(m, sock, config, bot) {
       stack: error.stack?.split('\n')[0]
     });
 
+    // Send error message to user
     try {
       await sock.sendMessage(m.from, { 
         text: `❌ An error occurred while executing the command.\n\n**Error:** ${error.message}` 
