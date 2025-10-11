@@ -1,0 +1,805 @@
+// plugins/socialMediaDownloader.js
+import axios from 'axios';
+import chalk from 'chalk';
+import { PluginHelpers, safeOperation } from '../lib/pluginIntegration.js';
+
+// Collection name for settings
+const SETTINGS_COLLECTION = 'downloader_settings';
+const USAGE_COLLECTION = 'downloader_usage';
+
+// Default settings (used when no DB settings exist)
+const DEFAULT_SETTINGS = {
+  premiumEnabled: false,
+  downloadCost: 50,
+  rateLimitFree: 10,
+  rateLimitCooldown: 24 * 60 * 60 * 1000, // 24 hours
+  enabledPlatforms: ['facebook', 'tiktok', 'twitter', 'instagram'],
+  maxFileSize: 100, // MB
+  allowGroups: true,
+  allowPrivate: true,
+  updatedAt: new Date(),
+  updatedBy: 'system'
+};
+
+// Supported platforms with regex patterns
+const PLATFORMS = {
+  FACEBOOK: {
+    name: 'Facebook',
+    key: 'facebook',
+    patterns: [
+      /(?:https?:\/\/)?(?:www\.|m\.|web\.|mbasic\.)?facebook\.com\/(?:watch\/?\?v=|[\w-]+\/videos?\/|reel\/|share\/r\/|groups\/[\w-]+\/permalink\/|[\w-]+\/posts\/|story\.php\?story_fbid=|permalink\.php\?story_fbid=)[\w\d-]+/gi,
+      /(?:https?:\/\/)?fb\.watch\/[\w-]+/gi
+    ],
+    icon: '𝐟'
+  },
+  TIKTOK: {
+    name: 'TikTok',
+    key: 'tiktok',
+    patterns: [
+      /(?:https?:\/\/)?(?:www\.|vm\.|vt\.)?tiktok\.com\/(?:@[\w.-]+\/video\/|v\/|t\/)?\w+/gi,
+      /(?:https?:\/\/)?(?:www\.)?tiktok\.com\/@[\w.-]+\/video\/\d+/gi
+    ],
+    icon: '𝗧𝗶𝗸 𝗧𝗼𝗸'
+  },
+  TWITTER: {
+    name: 'Twitter/X',
+    key: 'twitter',
+    patterns: [
+      /(?:https?:\/\/)?(?:www\.|mobile\.)?(?:twitter|x)\.com\/[\w]+\/status\/\d+/gi,
+      /(?:https?:\/\/)?t\.co\/[\w]+/gi
+    ],
+    icon: '𝕏'
+  },
+  INSTAGRAM: {
+    name: 'Instagram',
+    key: 'instagram',
+    patterns: [
+      /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/[\w-]+/gi,
+      /(?:https?:\/\/)?(?:www\.)?instagram\.com\/stories\/[\w.-]+\/\d+/gi
+    ],
+    icon: '🅾'
+  }
+};
+
+// API endpoints
+const API_SERVICES = {
+  primary: 'https://api.cobalt.tools/api/json',
+  fallback: [
+    'https://api.downloadgram.org/media',
+    'https://api.tikmate.app/api/download'
+  ]
+};
+
+class SocialMediaDownloader {
+  constructor() {
+    this.settings = null;
+    this.activeDownloads = new Map();
+    this.statsCache = null;
+    this.statsCacheTime = 0;
+    this.statsCacheDuration = 5 * 60 * 1000; // 5 minutes
+  }
+
+  // Initialize and load settings from MongoDB
+  async initialize() {
+    try {
+      this.settings = await this.loadSettings();
+      console.log(chalk.green('✅ Downloader settings loaded from database'));
+      return true;
+    } catch (error) {
+      console.error(chalk.red('❌ Failed to load downloader settings:'), error.message);
+      this.settings = { ...DEFAULT_SETTINGS };
+      return false;
+    }
+  }
+
+  // Load settings from MongoDB
+  async loadSettings() {
+    try {
+      return await safeOperation(async (db, collection) => {
+        let settings = await collection.findOne({ _id: 'main_settings' });
+        
+        if (!settings) {
+          // Create default settings
+          settings = { _id: 'main_settings', ...DEFAULT_SETTINGS };
+          await collection.insertOne(settings);
+          console.log(chalk.cyan('📝 Created default downloader settings'));
+        }
+        
+        return settings;
+      }, SETTINGS_COLLECTION);
+    } catch (error) {
+      console.error(chalk.red('Error loading settings:'), error.message);
+      return { ...DEFAULT_SETTINGS };
+    }
+  }
+
+  // Save settings to MongoDB
+  async saveSettings(updates, updatedBy = 'system') {
+    try {
+      return await safeOperation(async (db, collection) => {
+        const updateData = {
+          ...updates,
+          updatedAt: new Date(),
+          updatedBy
+        };
+        
+        const result = await collection.updateOne(
+          { _id: 'main_settings' },
+          { $set: updateData },
+          { upsert: true }
+        );
+        
+        // Update local cache
+        this.settings = await this.loadSettings();
+        
+        console.log(chalk.green('✅ Downloader settings updated'));
+        return result;
+      }, SETTINGS_COLLECTION);
+    } catch (error) {
+      console.error(chalk.red('Error saving settings:'), error.message);
+      throw error;
+    }
+  }
+
+  // Get current settings
+  getSettings() {
+    return this.settings || { ...DEFAULT_SETTINGS };
+  }
+
+  // Check if user is admin (from ENV)
+  isAdmin(userId) {
+    const adminNumber = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER;
+    if (!adminNumber) return false;
+    
+    const userNumber = userId.split('@')[0];
+    return adminNumber === userNumber || adminNumber.includes(userNumber);
+  }
+
+  // Detect platform from URL
+  detectPlatform(url) {
+    for (const [platform, config] of Object.entries(PLATFORMS)) {
+      for (const pattern of config.patterns) {
+        pattern.lastIndex = 0;
+        if (pattern.test(url)) {
+          return { platform, config };
+        }
+      }
+    }
+    return null;
+  }
+
+  // Check if platform is enabled
+  isPlatformEnabled(platformKey) {
+    const settings = this.getSettings();
+    return settings.enabledPlatforms?.includes(platformKey) ?? true;
+  }
+
+  // Get user usage data from MongoDB
+  async getUserUsage(userId) {
+    try {
+      return await safeOperation(async (db, collection) => {
+        const now = Date.now();
+        let usage = await collection.findOne({ userId });
+        
+        if (!usage) {
+          usage = {
+            userId,
+            count: 0,
+            resetTime: now + this.getSettings().rateLimitCooldown,
+            totalDownloads: 0,
+            lastDownload: null,
+            createdAt: new Date()
+          };
+          await collection.insertOne(usage);
+        }
+        
+        // Reset if cooldown expired
+        if (now > usage.resetTime) {
+          await collection.updateOne(
+            { userId },
+            { 
+              $set: { 
+                count: 0, 
+                resetTime: now + this.getSettings().rateLimitCooldown 
+              } 
+            }
+          );
+          usage.count = 0;
+          usage.resetTime = now + this.getSettings().rateLimitCooldown;
+        }
+        
+        return usage;
+      }, USAGE_COLLECTION);
+    } catch (error) {
+      console.error(chalk.red('Error getting user usage:'), error.message);
+      return { count: 0, resetTime: Date.now() + this.getSettings().rateLimitCooldown };
+    }
+  }
+
+  // Check rate limits
+  async checkRateLimit(userId) {
+    const settings = this.getSettings();
+    if (settings.premiumEnabled) return true;
+
+    const usage = await this.getUserUsage(userId);
+    const now = Date.now();
+
+    if (usage.count >= settings.rateLimitFree) {
+      const hoursLeft = Math.ceil((usage.resetTime - now) / (60 * 60 * 1000));
+      return { limited: true, hoursLeft, current: usage.count, limit: settings.rateLimitFree };
+    }
+
+    return true;
+  }
+
+  // Increment usage counter in MongoDB
+  async incrementUsage(userId, platform, url) {
+    try {
+      return await safeOperation(async (db, collection) => {
+        await collection.updateOne(
+          { userId },
+          { 
+            $inc: { count: 1, totalDownloads: 1 },
+            $set: { lastDownload: new Date() },
+            $push: { 
+              downloads: { 
+                $each: [{ platform, url, timestamp: new Date() }],
+                $slice: -50 // Keep only last 50 downloads
+              }
+            }
+          },
+          { upsert: true }
+        );
+      }, USAGE_COLLECTION);
+    } catch (error) {
+      console.error(chalk.red('Error incrementing usage:'), error.message);
+    }
+  }
+
+  // Download with Cobalt API
+  async downloadWithCobalt(url, platform) {
+    try {
+      const response = await axios.post(API_SERVICES.primary, {
+        url: url,
+        vCodec: 'h264',
+        vQuality: '720',
+        aFormat: 'mp3',
+        filenamePattern: 'basic',
+        isAudioOnly: false
+      }, {
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000
+      });
+
+      if (response.data.status === 'error' || response.data.status === 'rate-limit') {
+        throw new Error(response.data.text || 'Download failed');
+      }
+
+      return {
+        url: response.data.url,
+        thumbnail: response.data.thumb || null,
+        title: response.data.filename || 'media',
+        duration: null,
+        source: 'cobalt'
+      };
+    } catch (error) {
+      console.error(chalk.red('Cobalt API error:'), error.message);
+      throw error;
+    }
+  }
+
+  // Main download function
+  async download(url, userId, isGroup) {
+    const downloadId = `${userId}_${Date.now()}`;
+    const settings = this.getSettings();
+    
+    // Check if groups/private are allowed
+    if (isGroup && !settings.allowGroups) {
+      return { error: '⚠️ Group downloads are currently disabled by admin.' };
+    }
+    if (!isGroup && !settings.allowPrivate) {
+      return { error: '⚠️ Private downloads are currently disabled by admin.' };
+    }
+
+    // Prevent duplicate downloads
+    if (this.activeDownloads.has(userId)) {
+      return { error: 'You already have a download in progress. Please wait.' };
+    }
+
+    try {
+      this.activeDownloads.set(userId, downloadId);
+
+      // Detect platform
+      const detection = this.detectPlatform(url);
+      if (!detection) {
+        return { error: 'Unsupported URL. Please provide a valid social media link.' };
+      }
+
+      const { platform, config } = detection;
+
+      // Check if platform is enabled
+      if (!this.isPlatformEnabled(config.key)) {
+        return { error: `${config.name} downloads are currently disabled by admin.` };
+      }
+
+      // Check rate limits (free tier)
+      const rateLimitCheck = await this.checkRateLimit(userId);
+      if (rateLimitCheck.limited) {
+        return { 
+          error: `📊 *Daily Limit Reached!*\n\n` +
+                 `Current: ${rateLimitCheck.current}/${rateLimitCheck.limit}\n` +
+                 `Reset in: ${rateLimitCheck.hoursLeft} hours\n\n` +
+                 `_Contact admin to upgrade to premium_`,
+          limited: true
+        };
+      }
+
+      // Check balance for premium mode
+      if (settings.premiumEnabled) {
+        const balance = await PluginHelpers.getBalance(userId);
+        if (balance.wallet < settings.downloadCost) {
+          return { 
+            error: `💳 *Insufficient Balance!*\n\n` +
+                   `Required: ₦${settings.downloadCost}\n` +
+                   `Your balance: ₦${balance.wallet}\n\n` +
+                   `_Use economy commands to earn money_`,
+            insufficientBalance: true
+          };
+        }
+      }
+
+      // Attempt download
+      let result;
+      try {
+        result = await this.downloadWithCobalt(url, platform);
+      } catch (primaryError) {
+        return { 
+          error: `❌ *Download Failed*\n\n` +
+                 `The link might be invalid or content unavailable.\n\n` +
+                 `Error: ${primaryError.message}` 
+        };
+      }
+
+      // Charge user if premium mode
+      if (settings.premiumEnabled) {
+        await PluginHelpers.removeMoney(userId, settings.downloadCost, `${config.name} download`);
+      } else {
+        // Increment usage counter
+        await this.incrementUsage(userId, config.name, url);
+      }
+
+      // Log download to stats
+      await this.logDownload(userId, config.name, settings.premiumEnabled);
+
+      return {
+        success: true,
+        platform: config.name,
+        icon: config.icon,
+        ...result
+      };
+
+    } catch (error) {
+      console.error(chalk.red('Download error:'), error.message);
+      return { error: `An unexpected error occurred: ${error.message}` };
+    } finally {
+      this.activeDownloads.delete(userId);
+    }
+  }
+
+  // Log download statistics
+  async logDownload(userId, platform, isPremium) {
+    try {
+      await safeOperation(async (db, collection) => {
+        await collection.updateOne(
+          { _id: 'stats' },
+          { 
+            $inc: { 
+              totalDownloads: 1,
+              [`platforms.${platform}`]: 1,
+              [isPremium ? 'premiumDownloads' : 'freeDownloads']: 1
+            },
+            $set: { lastDownload: new Date() }
+          },
+          { upsert: true }
+        );
+      }, SETTINGS_COLLECTION);
+    } catch (error) {
+      console.error(chalk.red('Error logging download:'), error.message);
+    }
+  }
+
+  // Get remaining downloads for user
+  async getRemainingDownloads(userId) {
+    const settings = this.getSettings();
+    if (settings.premiumEnabled) return 'Unlimited (Premium)';
+
+    const usage = await this.getUserUsage(userId);
+    return Math.max(0, settings.rateLimitFree - usage.count);
+  }
+
+  // Get comprehensive statistics
+  async getStats() {
+    const now = Date.now();
+    
+    // Return cached stats if available and fresh
+    if (this.statsCache && (now - this.statsCacheTime < this.statsCacheDuration)) {
+      return this.statsCache;
+    }
+
+    try {
+      const stats = await safeOperation(async (db, collection) => {
+        const globalStats = await collection.findOne({ _id: 'stats' }) || {
+          totalDownloads: 0,
+          freeDownloads: 0,
+          premiumDownloads: 0,
+          platforms: {}
+        };
+        
+        return globalStats;
+      }, SETTINGS_COLLECTION);
+
+      const usageStats = await safeOperation(async (db, collection) => {
+        const totalUsers = await collection.countDocuments();
+        const activeUsers = await collection.countDocuments({ 
+          lastDownload: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } 
+        });
+        
+        return { totalUsers, activeUsers };
+      }, USAGE_COLLECTION);
+
+      const settings = this.getSettings();
+
+      const result = {
+        ...stats,
+        ...usageStats,
+        activeDownloads: this.activeDownloads.size,
+        settings: {
+          premiumEnabled: settings.premiumEnabled,
+          downloadCost: settings.downloadCost,
+          rateLimitFree: settings.rateLimitFree,
+          enabledPlatforms: settings.enabledPlatforms,
+          allowGroups: settings.allowGroups,
+          allowPrivate: settings.allowPrivate
+        },
+        lastUpdated: new Date()
+      };
+
+      // Cache the results
+      this.statsCache = result;
+      this.statsCacheTime = now;
+
+      return result;
+    } catch (error) {
+      console.error(chalk.red('Error getting stats:'), error.message);
+      return {
+        totalDownloads: 0,
+        activeDownloads: this.activeDownloads.size,
+        error: error.message
+      };
+    }
+  }
+
+  // Get user's download history
+  async getUserHistory(userId, limit = 10) {
+    try {
+      return await safeOperation(async (db, collection) => {
+        const usage = await collection.findOne({ userId });
+        return usage?.downloads?.slice(-limit).reverse() || [];
+      }, USAGE_COLLECTION);
+    } catch (error) {
+      console.error(chalk.red('Error getting user history:'), error.message);
+      return [];
+    }
+  }
+}
+
+// Create singleton instance
+const downloader = new SocialMediaDownloader();
+
+// Main plugin handler
+export default async function socialMediaDownloader(m, sock, config, bot) {
+  try {
+    // Initialize if not already done
+    if (!downloader.settings) {
+      await downloader.initialize();
+    }
+
+    const text = m.body?.toLowerCase().trim() || '';
+    const sender = m.sender;
+    const isGroup = m.isGroup;
+    const isAdmin = downloader.isAdmin(sender);
+
+    // Admin Settings Command: .dlsettings
+    if (text.startsWith('.dlsettings') && isAdmin) {
+      const args = text.split(' ').slice(1);
+      
+      if (args.length === 0) {
+        // Show current settings
+        const settings = downloader.getSettings();
+        const adminNum = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not Set';
+        
+        await sock.sendMessage(m.chat, {
+          text: `*⚙️ Downloader Settings*\n\n` +
+                `*Admin Number:* ${adminNum}\n\n` +
+                `*Premium Mode:* ${settings.premiumEnabled ? '✅ Enabled' : '❌ Disabled'}\n` +
+                `*Download Cost:* ₦${settings.downloadCost}\n` +
+                `*Free Limit:* ${settings.rateLimitFree} per day\n` +
+                `*Cooldown:* ${settings.rateLimitCooldown / (60 * 60 * 1000)}h\n\n` +
+                `*Enabled Platforms:*\n${settings.enabledPlatforms.map(p => `• ${p}`).join('\n')}\n\n` +
+                `*Allow Groups:* ${settings.allowGroups ? '✅' : '❌'}\n` +
+                `*Allow Private:* ${settings.allowPrivate ? '✅' : '❌'}\n\n` +
+                `*Last Updated:* ${new Date(settings.updatedAt).toLocaleString()}\n` +
+                `*Updated By:* ${settings.updatedBy}\n\n` +
+                `*Commands:*\n` +
+                `.dlsettings premium on/off\n` +
+                `.dlsettings cost <amount>\n` +
+                `.dlsettings limit <number>\n` +
+                `.dlsettings platform <name> on/off\n` +
+                `.dlsettings groups on/off\n` +
+                `.dlsettings private on/off`
+        }, { quoted: m });
+        return;
+      }
+
+      const action = args[0];
+      const value = args[1];
+      const updates = {};
+
+      switch (action) {
+        case 'premium':
+          if (value === 'on' || value === 'off') {
+            updates.premiumEnabled = value === 'on';
+            await downloader.saveSettings(updates, sender);
+            await sock.sendMessage(m.chat, {
+              text: `✅ Premium mode ${value === 'on' ? 'enabled' : 'disabled'}`
+            }, { quoted: m });
+          }
+          break;
+
+        case 'cost':
+          const cost = parseInt(value);
+          if (!isNaN(cost) && cost >= 0) {
+            updates.downloadCost = cost;
+            await downloader.saveSettings(updates, sender);
+            await sock.sendMessage(m.chat, {
+              text: `✅ Download cost set to ₦${cost}`
+            }, { quoted: m });
+          }
+          break;
+
+        case 'limit':
+          const limit = parseInt(value);
+          if (!isNaN(limit) && limit > 0) {
+            updates.rateLimitFree = limit;
+            await downloader.saveSettings(updates, sender);
+            await sock.sendMessage(m.chat, {
+              text: `✅ Free download limit set to ${limit} per day`
+            }, { quoted: m });
+          }
+          break;
+
+        case 'platform':
+          const platform = value?.toLowerCase();
+          const state = args[2];
+          if (platform && (state === 'on' || state === 'off')) {
+            const settings = downloader.getSettings();
+            const platforms = settings.enabledPlatforms || [];
+            
+            if (state === 'on' && !platforms.includes(platform)) {
+              platforms.push(platform);
+            } else if (state === 'off') {
+              const index = platforms.indexOf(platform);
+              if (index > -1) platforms.splice(index, 1);
+            }
+            
+            updates.enabledPlatforms = platforms;
+            await downloader.saveSettings(updates, sender);
+            await sock.sendMessage(m.chat, {
+              text: `✅ ${platform} ${state === 'on' ? 'enabled' : 'disabled'}`
+            }, { quoted: m });
+          }
+          break;
+
+        case 'groups':
+          if (value === 'on' || value === 'off') {
+            updates.allowGroups = value === 'on';
+            await downloader.saveSettings(updates, sender);
+            await sock.sendMessage(m.chat, {
+              text: `✅ Group downloads ${value === 'on' ? 'enabled' : 'disabled'}`
+            }, { quoted: m });
+          }
+          break;
+
+        case 'private':
+          if (value === 'on' || value === 'off') {
+            updates.allowPrivate = value === 'on';
+            await downloader.saveSettings(updates, sender);
+            await sock.sendMessage(m.chat, {
+              text: `✅ Private downloads ${value === 'on' ? 'enabled' : 'disabled'}`
+            }, { quoted: m });
+          }
+          break;
+
+        default:
+          await sock.sendMessage(m.chat, {
+            text: `❌ Unknown setting: ${action}\n\nUse .dlsettings to see available commands`
+          }, { quoted: m });
+      }
+      return;
+    }
+
+    // Download Command: .dl <url>
+    if (text.startsWith('.dl ') || text.startsWith('.download ')) {
+      const url = text.replace(/^\.(dl|download)\s+/i, '').trim();
+
+      if (!url) {
+        const remaining = await downloader.getRemainingDownloads(sender);
+        const settings = downloader.getSettings();
+        
+        await sock.sendMessage(m.chat, {
+          text: `*📥 Social Media Downloader*\n\n` +
+                `*Supported Platforms:*\n` +
+                `${settings.enabledPlatforms.map(p => {
+                  const plat = Object.values(PLATFORMS).find(pl => pl.key === p);
+                  return plat ? `${plat.icon} ${plat.name}` : '';
+                }).filter(Boolean).join('\n')}\n\n` +
+                `*Your Status:*\n` +
+                `${settings.premiumEnabled ? 
+                  `💎 Premium: ₦${settings.downloadCost} per download` : 
+                  `🆓 Free: ${remaining}/${settings.rateLimitFree} remaining today`}\n\n` +
+                `*Usage:* .dl <url>\n` +
+                `*Example:* .dl https://tiktok.com/@user/video/123`
+        }, { quoted: m });
+        return;
+      }
+
+      // Send processing message
+      const processingMsg = await sock.sendMessage(m.chat, {
+        text: `⏳ *Processing Download...*\n\nThis may take a few seconds.`
+      }, { quoted: m });
+
+      // Attempt download
+      const result = await downloader.download(url, sender, isGroup);
+
+      if (result.error) {
+        await sock.sendMessage(m.chat, {
+          text: result.error,
+          edit: processingMsg.key
+        });
+        return;
+      }
+
+      if (result.success) {
+        const settings = downloader.getSettings();
+        const remaining = await downloader.getRemainingDownloads(sender);
+        
+        const caption = `${result.icon} *${result.platform} Download*\n\n` +
+                       `${result.title ? `📝 ${result.title}\n` : ''}` +
+                       `${settings.premiumEnabled ? 
+                         `💳 Charged: ₦${settings.downloadCost}\n` : 
+                         `🆓 Remaining: ${remaining}/${settings.rateLimitFree}\n`}\n` +
+                       `⚡ Downloaded via ${bot.name}`;
+
+        // Send video
+        await sock.sendMessage(m.chat, {
+          video: { url: result.url },
+          caption: caption,
+          mimetype: 'video/mp4'
+        }, { quoted: m });
+
+        // Delete processing message
+        await sock.sendMessage(m.chat, {
+          delete: processingMsg.key
+        });
+      }
+    }
+
+    // Statistics Command: .dlstats
+    if (text === '.dlstats' && isAdmin) {
+      const stats = await downloader.getStats();
+      
+      await sock.sendMessage(m.chat, {
+        text: `*📊 Downloader Statistics*\n\n` +
+              `*Total Downloads:* ${stats.totalDownloads || 0}\n` +
+              `*Free Downloads:* ${stats.freeDownloads || 0}\n` +
+              `*Premium Downloads:* ${stats.premiumDownloads || 0}\n` +
+              `*Active Downloads:* ${stats.activeDownloads}\n\n` +
+              `*Users:*\n` +
+              `• Total: ${stats.totalUsers || 0}\n` +
+              `• Active (7d): ${stats.activeUsers || 0}\n\n` +
+              `*Platforms:*\n` +
+              `${Object.entries(stats.platforms || {}).map(([p, count]) => `• ${p}: ${count}`).join('\n') || 'No data'}\n\n` +
+              `*Settings:*\n` +
+              `• Mode: ${stats.settings?.premiumEnabled ? '💎 Premium' : '🆓 Free'}\n` +
+              `• Cost: ₦${stats.settings?.downloadCost || 0}\n` +
+              `• Daily Limit: ${stats.settings?.rateLimitFree || 0}\n\n` +
+              `*Last Updated:* ${new Date(stats.lastUpdated).toLocaleString()}`
+      }, { quoted: m });
+    }
+
+    // User History Command: .dlhistory
+    if (text === '.dlhistory') {
+      const history = await downloader.getUserHistory(sender, 10);
+      
+      if (history.length === 0) {
+        await sock.sendMessage(m.chat, {
+          text: `📜 *Your Download History*\n\nNo downloads yet!`
+        }, { quoted: m });
+        return;
+      }
+
+      const historyText = history.map((item, i) => 
+        `${i + 1}. ${item.platform}\n   ${new Date(item.timestamp).toLocaleString()}`
+      ).join('\n\n');
+
+      await sock.sendMessage(m.chat, {
+        text: `📜 *Your Download History*\n\n${historyText}\n\n_Showing last ${history.length} downloads_`
+      }, { quoted: m });
+    }
+
+  } catch (error) {
+    console.error(chalk.red('Social media downloader plugin error:'), error.message);
+  }
+}
+
+// Plugin info
+export const info = {
+  name: 'Social Media Downloader',
+  version: '2.0.0',
+  author: 'Bot Developer',
+  description: 'Download videos from social media with admin settings and MongoDB persistence',
+  category: 'media',
+  commands: [
+    {
+      command: '.dl <url>',
+      alias: ['.download'],
+      description: 'Download video from supported platforms',
+      usage: '.dl https://tiktok.com/@user/video/123'
+    },
+    {
+      command: '.dlsettings',
+      description: 'Manage downloader settings (admin only)',
+      usage: '.dlsettings [option] [value]'
+    },
+    {
+      command: '.dlstats',
+      description: 'View statistics (admin only)',
+      usage: '.dlstats'
+    },
+    {
+      command: '.dlhistory',
+      description: 'View your download history',
+      usage: '.dlhistory'
+    }
+  ],
+  features: [
+    'Multi-platform support (Facebook, TikTok, Twitter, Instagram)',
+    'Admin settings via commands (no code editing required)',
+    'MongoDB persistence for settings and usage tracking',
+    'Premium mode with economy wallet integration',
+    'Rate limiting with daily reset',
+    'Download history tracking',
+    'Comprehensive statistics',
+    'Group/private chat controls',
+    'Platform enable/disable controls'
+  ]
+};
+
+// Initialize function
+export async function initialize(config) {
+  await downloader.initialize();
+  
+  const settings = downloader.getSettings();
+  console.log(chalk.green('✅ Social Media Downloader plugin initialized'));
+  console.log(chalk.cyan(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`));
+  console.log(chalk.cyan(`Admin: ${process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not configured'}`));
+  
+  if (settings.premiumEnabled) {
+    console.log(chalk.cyan(`Cost: ₦${settings.downloadCost} per download`));
+  } else {
+    console.log(chalk.cyan(`Free limit: ${settings.rateLimitFree} downloads per day`));
+  }
+}
