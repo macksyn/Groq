@@ -658,20 +658,22 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         const remaining = await downloader.getRemainingDownloads(sender);
         const settings = downloader.getSettings();
         
-        await reply(
-          `*📥 Social Media Downloader*\n\n` +
-          `*Supported Platforms:*\n` +
-          `${settings.enabledPlatforms.map(p => {
-            const plat = Object.values(PLATFORMS).find(pl => pl.key === p);
-            return plat ? `${plat.icon} ${plat.name}` : '';
-          }).filter(Boolean).join('\n')}\n\n` +
-          `*Your Status:*\n` +
-          `${settings.premiumEnabled ? 
-            `💎 Premium: ₦${settings.downloadCost} per download` : 
-            `🆓 Free: ${remaining}/${settings.rateLimitFree} remaining today`}\n\n` +
-          `*Usage:* ${config.PREFIX}dl <url>\n` +
-          `*Example:* ${config.PREFIX}dl https://tiktok.com/@user/video/123`
-        );
+        let replyText = `*📥 Social Media Downloader*\n\n`;
+        replyText += `*Supported Platforms:*\n`;
+        replyText += `${settings.enabledPlatforms.map(p => {
+          const plat = Object.values(PLATFORMS).find(pl => pl.key === p);
+          return plat ? `${plat.icon} ${plat.name}` : '';
+        }).filter(Boolean).join('\n')}\n\n`;
+        replyText += `*Your Status:*\n`;
+        if (settings.premiumEnabled) {
+          replyText += `💎 Premium: ₦${settings.downloadCost} per download\n\n`;
+        } else {
+          replyText += `🆓 Free: ${remaining}/${settings.rateLimitFree} remaining today\n\n`;
+        }
+        replyText += `*Usage:* ${config.PREFIX}dl <url>\n`;
+        replyText += `*Example:* ${config.PREFIX}dl https://tiktok.com/@user/video/123`;
+        
+        await reply(replyText);
         return;
       }
 
@@ -695,12 +697,16 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         const settings = downloader.getSettings();
         const remaining = await downloader.getRemainingDownloads(sender);
         
-        const caption = `${result.icon} *${result.platform} Download*\n\n` +
-                       `${result.title ? `📝 ${result.title}\n` : ''}` +
-                       `${settings.premiumEnabled ? 
-                         `💳 Charged: ₦${settings.downloadCost}\n` : 
-                         `🆓 Remaining: ${remaining}/${settings.rateLimitFree}\n`}\n` +
-                       `⚡ Downloaded via ${bot?.name || 'Bot'}`;
+        let caption = `${result.icon} *${result.platform} Download*\n\n`;
+        if (result.title) {
+          caption += `📝 ${result.title}\n`;
+        }
+        if (settings.premiumEnabled) {
+          caption += `💳 Charged: ₦${settings.downloadCost}\n`;
+        } else {
+          caption += `🆓 Remaining: ${remaining}/${settings.rateLimitFree}\n`;
+        }
+        caption += `\n⚡ Downloaded via ${bot?.name || 'Bot'}`;
 
         // Send video
         await sock.sendMessage(from, {
@@ -814,4 +820,11 @@ export async function initialize(config) {
   const settings = downloader.getSettings();
   console.log(chalk.green('✅ Social Media Downloader plugin initialized'));
   console.log(chalk.cyan(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`));
-  console.log(chalk.cyan(`Admin: ${process.env.OWNER_
+  console.log(chalk.cyan(`Admin: ${process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not configured'}`));
+  
+  if (settings.premiumEnabled) {
+    console.log(chalk.cyan(`Cost: ₦${settings.downloadCost} per download`));
+  } else {
+    console.log(chalk.cyan(`Free limit: ${settings.rateLimitFree} downloads per day`));
+  }
+}
