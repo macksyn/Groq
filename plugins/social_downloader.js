@@ -259,6 +259,8 @@ class SocialMediaDownloader {
   // Download with Cobalt API
   async downloadWithCobalt(url, platform) {
     try {
+      console.log(chalk.cyan(`🔄 Attempting Cobalt download for: ${url}`));
+      
       const response = await axios.post(API_SERVICES.primary, {
         url: url,
         vCodec: 'h264',
@@ -274,8 +276,32 @@ class SocialMediaDownloader {
         timeout: 30000
       });
 
+      console.log(chalk.green(`✅ Cobalt response status: ${response.data.status}`));
+
       if (response.data.status === 'error' || response.data.status === 'rate-limit') {
         throw new Error(response.data.text || 'Download failed');
+      }
+
+      if (response.data.status === 'redirect' || response.data.status === 'tunnel') {
+        return {
+          url: response.data.url,
+          thumbnail: response.data.thumb || null,
+          title: response.data.filename || 'media',
+          duration: null,
+          source: 'cobalt'
+        };
+      }
+
+      // Handle picker response (multiple quality options)
+      if (response.data.status === 'picker' && response.data.picker?.length > 0) {
+        const bestQuality = response.data.picker[0];
+        return {
+          url: bestQuality.url,
+          thumbnail: response.data.thumb || null,
+          title: response.data.filename || 'media',
+          duration: null,
+          source: 'cobalt'
+        };
       }
 
       return {
@@ -287,6 +313,52 @@ class SocialMediaDownloader {
       };
     } catch (error) {
       console.error(chalk.red('Cobalt API error:'), error.message);
+      
+      // Log more details for debugging
+      if (error.response) {
+        console.error(chalk.red('Response status:'), error.response.status);
+        console.error(chalk.red('Response data:'), JSON.stringify(error.response.data, null, 2));
+      }
+      
+      throw error;
+    }
+  }
+
+  // Alternative download method using a different API
+  async downloadWithAlternative(url, platform) {
+    try {
+      console.log(chalk.cyan(`🔄 Attempting alternative download for: ${url}`));
+      
+      // Try a simpler approach - just return the video URL for direct platforms
+      // This is a fallback that works for some platforms
+      
+      // For Twitter/X, try using a different service
+      if (platform === 'TWITTER') {
+        try {
+          const response = await axios.get(`https://twitsave.com/info?url=${encodeURIComponent(url)}`, {
+            timeout: 15000
+          });
+          
+          // Parse the response to extract video URL
+          // This is a simplified version - you might need to adjust based on actual response
+          const videoMatch = response.data.match(/https?:\/\/[^\s<>"]+\.mp4/);
+          if (videoMatch) {
+            return {
+              url: videoMatch[0],
+              thumbnail: null,
+              title: 'Twitter Video',
+              duration: null,
+              source: 'alternative'
+            };
+          }
+        } catch (err) {
+          console.error(chalk.yellow('Alternative method 1 failed:', err.message));
+        }
+      }
+      
+      throw new Error('No alternative method available');
+    } catch (error) {
+      console.error(chalk.red('Alternative download error:'), error.message);
       throw error;
     }
   }
@@ -351,16 +423,33 @@ class SocialMediaDownloader {
         }
       }
 
-      // Attempt download
+      // Attempt download with fallback
       let result;
+      let lastError;
+      
       try {
         result = await this.downloadWithCobalt(url, platform);
       } catch (primaryError) {
-        return { 
-          error: `❌ *Download Failed*\n\n` +
-                 `The link might be invalid or content unavailable.\n\n` +
-                 `Error: ${primaryError.message}` 
-        };
+        console.error(chalk.yellow('⚠️ Cobalt failed, trying alternative...'));
+        lastError = primaryError;
+        
+        // Try alternative method
+        try {
+          result = await this.downloadWithAlternative(url, platform);
+        } catch (alternativeError) {
+          console.error(chalk.red('❌ All download methods failed'));
+          
+          return { 
+            error: `❌ *Download Failed*\n\n` +
+                   `The video couldn't be downloaded. Possible reasons:\n` +
+                   `• The link is invalid or expired\n` +
+                   `• The content is private/protected\n` +
+                   `• The platform is temporarily unavailable\n\n` +
+                   `*Primary Error:* ${primaryError.message}\n` +
+                   `*Alternative Error:* ${alternativeError.message}\n\n` +
+                   `_Try a different link or contact admin_`
+          };
+        }
       }
 
       // Charge user if premium mode
