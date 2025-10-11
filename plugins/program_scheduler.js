@@ -879,7 +879,7 @@ function formatProgramReport(program) {
 }
 
 // Main command handler
-export default async function groupSchedulerHandler(m, sock, config) {
+export async function groupSchedulerHandler(m, sock, config) {
   try {
     if (!m?.body || typeof m.body !== 'string') return;
     if (!m.body.startsWith(config.PREFIX)) return;
