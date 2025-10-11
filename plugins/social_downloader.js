@@ -511,7 +511,8 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
     if (!m.body || !m.body.startsWith(config.PREFIX)) return;
 
     // Extract message details matching your bot's structure
-    const args = m.body.slice(config.PREFIX.length).trim().split(' ');
+    const messageBody = m.body.slice(config.PREFIX.length).trim();
+    const args = messageBody.split(' ');
     const command = args[0].toLowerCase();
     const sender = m.key.participant || m.key.remoteJid;
     const from = m.key.remoteJid;
@@ -538,7 +539,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         const settings = downloader.getSettings();
         const adminNum = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not Set';
         
-        await sock.sendMessage(m.chat, {
+        await sock.sendMessage(from, {
           text: `*⚙️ Downloader Settings*\n\n` +
                 `*Admin Number:* ${adminNum}\n\n` +
                 `*Premium Mode:* ${settings.premiumEnabled ? '✅ Enabled' : '❌ Disabled'}\n` +
@@ -551,18 +552,18 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
                 `*Last Updated:* ${new Date(settings.updatedAt).toLocaleString()}\n` +
                 `*Updated By:* ${settings.updatedBy}\n\n` +
                 `*Commands:*\n` +
-                `.dlsettings premium on/off\n` +
-                `.dlsettings cost <amount>\n` +
-                `.dlsettings limit <number>\n` +
-                `.dlsettings platform <name> on/off\n` +
-                `.dlsettings groups on/off\n` +
-                `.dlsettings private on/off`
+                `${config.PREFIX}dlsettings premium on/off\n` +
+                `${config.PREFIX}dlsettings cost <amount>\n` +
+                `${config.PREFIX}dlsettings limit <number>\n` +
+                `${config.PREFIX}dlsettings platform <name> on/off\n` +
+                `${config.PREFIX}dlsettings groups on/off\n` +
+                `${config.PREFIX}dlsettings private on/off`
         }, { quoted: m });
         return;
       }
 
-      const action = args[0];
-      const value = args[1];
+      const action = settingArgs[0];
+      const value = settingArgs[1];
       const updates = {};
 
       switch (action) {
@@ -570,7 +571,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
           if (value === 'on' || value === 'off') {
             updates.premiumEnabled = value === 'on';
             await downloader.saveSettings(updates, sender);
-            await sock.sendMessage(m.chat, {
+            await sock.sendMessage(from, {
               text: `✅ Premium mode ${value === 'on' ? 'enabled' : 'disabled'}`
             }, { quoted: m });
           }
@@ -581,7 +582,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
           if (!isNaN(cost) && cost >= 0) {
             updates.downloadCost = cost;
             await downloader.saveSettings(updates, sender);
-            await sock.sendMessage(m.chat, {
+            await sock.sendMessage(from, {
               text: `✅ Download cost set to ₦${cost}`
             }, { quoted: m });
           }
@@ -592,7 +593,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
           if (!isNaN(limit) && limit > 0) {
             updates.rateLimitFree = limit;
             await downloader.saveSettings(updates, sender);
-            await sock.sendMessage(m.chat, {
+            await sock.sendMessage(from, {
               text: `✅ Free download limit set to ${limit} per day`
             }, { quoted: m });
           }
@@ -600,7 +601,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
 
         case 'platform':
           const platform = value?.toLowerCase();
-          const state = args[2];
+          const state = settingArgs[2];
           if (platform && (state === 'on' || state === 'off')) {
             const settings = downloader.getSettings();
             const platforms = settings.enabledPlatforms || [];
@@ -614,7 +615,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
             
             updates.enabledPlatforms = platforms;
             await downloader.saveSettings(updates, sender);
-            await sock.sendMessage(m.chat, {
+            await sock.sendMessage(from, {
               text: `✅ ${platform} ${state === 'on' ? 'enabled' : 'disabled'}`
             }, { quoted: m });
           }
@@ -624,7 +625,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
           if (value === 'on' || value === 'off') {
             updates.allowGroups = value === 'on';
             await downloader.saveSettings(updates, sender);
-            await sock.sendMessage(m.chat, {
+            await sock.sendMessage(from, {
               text: `✅ Group downloads ${value === 'on' ? 'enabled' : 'disabled'}`
             }, { quoted: m });
           }
@@ -634,23 +635,24 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
           if (value === 'on' || value === 'off') {
             updates.allowPrivate = value === 'on';
             await downloader.saveSettings(updates, sender);
-            await sock.sendMessage(m.chat, {
+            await sock.sendMessage(from, {
               text: `✅ Private downloads ${value === 'on' ? 'enabled' : 'disabled'}`
             }, { quoted: m });
           }
           break;
 
         default:
-          await sock.sendMessage(m.chat, {
-            text: `❌ Unknown setting: ${action}\n\nUse .dlsettings to see available commands`
+          await sock.sendMessage(from, {
+            text: `❌ Unknown setting: ${action}\n\nUse ${config.PREFIX}dlsettings to see available commands`
           }, { quoted: m });
       }
       return;
     }
 
-    // Download Command: .dl <url>
-    if (text.startsWith('.dl ') || text.startsWith('.download ')) {
-      const url = text.replace(/^\.(dl|download)\s+/i, '').trim();
+    // Download Command: .dl <url> or .download <url>
+    if (command === 'dl' || command === 'download') {
+      // Get URL from remaining args
+      const url = args.slice(1).join(' ').trim();
 
       if (!url) {
         const remaining = await downloader.getRemainingDownloads(sender);
@@ -698,7 +700,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
                        `${settings.premiumEnabled ? 
                          `💳 Charged: ₦${settings.downloadCost}\n` : 
                          `🆓 Remaining: ${remaining}/${settings.rateLimitFree}\n`}\n` +
-                       `⚡ Downloaded via ${bot.name || 'Bot'}`;
+                       `⚡ Downloaded via ${bot?.name || 'Bot'}`;
 
         // Send video
         await sock.sendMessage(from, {
@@ -765,7 +767,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
 // Plugin info
 export const info = {
   name: 'Social Media Downloader',
-  version: '2.0.0',
+  version: '2.0.1',
   author: 'Bot Developer',
   description: 'Download videos from social media with admin settings and MongoDB persistence',
   category: 'media',
@@ -812,11 +814,4 @@ export async function initialize(config) {
   const settings = downloader.getSettings();
   console.log(chalk.green('✅ Social Media Downloader plugin initialized'));
   console.log(chalk.cyan(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`));
-  console.log(chalk.cyan(`Admin: ${process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not configured'}`));
-  
-  if (settings.premiumEnabled) {
-    console.log(chalk.cyan(`Cost: ₦${settings.downloadCost} per download`));
-  } else {
-    console.log(chalk.cyan(`Free limit: ${settings.rateLimitFree} downloads per day`));
-  }
-}
+  console.log(chalk.cyan(`Admin: ${process.env.OWNER_
