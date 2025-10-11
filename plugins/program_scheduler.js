@@ -9,7 +9,7 @@ import chalk from 'chalk';
 export const info = {
   name: 'Group Activity Scheduler',
   version: '2.0.0',
-  author: 'Your Bot Team',
+  author: 'Alex macksyn',
   description: 'Enhanced schedule manager with RSVP, analytics, and live notifications',
   category: 'group',
   commands: [
@@ -77,6 +77,17 @@ const PROGRAM_EMOJIS = {
   'gaming': '🎮',
   'movie': '🎬',
   'music': '🎵',
+  'owambe': '👗',
+  'calls': '📞',
+  'biz': '💼',
+  'mcm': '💘',
+  'wcw': '💘',
+  'market': '🛒',
+  'health': '🏥',
+  'throwback': '📸',
+  'bible': '📖',
+  'worship': '🙏',
+  'freaky': '🔞',
   'default': '📅'
 };
 
@@ -512,7 +523,7 @@ async function sendDailyReminders() {
       if (todaysPrograms.length === 0) continue;
       
       let message = `🌅 *Good Morning!*\n\n`;
-      message += `📅 *Today's Schedule (${today.format('dddd, MMM Do')})*\n\n`;
+      message += `📅 *Today's Programs (${today.format('dddd, MMM Do')})*\n\n`;
       
       todaysPrograms.forEach((program, index) => {
         const emoji = getProgramEmoji(program.name);
@@ -733,7 +744,7 @@ async function checkLivePrograms() {
             const attendeeCount = program.rsvps.attending.length;
             
             let message = `🟢 *PROGRAM ENDED* 🟢\n\n`;
-            message += `${emoji} *${program.name}* has concluded!\n\n`;
+            message += `That will be all for today's ${emoji} *${program.name}*!\n\n`;
             
             if (attendeeCount > 0) {
               message += `👏 Thanks to our ${attendeeCount} participant${attendeeCount > 1 ? 's' : ''}!\n`;
