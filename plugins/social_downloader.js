@@ -759,7 +759,6 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
   } catch (error) {
     console.error(chalk.red('Social media downloader plugin error:'), error.message);
     console.error(chalk.red('Stack:'), error.stack);
-    console.error(chalk.yellow('Message object:'), JSON.stringify(m, null, 2));
   }
 }
 
