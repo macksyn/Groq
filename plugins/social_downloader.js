@@ -30,7 +30,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|m\.|web\.|mbasic\.)?facebook\.com\/(?:watch\/?\?v=|[\w-]+\/videos?\/|reel\/|share\/r\/|groups\/[\w-]+\/permalink\/|[\w-]+\/posts\/|story\.php\?story_fbid=|permalink\.php\?story_fbid=)[\w\d-]+/gi,
       /(?:https?:\/\/)?fb\.watch\/[\w-]+/gi
     ],
-    icon: '𝐟'
+    icon: '📘'
   },
   TIKTOK: {
     name: 'TikTok',
@@ -39,7 +39,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|vm\.|vt\.)?tiktok\.com\/(?:@[\w.-]+\/video\/|v\/|t\/)?\w+/gi,
       /(?:https?:\/\/)?(?:www\.)?tiktok\.com\/@[\w.-]+\/video\/\d+/gi
     ],
-    icon: '𝗧𝗶𝗸 𝗧𝗼𝗸'
+    icon: '🎵'
   },
   TWITTER: {
     name: 'Twitter/X',
@@ -48,7 +48,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|mobile\.)?(?:twitter|x)\.com\/[\w]+\/status\/\d+/gi,
       /(?:https?:\/\/)?t\.co\/[\w]+/gi
     ],
-    icon: '𝕏'
+    icon: '🐦'
   },
   INSTAGRAM: {
     name: 'Instagram',
@@ -57,7 +57,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/[\w-]+/gi,
       /(?:https?:\/\/)?(?:www\.)?instagram\.com\/stories\/[\w.-]+\/\d+/gi
     ],
-    icon: '🅾'
+    icon: '📷'
   }
 };
 
@@ -507,16 +507,33 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
       await downloader.initialize();
     }
 
-    const text = m.body?.toLowerCase().trim() || '';
-    const sender = m.sender;
-    const isGroup = m.isGroup;
+    // Skip if no body or doesn't start with prefix
+    if (!m.body || !m.body.startsWith(config.PREFIX)) return;
+
+    // Extract message details matching your bot's structure
+    const args = m.body.slice(config.PREFIX.length).trim().split(' ');
+    const command = args[0].toLowerCase();
+    const sender = m.key.participant || m.key.remoteJid;
+    const from = m.key.remoteJid;
+    const isGroup = from.endsWith('@g.us');
+    
+    if (!sender) {
+      console.log(chalk.yellow('⚠️ No sender found in message'));
+      return;
+    }
+    
     const isAdmin = downloader.isAdmin(sender);
+    
+    // Reply helper
+    const reply = async (text) => {
+      await sock.sendMessage(from, { text }, { quoted: m });
+    };
 
     // Admin Settings Command: .dlsettings
-    if (text.startsWith('.dlsettings') && isAdmin) {
-      const args = text.split(' ').slice(1);
+    if (command === 'dlsettings' && isAdmin) {
+      const settingArgs = args.slice(1);
       
-      if (args.length === 0) {
+      if (settingArgs.length === 0) {
         // Show current settings
         const settings = downloader.getSettings();
         const adminNum = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not Set';
@@ -639,25 +656,25 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         const remaining = await downloader.getRemainingDownloads(sender);
         const settings = downloader.getSettings();
         
-        await sock.sendMessage(m.chat, {
-          text: `*📥 Social Media Downloader*\n\n` +
-                `*Supported Platforms:*\n` +
-                `${settings.enabledPlatforms.map(p => {
-                  const plat = Object.values(PLATFORMS).find(pl => pl.key === p);
-                  return plat ? `${plat.icon} ${plat.name}` : '';
-                }).filter(Boolean).join('\n')}\n\n` +
-                `*Your Status:*\n` +
-                `${settings.premiumEnabled ? 
-                  `💎 Premium: ₦${settings.downloadCost} per download` : 
-                  `🆓 Free: ${remaining}/${settings.rateLimitFree} remaining today`}\n\n` +
-                `*Usage:* .dl <url>\n` +
-                `*Example:* .dl https://tiktok.com/@user/video/123`
-        }, { quoted: m });
+        await reply(
+          `*📥 Social Media Downloader*\n\n` +
+          `*Supported Platforms:*\n` +
+          `${settings.enabledPlatforms.map(p => {
+            const plat = Object.values(PLATFORMS).find(pl => pl.key === p);
+            return plat ? `${plat.icon} ${plat.name}` : '';
+          }).filter(Boolean).join('\n')}\n\n` +
+          `*Your Status:*\n` +
+          `${settings.premiumEnabled ? 
+            `💎 Premium: ₦${settings.downloadCost} per download` : 
+            `🆓 Free: ${remaining}/${settings.rateLimitFree} remaining today`}\n\n` +
+          `*Usage:* ${config.PREFIX}dl <url>\n` +
+          `*Example:* ${config.PREFIX}dl https://tiktok.com/@user/video/123`
+        );
         return;
       }
 
       // Send processing message
-      const processingMsg = await sock.sendMessage(m.chat, {
+      const processingMsg = await sock.sendMessage(from, {
         text: `⏳ *Processing Download...*\n\nThis may take a few seconds.`
       }, { quoted: m });
 
@@ -665,7 +682,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
       const result = await downloader.download(url, sender, isGroup);
 
       if (result.error) {
-        await sock.sendMessage(m.chat, {
+        await sock.sendMessage(from, {
           text: result.error,
           edit: processingMsg.key
         });
@@ -681,53 +698,53 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
                        `${settings.premiumEnabled ? 
                          `💳 Charged: ₦${settings.downloadCost}\n` : 
                          `🆓 Remaining: ${remaining}/${settings.rateLimitFree}\n`}\n` +
-                       `⚡ Downloaded via ${bot.name}`;
+                       `⚡ Downloaded via ${bot.name || 'Bot'}`;
 
         // Send video
-        await sock.sendMessage(m.chat, {
+        await sock.sendMessage(from, {
           video: { url: result.url },
           caption: caption,
           mimetype: 'video/mp4'
         }, { quoted: m });
 
         // Delete processing message
-        await sock.sendMessage(m.chat, {
+        await sock.sendMessage(from, {
           delete: processingMsg.key
         });
       }
+      return;
     }
 
-    // Statistics Command: .dlstats
-    if (text === '.dlstats' && isAdmin) {
+    // Statistics Command
+    if (command === 'dlstats' && isAdmin) {
       const stats = await downloader.getStats();
       
-      await sock.sendMessage(m.chat, {
-        text: `*📊 Downloader Statistics*\n\n` +
-              `*Total Downloads:* ${stats.totalDownloads || 0}\n` +
-              `*Free Downloads:* ${stats.freeDownloads || 0}\n` +
-              `*Premium Downloads:* ${stats.premiumDownloads || 0}\n` +
-              `*Active Downloads:* ${stats.activeDownloads}\n\n` +
-              `*Users:*\n` +
-              `• Total: ${stats.totalUsers || 0}\n` +
-              `• Active (7d): ${stats.activeUsers || 0}\n\n` +
-              `*Platforms:*\n` +
-              `${Object.entries(stats.platforms || {}).map(([p, count]) => `• ${p}: ${count}`).join('\n') || 'No data'}\n\n` +
-              `*Settings:*\n` +
-              `• Mode: ${stats.settings?.premiumEnabled ? '💎 Premium' : '🆓 Free'}\n` +
-              `• Cost: ₦${stats.settings?.downloadCost || 0}\n` +
-              `• Daily Limit: ${stats.settings?.rateLimitFree || 0}\n\n` +
-              `*Last Updated:* ${new Date(stats.lastUpdated).toLocaleString()}`
-      }, { quoted: m });
+      await reply(
+        `*📊 Downloader Statistics*\n\n` +
+        `*Total Downloads:* ${stats.totalDownloads || 0}\n` +
+        `*Free Downloads:* ${stats.freeDownloads || 0}\n` +
+        `*Premium Downloads:* ${stats.premiumDownloads || 0}\n` +
+        `*Active Downloads:* ${stats.activeDownloads}\n\n` +
+        `*Users:*\n` +
+        `• Total: ${stats.totalUsers || 0}\n` +
+        `• Active (7d): ${stats.activeUsers || 0}\n\n` +
+        `*Platforms:*\n` +
+        `${Object.entries(stats.platforms || {}).map(([p, count]) => `• ${p}: ${count}`).join('\n') || 'No data'}\n\n` +
+        `*Settings:*\n` +
+        `• Mode: ${stats.settings?.premiumEnabled ? '💎 Premium' : '🆓 Free'}\n` +
+        `• Cost: ₦${stats.settings?.downloadCost || 0}\n` +
+        `• Daily Limit: ${stats.settings?.rateLimitFree || 0}\n\n` +
+        `*Last Updated:* ${new Date(stats.lastUpdated).toLocaleString()}`
+      );
+      return;
     }
 
-    // User History Command: .dlhistory
-    if (text === '.dlhistory') {
+    // User History Command
+    if (command === 'dlhistory') {
       const history = await downloader.getUserHistory(sender, 10);
       
       if (history.length === 0) {
-        await sock.sendMessage(m.chat, {
-          text: `📜 *Your Download History*\n\nNo downloads yet!`
-        }, { quoted: m });
+        await reply(`📜 *Your Download History*\n\nNo downloads yet!`);
         return;
       }
 
@@ -735,13 +752,14 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         `${i + 1}. ${item.platform}\n   ${new Date(item.timestamp).toLocaleString()}`
       ).join('\n\n');
 
-      await sock.sendMessage(m.chat, {
-        text: `📜 *Your Download History*\n\n${historyText}\n\n_Showing last ${history.length} downloads_`
-      }, { quoted: m });
+      await reply(`📜 *Your Download History*\n\n${historyText}\n\n_Showing last ${history.length} downloads_`);
+      return;
     }
 
   } catch (error) {
     console.error(chalk.red('Social media downloader plugin error:'), error.message);
+    console.error(chalk.red('Stack:'), error.stack);
+    console.error(chalk.yellow('Message object:'), JSON.stringify(m, null, 2));
   }
 }
 
