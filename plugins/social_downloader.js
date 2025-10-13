@@ -20,64 +20,6 @@ const DEFAULT_SETTINGS = {
   updatedAt: new Date(),
   updatedBy: 'system'
 };
-// Plugin info
-export const info = {
-  name: 'Social Media Downloader',
-  version: '2.0.1',
-  author: 'Alex Macksyn',
-  description: 'Download videos from social media with admin settings and MongoDB persistence',
-  category: 'media',
-  commands: [
-    {
-      command: '.dl <url>',
-      alias: ['.download'],
-      description: 'Download video from supported platforms',
-      usage: '.dl https://tiktok.com/@user/video/123'
-    },
-    {
-      command: '.dlsettings',
-      description: 'Manage downloader settings (admin only)',
-      usage: '.dlsettings [option] [value]'
-    },
-    {
-      command: '.dlstats',
-      description: 'View statistics (admin only)',
-      usage: '.dlstats'
-    },
-    {
-      command: '.dlhistory',
-      description: 'View your download history',
-      usage: '.dlhistory'
-    }
-  ],
-  features: [
-    'Multi-platform support (Facebook, TikTok, Twitter, Instagram)',
-    'Admin settings via commands (no code editing required)',
-    'MongoDB persistence for settings and usage tracking',
-    'Premium mode with economy wallet integration',
-    'Rate limiting with daily reset',
-    'Download history tracking',
-    'Comprehensive statistics',
-    'Group/private chat controls',
-    'Platform enable/disable controls'
-  ]
-};
-
-// Initialize function
-export async function initialize(config) {
-  await downloader.initialize();
-  
-  const settings = downloader.getSettings();
-  console.log(chalk.green('✅ Social Media Downloader plugin initialized'));
-  console.log(chalk.cyan(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`));
-  console.log(chalk.cyan(`Admin: ${process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not configured'}`));
-  
-  if (settings.premiumEnabled) {
-    console.log(chalk.cyan(`Cost: ₦${settings.downloadCost} per download`));
-  } else {
-    console.log(chalk.cyan(`Free limit: ${settings.rateLimitFree} downloads per day`));
-  }
-}
 
 // Supported platforms with regex patterns
 const PLATFORMS = {
@@ -916,3 +858,63 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
     console.error(chalk.red('Stack:'), error.stack);
   }
 }
+
+// Plugin info
+export const info = {
+  name: 'Social Media Downloader',
+  version: '2.0.1',
+  author: 'Alex Macksyn',
+  description: 'Download videos from social media with admin settings and MongoDB persistence',
+  category: 'media',
+  commands: [
+    {
+      command: '.dl <url>',
+      alias: ['.download'],
+      description: 'Download video from supported platforms',
+      usage: '.dl https://tiktok.com/@user/video/123'
+    },
+    {
+      command: '.dlsettings',
+      description: 'Manage downloader settings (admin only)',
+      usage: '.dlsettings [option] [value]'
+    },
+    {
+      command: '.dlstats',
+      description: 'View statistics (admin only)',
+      usage: '.dlstats'
+    },
+    {
+      command: '.dlhistory',
+      description: 'View your download history',
+      usage: '.dlhistory'
+    }
+  ],
+  features: [
+    'Multi-platform support (Facebook, TikTok, Twitter, Instagram)',
+    'Admin settings via commands (no code editing required)',
+    'MongoDB persistence for settings and usage tracking',
+    'Premium mode with economy wallet integration',
+    'Rate limiting with daily reset',
+    'Download history tracking',
+    'Comprehensive statistics',
+    'Group/private chat controls',
+    'Platform enable/disable controls'
+  ]
+};
+
+// Initialize function
+export async function initialize(config) {
+  await downloader.initialize();
+  
+  const settings = downloader.getSettings();
+  console.log(chalk.green('✅ Social Media Downloader plugin initialized'));
+  console.log(chalk.cyan(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`));
+  console.log(chalk.cyan(`Admin: ${process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not configured'}`));
+  
+  if (settings.premiumEnabled) {
+    console.log(chalk.cyan(`Cost: ₦${settings.downloadCost} per download`));
+  } else {
+    console.log(chalk.cyan(`Free limit: ${settings.rateLimitFree} downloads per day`));
+  }
+}
+
