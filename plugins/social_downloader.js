@@ -30,7 +30,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|m\.|web\.|mbasic\.)?facebook\.com\/(?:watch\/?\?v=|[\w-]+\/videos?\/|reel\/|share\/r\/|groups\/[\w-]+\/permalink\/|[\w-]+\/posts\/|story\.php\?story_fbid=|permalink\.php\?story_fbid=)[\w\d-]+/gi,
       /(?:https?:\/\/)?fb\.watch\/[\w-]+/gi
     ],
-    icon: '📘'
+    icon: '𝐟'
   },
   TIKTOK: {
     name: 'TikTok',
@@ -48,7 +48,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|mobile\.)?(?:twitter|x)\.com\/[\w]+\/status\/\d+/gi,
       /(?:https?:\/\/)?t\.co\/[\w]+/gi
     ],
-    icon: '🐦'
+    icon: '𝕏'
   },
   INSTAGRAM: {
     name: 'Instagram',
@@ -57,7 +57,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/[\w-]+/gi,
       /(?:https?:\/\/)?(?:www\.)?instagram\.com\/stories\/[\w.-]+\/\d+/gi
     ],
-    icon: '📷'
+    icon: '🅾'
   },
   SPOTIFY: {
     name: 'Spotify',
@@ -1021,7 +1021,7 @@ export async function initialize(config) {
   const settings = downloader.getSettings();
   console.log(chalk.green('✅ Social Media Downloader v3.0 initialized'));
   console.log(chalk.cyan(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`));
-  console.log(chalk.cyan(`Admin: ${process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not configured'}`));
+  console.log(chalk.cyan(`Admin: ${process.env.OWNER_NUMBER || process.env.ADMIN_NUMBERS || '12026411790542'}`));
   console.log(chalk.cyan(`Supported: TikTok, Instagram, Facebook, Twitter, Spotify`));
   
   if (settings.premiumEnabled) {
