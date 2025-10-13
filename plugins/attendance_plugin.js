@@ -8,7 +8,7 @@ export const info = {
   author: 'Alex Macksyn',
   description: 'Advanced attendance system with form validation, streaks, and MongoDB persistence',
   commands: [
-    { name: 'attendance', aliases: ['attend', 'att'], description: 'Access the attendance system' },
+    { name: 'attendance', aliases: ['att'], description: 'Access the attendance system' },
     { name: 'attendstats', aliases: ['mystats'], description: 'View your attendance statistics' },
     { name: 'testattendance', aliases: ['testatt'], description: 'Test attendance form validation' }
   ]
@@ -431,7 +431,7 @@ async function handleAutoAttendance(m, sock, config) {
     const validation = validateAttendanceForm(messageText, messageHasImage);
 
     if (!validation.isValidForm) {
-      let errorMessage = `📋 *INCOMPLETE ATTENDANCE FORM* 📋\n\n❌ Please complete the following fields:\n\n${validation.missingFields.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n\n💡 *Please fill out all required fields and try again.*`;
+      let errorMessage = `❌ *INCOMPLETE ATTENDANCE FORM* \n\n📄 Please complete the following fields:\n\n${validation.missingFields.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n\n💡 *Please fill out all required fields and try again.*`;
       await sock.sendMessage(from, { text: errorMessage }, { quoted: m });
       return true;
     }
@@ -498,7 +498,6 @@ export default async function attendanceHandler(m, sock, config) {
 
     switch (command) {
       case 'attendance':
-      case 'attend':
       case 'att':
         if (args.length === 1) {
           await showAttendanceMenu(reply, config.PREFIX);
