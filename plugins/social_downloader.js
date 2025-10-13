@@ -13,7 +13,7 @@ const DEFAULT_SETTINGS = {
   downloadCost: 50,
   rateLimitFree: 10,
   rateLimitCooldown: 24 * 60 * 60 * 1000, // 24 hours
-  enabledPlatforms: ['facebook', 'tiktok', 'twitter', 'instagram'],
+  enabledPlatforms: ['facebook', 'tiktok', 'twitter', 'instagram', 'spotify'],
   maxFileSize: 100, // MB
   allowGroups: true,
   allowPrivate: true,
@@ -58,16 +58,120 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.)?instagram\.com\/stories\/[\w.-]+\/\d+/gi
     ],
     icon: '📷'
+  },
+  SPOTIFY: {
+    name: 'Spotify',
+    key: 'spotify',
+    patterns: [
+      /(?:https?:\/\/)?open\.spotify\.com\/track\/[\w]+/gi,
+      /(?:https?:\/\/)?open\.spotify\.com\/album\/[\w]+/gi
+    ],
+    icon: '🎵'
   }
 };
 
-// API endpoints
-const API_SERVICES = {
-  primary: 'https://api.cobalt.tools/api/json',
-  fallback: [
-    'https://api.downloadgram.org/media',
-    'https://api.tikmate.app/api/download'
-  ]
+// Platform-specific API configurations
+const PLATFORM_APIS = {
+  tiktok: {
+    endpoint: 'https://delirius-apiofc.vercel.app/download/tiktok',
+    buildUrl: (url) => `https://delirius-apiofc.vercel.app/download/tiktok?url=${encodeURIComponent(url)}`,
+    extractData: (response) => {
+      const data = response.data?.data;
+      if (!data || !data.meta?.media?.[0]) {
+        throw new Error('Invalid TikTok response format');
+      }
+      
+      const media = data.meta.media[0];
+      return {
+        url: media.hd || media.org || media.wm,
+        thumbnail: null,
+        title: data.title || 'TikTok Video',
+        duration: data.duration || null,
+        author: data.author?.nickname || data.author?.username || 'Unknown'
+      };
+    }
+  },
+  instagram: {
+    endpoint: 'https://delirius-apiofc.vercel.app/download/instagram',
+    buildUrl: (url) => `https://delirius-apiofc.vercel.app/download/instagram?url=${encodeURIComponent(url)}`,
+    extractData: (response) => {
+      const data = response.data?.data;
+      if (!data || !Array.isArray(data) || data.length === 0) {
+        throw new Error('Invalid Instagram response format');
+      }
+      
+      // Get first media item (could be image or video)
+      const media = data[0];
+      return {
+        url: media.url,
+        thumbnail: null,
+        title: 'Instagram Media',
+        duration: null,
+        type: media.type || 'image'
+      };
+    }
+  },
+  facebook: {
+    endpoint: 'https://delirius-apiofc.vercel.app/download/facebook',
+    buildUrl: (url) => `https://delirius-apiofc.vercel.app/download/facebook?url=${encodeURIComponent(url)}`,
+    extractData: (response) => {
+      const data = response.data;
+      if (!data || !data.urls || data.urls.length === 0) {
+        throw new Error('Invalid Facebook response format');
+      }
+      
+      // Prefer HD quality
+      const videoUrl = data.urls[0].hd || data.urls[1]?.sd;
+      if (!videoUrl) {
+        throw new Error('No video URL found in Facebook response');
+      }
+      
+      return {
+        url: videoUrl,
+        thumbnail: null,
+        title: data.title || 'Facebook Video',
+        duration: null,
+        isHd: data.isHdAvailable || false
+      };
+    }
+  },
+  spotify: {
+    endpoint: 'https://delirius-apiofc.vercel.app/download/spotifydlv2',
+    buildUrl: (url) => `https://delirius-apiofc.vercel.app/download/spotifydlv2?url=${encodeURIComponent(url)}`,
+    extractData: (response) => {
+      const data = response.data?.data;
+      if (!data || !data.url) {
+        throw new Error('Invalid Spotify response format');
+      }
+      
+      return {
+        url: data.url,
+        thumbnail: data.image || null,
+        title: data.title || 'Spotify Track',
+        duration: data.duration || null,
+        artist: data.artist || 'Unknown Artist',
+        album: data.album || null
+      };
+    }
+  },
+  twitter: {
+    // Fallback Twitter API (using existing method)
+    buildUrl: (url) => `https://twitsave.com/info?url=${encodeURIComponent(url)}`,
+    extractData: (response) => {
+      // Parse HTML response to extract video URL
+      const videoMatch = response.data.match(/https?:\/\/[^\s<>"]+\.mp4/);
+      if (!videoMatch) {
+        throw new Error('No video URL found in Twitter response');
+      }
+      
+      return {
+        url: videoMatch[0],
+        thumbnail: null,
+        title: 'Twitter Video',
+        duration: null
+      };
+    }
+  }
 };
 
 class SocialMediaDownloader {
@@ -256,63 +360,42 @@ class SocialMediaDownloader {
     }
   }
 
-  // Download with Cobalt API
-  async downloadWithCobalt(url, platform) {
+  // Download with platform-specific API
+  async downloadWithPlatformAPI(url, platformKey) {
     try {
-      console.log(chalk.cyan(`🔄 Attempting Cobalt download for: ${url}`));
+      const apiConfig = PLATFORM_APIS[platformKey];
+      if (!apiConfig) {
+        throw new Error(`No API configuration found for platform: ${platformKey}`);
+      }
+
+      console.log(chalk.cyan(`🔄 Downloading from ${platformKey} API: ${url}`));
       
-      const response = await axios.post(API_SERVICES.primary, {
-        url: url,
-        vCodec: 'h264',
-        vQuality: '720',
-        aFormat: 'mp3',
-        filenamePattern: 'basic',
-        isAudioOnly: false
-      }, {
+      const apiUrl = apiConfig.buildUrl(url);
+      console.log(chalk.cyan(`API URL: ${apiUrl}`));
+      
+      const response = await axios.get(apiUrl, {
+        timeout: 30000,
         headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json'
-        },
-        timeout: 30000
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
       });
 
-      console.log(chalk.green(`✅ Cobalt response status: ${response.data.status}`));
+      console.log(chalk.green(`✅ ${platformKey} API response received`));
 
-      if (response.data.status === 'error' || response.data.status === 'rate-limit') {
-        throw new Error(response.data.text || 'Download failed');
+      // Check if API returned error
+      if (response.data.status === false) {
+        throw new Error(response.data.message || 'API returned error status');
       }
 
-      if (response.data.status === 'redirect' || response.data.status === 'tunnel') {
-        return {
-          url: response.data.url,
-          thumbnail: response.data.thumb || null,
-          title: response.data.filename || 'media',
-          duration: null,
-          source: 'cobalt'
-        };
-      }
-
-      // Handle picker response (multiple quality options)
-      if (response.data.status === 'picker' && response.data.picker?.length > 0) {
-        const bestQuality = response.data.picker[0];
-        return {
-          url: bestQuality.url,
-          thumbnail: response.data.thumb || null,
-          title: response.data.filename || 'media',
-          duration: null,
-          source: 'cobalt'
-        };
-      }
-
+      // Extract data using platform-specific extractor
+      const extractedData = apiConfig.extractData(response);
+      
       return {
-        url: response.data.url,
-        thumbnail: response.data.thumb || null,
-        title: response.data.filename || 'media',
-        duration: null,
-        source: 'cobalt'
+        ...extractedData,
+        source: platformKey
       };
     } catch (error) {
-      console.error(chalk.red('Cobalt API error:'), error.message);
+      console.error(chalk.red(`${platformKey} API error:`), error.message);
       
       // Log more details for debugging
       if (error.response) {
@@ -320,45 +403,6 @@ class SocialMediaDownloader {
         console.error(chalk.red('Response data:'), JSON.stringify(error.response.data, null, 2));
       }
       
-      throw error;
-    }
-  }
-
-  // Alternative download method using a different API
-  async downloadWithAlternative(url, platform) {
-    try {
-      console.log(chalk.cyan(`🔄 Attempting alternative download for: ${url}`));
-      
-      // Try a simpler approach - just return the video URL for direct platforms
-      // This is a fallback that works for some platforms
-      
-      // For Twitter/X, try using a different service
-      if (platform === 'TWITTER') {
-        try {
-          const response = await axios.get(`https://twitsave.com/info?url=${encodeURIComponent(url)}`, {
-            timeout: 15000
-          });
-          
-          // Parse the response to extract video URL
-          // This is a simplified version - you might need to adjust based on actual response
-          const videoMatch = response.data.match(/https?:\/\/[^\s<>"]+\.mp4/);
-          if (videoMatch) {
-            return {
-              url: videoMatch[0],
-              thumbnail: null,
-              title: 'Twitter Video',
-              duration: null,
-              source: 'alternative'
-            };
-          }
-        } catch (err) {
-          console.error(chalk.yellow('Alternative method 1 failed:', err.message));
-        }
-      }
-      
-      throw new Error('No alternative method available');
-    } catch (error) {
-      console.error(chalk.red('Alternative download error:'), error.message);
       throw error;
     }
   }
@@ -423,33 +467,23 @@ class SocialMediaDownloader {
         }
       }
 
-      // Attempt download with fallback
+      // Attempt download with platform-specific API
       let result;
-      let lastError;
       
       try {
-        result = await this.downloadWithCobalt(url, platform);
-      } catch (primaryError) {
-        console.error(chalk.yellow('⚠️ Cobalt failed, trying alternative...'));
-        lastError = primaryError;
+        result = await this.downloadWithPlatformAPI(url, config.key);
+      } catch (error) {
+        console.error(chalk.red(`❌ ${config.name} download failed`));
         
-        // Try alternative method
-        try {
-          result = await this.downloadWithAlternative(url, platform);
-        } catch (alternativeError) {
-          console.error(chalk.red('❌ All download methods failed'));
-          
-          return { 
-            error: `❌ *Download Failed*\n\n` +
-                   `The video couldn't be downloaded. Possible reasons:\n` +
-                   `• The link is invalid or expired\n` +
-                   `• The content is private/protected\n` +
-                   `• The platform is temporarily unavailable\n\n` +
-                   `*Primary Error:* ${primaryError.message}\n` +
-                   `*Alternative Error:* ${alternativeError.message}\n\n` +
-                   `_Try a different link or contact admin_`
-          };
-        }
+        return { 
+          error: `❌ *Download Failed*\n\n` +
+                 `The ${config.name} content couldn't be downloaded. Possible reasons:\n` +
+                 `• The link is invalid or expired\n` +
+                 `• The content is private/protected\n` +
+                 `• The API is temporarily unavailable\n\n` +
+                 `*Error:* ${error.message}\n\n` +
+                 `_Try a different link or contact admin_`
+        };
       }
 
       // Charge user if premium mode
@@ -631,7 +665,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
       if (settingArgs.length === 0) {
         // Show current settings
         const settings = downloader.getSettings();
-        const adminNum = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || '120363357603419058@g.us,2348089782988@s.whatsapp.net';
+        const adminNum = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not configured';
         
         await reply(
           `*⚙️ Downloader Settings*\n\n` +
@@ -711,7 +745,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
             await downloader.saveSettings(updates, sender);
             await reply(`✅ ${platform} ${state === 'on' ? 'enabled' : 'disabled'}`);
           } else {
-            await reply('❌ Usage: .dlsettings platform <facebook|tiktok|twitter|instagram> on/off');
+            await reply('❌ Usage: .dlsettings platform <facebook|tiktok|twitter|instagram|spotify> on/off');
           }
           break;
 
@@ -769,7 +803,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         return;
       }
 
-      // FIXED: Send processing message and keep the message key
+      // Send processing message
       const processingMsg = await sock.sendMessage(from, {
         text: `⏳ *Processing Download...*\n\nPlease wait while we fetch your media.`
       }, { quoted: m });
@@ -778,7 +812,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
       const result = await downloader.download(url, sender, isGroup);
 
       if (result.error) {
-        // FIXED: Edit the processing message instead of sending new one
+        // Edit the processing message with error
         await sock.sendMessage(from, {
           text: result.error,
           edit: processingMsg.key
@@ -791,9 +825,22 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         const remaining = await downloader.getRemainingDownloads(sender);
         
         let caption = `${result.icon} *${result.platform} Download*\n\n`;
+        
+        // Add title/artist info
+        if (result.artist) {
+          caption += `🎤 ${result.artist}\n`;
+        }
         if (result.title && result.title !== 'media') {
           caption += `📝 ${result.title}\n`;
         }
+        if (result.album) {
+          caption += `💿 ${result.album}\n`;
+        }
+        if (result.author) {
+          caption += `👤 ${result.author}\n`;
+        }
+        
+        // Add cost/remaining info
         if (settings.premiumEnabled) {
           caption += `💳 Charged: ₦${settings.downloadCost}\n`;
         } else {
@@ -802,23 +849,46 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         caption += `\n⚡ Powered by ${bot?.name || 'Groq'}`;
 
         try {
-          // Send video with caption
-          await sock.sendMessage(from, {
-            video: { url: result.url },
-            caption: caption,
-            mimetype: 'video/mp4'
-          }, { quoted: m });
+          // Determine media type based on platform
+          const isAudio = result.platform === 'Spotify';
+          const isImage = result.type === 'image';
+          
+          if (isAudio) {
+            // Send audio for Spotify
+            await sock.sendMessage(from, {
+              audio: { url: result.url },
+              mimetype: 'audio/mpeg',
+              ptt: false,
+              fileName: `${result.title}.mp3`
+            }, { quoted: m });
+            
+            // Send caption separately
+            await sock.sendMessage(from, { text: caption }, { quoted: m });
+          } else if (isImage) {
+            // Send image for Instagram
+            await sock.sendMessage(from, {
+              image: { url: result.url },
+              caption: caption
+            }, { quoted: m });
+          } else {
+            // Send video for other platforms
+            await sock.sendMessage(from, {
+              video: { url: result.url },
+              caption: caption,
+              mimetype: 'video/mp4'
+            }, { quoted: m });
+          }
 
-          // FIXED: Delete processing message after successful send
+          // Delete processing message after successful send
           await sock.sendMessage(from, {
             delete: processingMsg.key
           });
         } catch (sendError) {
-          console.error(chalk.red('Error sending video:'), sendError.message);
+          console.error(chalk.red('Error sending media:'), sendError.message);
           
-          // If sending fails, update the processing message with error
+          // If sending fails, update the processing message with error and direct link
           await sock.sendMessage(from, {
-            text: `❌ *Send Failed*\n\nThe video was downloaded but couldn't be sent. This might be due to:\n• File size too large\n• Network issues\n• WhatsApp restrictions\n\nDirect link: ${result.url}`,
+            text: `❌ *Send Failed*\n\nThe media was downloaded but couldn't be sent. This might be due to:\n• File size too large\n• Network issues\n• WhatsApp restrictions\n\nDirect link: ${result.url}`,
             edit: processingMsg.key
           });
         }
@@ -890,15 +960,15 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
 // Plugin info
 export const info = {
   name: 'Social Media Downloader',
-  version: '2.1.0',
+  version: '3.0.0',
   author: 'Alex Macksyn',
-  description: 'Download videos from social media with admin settings and MongoDB persistence',
+  description: 'Download videos/audio from social media with platform-specific APIs',
   category: 'media',
   commands: [
     {
       command: '.dl <url>',
       alias: ['.download'],
-      description: 'Download video from supported platforms',
+      description: 'Download media from supported platforms',
       usage: '.dl https://tiktok.com/@user/video/123'
     },
     {
@@ -918,27 +988,28 @@ export const info = {
     }
   ],
   features: [
-    'Multi-platform support (Facebook, TikTok, Twitter, Instagram)',
-    'Admin settings via commands (no code editing required)',
-    'MongoDB persistence for settings and usage tracking',
-    'Premium mode with economy wallet integration',
+    'Multi-platform support (Facebook, TikTok, Twitter, Instagram, Spotify)',
+    'Platform-specific API routing',
+    'Admin settings via commands',
+    'MongoDB persistence',
+    'Premium mode with economy integration',
     'Rate limiting with daily reset',
     'Download history tracking',
     'Comprehensive statistics',
-    'Group/private chat controls',
-    'Platform enable/disable controls',
-    'Multiple API fallbacks for reliability',
-    'Improved error handling and user feedback'
+    'Audio support for Spotify',
+    'Image support for Instagram',
+    'Automatic media type detection'
   ],
   changelog: {
-    '2.1.0': [
-      'Fixed admin command authentication',
-      'Improved message editing (no more delete, just edit)',
-      'Added multiple API fallbacks per platform',
-      'Replaced unicode symbols with standard text',
-      'Enhanced error handling and user feedback',
-      'Better admin number checking (supports multiple admins)',
-      'Improved download reliability with platform-specific APIs'
+    '3.0.0': [
+      'Removed Cobalt API completely',
+      'Added platform-specific APIs (TikTok, Instagram, Facebook, Spotify)',
+      'Automatic API routing based on detected platform',
+      'Added Spotify music download support',
+      'Improved media type detection (video/audio/image)',
+      'Enhanced error handling per platform',
+      'Better metadata extraction (artist, album, author)',
+      'Optimized response parsing for each API'
     ]
   }
 };
@@ -948,15 +1019,14 @@ export async function initialize(config) {
   await downloader.initialize();
   
   const settings = downloader.getSettings();
-  console.log(chalk.green('✅ Social Media Downloader plugin initialized'));
+  console.log(chalk.green('✅ Social Media Downloader v3.0 initialized'));
   console.log(chalk.cyan(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`));
   console.log(chalk.cyan(`Admin: ${process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not configured'}`));
+  console.log(chalk.cyan(`Supported: TikTok, Instagram, Facebook, Twitter, Spotify`));
   
   if (settings.premiumEnabled) {
     console.log(chalk.cyan(`Cost: ₦${settings.downloadCost} per download`));
   } else {
     console.log(chalk.cyan(`Free limit: ${settings.rateLimitFree} downloads per day`));
   }
-  
-  console.log(chalk.yellow('⚠️ Note: Some APIs may have rate limits or require keys'));
 }
