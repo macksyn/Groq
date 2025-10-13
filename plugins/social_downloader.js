@@ -30,7 +30,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|m\.|web\.|mbasic\.)?facebook\.com\/(?:watch\/?\?v=|[\w-]+\/videos?\/|reel\/|share\/r\/|groups\/[\w-]+\/permalink\/|[\w-]+\/posts\/|story\.php\?story_fbid=|permalink\.php\?story_fbid=)[\w\d-]+/gi,
       /(?:https?:\/\/)?fb\.watch\/[\w-]+/gi
     ],
-    icon: 'FB'
+    icon: '📘'
   },
   TIKTOK: {
     name: 'TikTok',
@@ -39,7 +39,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|vm\.|vt\.)?tiktok\.com\/(?:@[\w.-]+\/video\/|v\/|t\/)?\w+/gi,
       /(?:https?:\/\/)?(?:www\.)?tiktok\.com\/@[\w.-]+\/video\/\d+/gi
     ],
-    icon: 'TT'
+    icon: '🎵'
   },
   TWITTER: {
     name: 'Twitter/X',
@@ -48,7 +48,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|mobile\.)?(?:twitter|x)\.com\/[\w]+\/status\/\d+/gi,
       /(?:https?:\/\/)?t\.co\/[\w]+/gi
     ],
-    icon: 'X'
+    icon: '🐦'
   },
   INSTAGRAM: {
     name: 'Instagram',
@@ -57,30 +57,16 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/[\w-]+/gi,
       /(?:https?:\/\/)?(?:www\.)?instagram\.com\/stories\/[\w.-]+\/\d+/gi
     ],
-    icon: 'IG'
+    icon: '📷'
   }
 };
 
-// Updated API services with working alternatives
+// API endpoints
 const API_SERVICES = {
-  // Primary APIs by platform
-  tiktok: [
-    'https://api.tiklydown.eu.org/api/download',
+  primary: 'https://api.cobalt.tools/api/json',
+  fallback: [
+    'https://api.downloadgram.org/media',
     'https://api.tikmate.app/api/download'
-  ],
-  twitter: [
-    'https://twitsave.com/api/info',
-    'https://ssstwitter.com/api/info'
-  ],
-  instagram: [
-    'https://api.downloadgram.org/media'
-  ],
-  facebook: [
-    'https://api.saveform.com/download'
-  ],
-  // Generic fallback
-  generic: [
-    'https://api.cobalt.tools/api/json'
   ]
 };
 
@@ -160,31 +146,13 @@ class SocialMediaDownloader {
     return this.settings || { ...DEFAULT_SETTINGS };
   }
 
-  // FIXED: Check if user is admin (improved logic)
+  // Check if user is admin (from ENV)
   isAdmin(userId) {
-    try {
-      const adminNumber = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER;
-      if (!adminNumber) {
-        console.log(chalk.yellow('⚠️ No admin number configured in ENV'));
-        return false;
-      }
-      
-      // Extract just the phone number from userId (remove @s.whatsapp.net or @g.us)
-      const userNumber = userId.split('@')[0];
-      
-      // Support comma-separated admin numbers
-      const adminNumbers = adminNumber.split(',').map(n => n.trim());
-      
-      const isAdminUser = adminNumbers.some(admin => 
-        admin === userNumber || userNumber === admin
-      );
-      
-      console.log(chalk.cyan(`Admin check: ${userNumber} -> ${isAdminUser ? 'YES' : 'NO'}`));
-      return isAdminUser;
-    } catch (error) {
-      console.error(chalk.red('Error checking admin:'), error.message);
-      return false;
-    }
+    const adminNumber = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER;
+    if (!adminNumber) return false;
+    
+    const userNumber = userId.split('@')[0];
+    return adminNumber === userNumber || adminNumber.includes(userNumber);
   }
 
   // Detect platform from URL
@@ -288,49 +256,12 @@ class SocialMediaDownloader {
     }
   }
 
-  // FIXED: Download with multiple API fallbacks
-  async downloadMedia(url, platformKey) {
-    const apis = API_SERVICES[platformKey] || API_SERVICES.generic;
-    let lastError = null;
-
-    // Try each API for this platform
-    for (const apiUrl of apis) {
-      try {
-        console.log(chalk.cyan(`🔄 Trying API: ${apiUrl}`));
-        
-        // Platform-specific download logic
-        if (platformKey === 'tiktok') {
-          const result = await this.downloadTikTok(url, apiUrl);
-          if (result) return result;
-        } else if (platformKey === 'twitter') {
-          const result = await this.downloadTwitter(url, apiUrl);
-          if (result) return result;
-        } else if (platformKey === 'instagram') {
-          const result = await this.downloadInstagram(url, apiUrl);
-          if (result) return result;
-        } else if (platformKey === 'facebook') {
-          const result = await this.downloadFacebook(url, apiUrl);
-          if (result) return result;
-        }
-        
-        // Try generic Cobalt API as last resort
-        const result = await this.downloadWithCobalt(url);
-        if (result) return result;
-        
-      } catch (error) {
-        console.error(chalk.yellow(`⚠️ API ${apiUrl} failed:`, error.message));
-        lastError = error;
-        continue;
-      }
-    }
-
-    throw lastError || new Error('All download methods failed');
-  }
-
-  // Download with Cobalt API (generic fallback)
-  async downloadWithCobalt(url) {
+  // Download with Cobalt API
+  async downloadWithCobalt(url, platform) {
     try {
-      const response = await axios.post('https://api.cobalt.tools/api/json', {
+      console.log(chalk.cyan(`🔄 Attempting Cobalt download for: ${url}`));
+      
+      const response = await axios.post(API_SERVICES.primary, {
         url: url,
         vCodec: 'h264',
         vQuality: '720',
@@ -345,6 +276,8 @@ class SocialMediaDownloader {
         timeout: 30000
       });
 
+      console.log(chalk.green(`✅ Cobalt response status: ${response.data.status}`));
+
       if (response.data.status === 'error' || response.data.status === 'rate-limit') {
         throw new Error(response.data.text || 'Download failed');
       }
@@ -354,15 +287,19 @@ class SocialMediaDownloader {
           url: response.data.url,
           thumbnail: response.data.thumb || null,
           title: response.data.filename || 'media',
+          duration: null,
           source: 'cobalt'
         };
       }
 
+      // Handle picker response (multiple quality options)
       if (response.data.status === 'picker' && response.data.picker?.length > 0) {
+        const bestQuality = response.data.picker[0];
         return {
-          url: response.data.picker[0].url,
+          url: bestQuality.url,
           thumbnail: response.data.thumb || null,
           title: response.data.filename || 'media',
+          duration: null,
           source: 'cobalt'
         };
       }
@@ -371,115 +308,57 @@ class SocialMediaDownloader {
         url: response.data.url,
         thumbnail: response.data.thumb || null,
         title: response.data.filename || 'media',
+        duration: null,
         source: 'cobalt'
       };
     } catch (error) {
       console.error(chalk.red('Cobalt API error:'), error.message);
-      throw error;
-    }
-  }
-
-  // TikTok-specific download
-  async downloadTikTok(url, apiUrl) {
-    try {
-      const response = await axios.post(apiUrl, { url }, {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 20000
-      });
-
-      if (response.data.video || response.data.data?.video) {
-        const videoUrl = response.data.video || response.data.data.video;
-        return {
-          url: videoUrl,
-          thumbnail: response.data.thumbnail || response.data.data?.thumbnail || null,
-          title: response.data.title || response.data.data?.title || 'TikTok Video',
-          source: 'tiktok-api'
-        };
+      
+      // Log more details for debugging
+      if (error.response) {
+        console.error(chalk.red('Response status:'), error.response.status);
+        console.error(chalk.red('Response data:'), JSON.stringify(error.response.data, null, 2));
       }
       
-      throw new Error('No video URL in response');
-    } catch (error) {
       throw error;
     }
   }
 
-  // Twitter-specific download
-  async downloadTwitter(url, apiUrl) {
+  // Alternative download method using a different API
+  async downloadWithAlternative(url, platform) {
     try {
-      const response = await axios.get(`${apiUrl}?url=${encodeURIComponent(url)}`, {
-        timeout: 20000
-      });
-
-      // Different API responses
-      if (response.data.data && Array.isArray(response.data.data)) {
-        const videos = response.data.data.filter(item => item.type === 'video');
-        if (videos.length > 0) {
-          return {
-            url: videos[0].url,
-            thumbnail: videos[0].thumbnail || null,
-            title: 'Twitter Video',
-            source: 'twitter-api'
-          };
+      console.log(chalk.cyan(`🔄 Attempting alternative download for: ${url}`));
+      
+      // Try a simpler approach - just return the video URL for direct platforms
+      // This is a fallback that works for some platforms
+      
+      // For Twitter/X, try using a different service
+      if (platform === 'TWITTER') {
+        try {
+          const response = await axios.get(`https://twitsave.com/info?url=${encodeURIComponent(url)}`, {
+            timeout: 15000
+          });
+          
+          // Parse the response to extract video URL
+          // This is a simplified version - you might need to adjust based on actual response
+          const videoMatch = response.data.match(/https?:\/\/[^\s<>"]+\.mp4/);
+          if (videoMatch) {
+            return {
+              url: videoMatch[0],
+              thumbnail: null,
+              title: 'Twitter Video',
+              duration: null,
+              source: 'alternative'
+            };
+          }
+        } catch (err) {
+          console.error(chalk.yellow('Alternative method 1 failed:', err.message));
         }
       }
-
-      if (response.data.url) {
-        return {
-          url: response.data.url,
-          thumbnail: response.data.thumbnail || null,
-          title: 'Twitter Video',
-          source: 'twitter-api'
-        };
-      }
-
-      throw new Error('No video URL in response');
+      
+      throw new Error('No alternative method available');
     } catch (error) {
-      throw error;
-    }
-  }
-
-  // Instagram-specific download
-  async downloadInstagram(url, apiUrl) {
-    try {
-      const response = await axios.post(apiUrl, { url }, {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 20000
-      });
-
-      if (response.data.video_url || response.data.data?.video_url) {
-        return {
-          url: response.data.video_url || response.data.data.video_url,
-          thumbnail: response.data.thumbnail || response.data.data?.thumbnail || null,
-          title: 'Instagram Video',
-          source: 'instagram-api'
-        };
-      }
-
-      throw new Error('No video URL in response');
-    } catch (error) {
-      throw error;
-    }
-  }
-
-  // Facebook-specific download
-  async downloadFacebook(url, apiUrl) {
-    try {
-      const response = await axios.post(apiUrl, { url }, {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 20000
-      });
-
-      if (response.data.video || response.data.data?.video) {
-        return {
-          url: response.data.video || response.data.data.video,
-          thumbnail: response.data.thumbnail || response.data.data?.thumbnail || null,
-          title: 'Facebook Video',
-          source: 'facebook-api'
-        };
-      }
-
-      throw new Error('No video URL in response');
-    } catch (error) {
+      console.error(chalk.red('Alternative download error:'), error.message);
       throw error;
     }
   }
@@ -544,18 +423,33 @@ class SocialMediaDownloader {
         }
       }
 
-      // Attempt download with improved fallback system
-      const result = await this.downloadMedia(url, config.key);
-
-      if (!result) {
-        return { 
-          error: `❌ *Download Failed*\n\n` +
-                 `The video couldn't be downloaded. Possible reasons:\n` +
-                 `• The link is invalid or expired\n` +
-                 `• The content is private/protected\n` +
-                 `• The platform is temporarily unavailable\n\n` +
-                 `_Try a different link or contact admin_`
-        };
+      // Attempt download with fallback
+      let result;
+      let lastError;
+      
+      try {
+        result = await this.downloadWithCobalt(url, platform);
+      } catch (primaryError) {
+        console.error(chalk.yellow('⚠️ Cobalt failed, trying alternative...'));
+        lastError = primaryError;
+        
+        // Try alternative method
+        try {
+          result = await this.downloadWithAlternative(url, platform);
+        } catch (alternativeError) {
+          console.error(chalk.red('❌ All download methods failed'));
+          
+          return { 
+            error: `❌ *Download Failed*\n\n` +
+                   `The video couldn't be downloaded. Possible reasons:\n` +
+                   `• The link is invalid or expired\n` +
+                   `• The content is private/protected\n` +
+                   `• The platform is temporarily unavailable\n\n` +
+                   `*Primary Error:* ${primaryError.message}\n` +
+                   `*Alternative Error:* ${alternativeError.message}\n\n` +
+                   `_Try a different link or contact admin_`
+          };
+        }
       }
 
       // Charge user if premium mode
@@ -578,9 +472,7 @@ class SocialMediaDownloader {
 
     } catch (error) {
       console.error(chalk.red('Download error:'), error.message);
-      return { 
-        error: `❌ Download failed: ${error.message}\n\n_All available APIs are currently unavailable. Please try again later._` 
-      };
+      return { error: `An unexpected error occurred: ${error.message}` };
     } finally {
       this.activeDownloads.delete(userId);
     }
@@ -739,7 +631,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
       if (settingArgs.length === 0) {
         // Show current settings
         const settings = downloader.getSettings();
-        const adminNum = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not Set';
+        const adminNum = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || '120363357603419058@g.us,2348089782988@s.whatsapp.net';
         
         await reply(
           `*⚙️ Downloader Settings*\n\n` +
@@ -907,7 +799,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         } else {
           caption += `🆓 Remaining: ${remaining}/${settings.rateLimitFree}\n`;
         }
-        caption += `\n⚡ Powered by ${bot?.name || 'Groq Bot'}`;
+        caption += `\n⚡ Powered by ${bot?.name || 'Groq'}`;
 
         try {
           // Send video with caption
