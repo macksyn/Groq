@@ -20,6 +20,64 @@ const DEFAULT_SETTINGS = {
   updatedAt: new Date(),
   updatedBy: 'system'
 };
+// Plugin info
+export const info = {
+  name: 'Social Media Downloader',
+  version: '2.0.1',
+  author: 'Alex Macksyn',
+  description: 'Download videos from social media with admin settings and MongoDB persistence',
+  category: 'media',
+  commands: [
+    {
+      command: '.dl <url>',
+      alias: ['.download'],
+      description: 'Download video from supported platforms',
+      usage: '.dl https://tiktok.com/@user/video/123'
+    },
+    {
+      command: '.dlsettings',
+      description: 'Manage downloader settings (admin only)',
+      usage: '.dlsettings [option] [value]'
+    },
+    {
+      command: '.dlstats',
+      description: 'View statistics (admin only)',
+      usage: '.dlstats'
+    },
+    {
+      command: '.dlhistory',
+      description: 'View your download history',
+      usage: '.dlhistory'
+    }
+  ],
+  features: [
+    'Multi-platform support (Facebook, TikTok, Twitter, Instagram)',
+    'Admin settings via commands (no code editing required)',
+    'MongoDB persistence for settings and usage tracking',
+    'Premium mode with economy wallet integration',
+    'Rate limiting with daily reset',
+    'Download history tracking',
+    'Comprehensive statistics',
+    'Group/private chat controls',
+    'Platform enable/disable controls'
+  ]
+};
+
+// Initialize function
+export async function initialize(config) {
+  await downloader.initialize();
+  
+  const settings = downloader.getSettings();
+  console.log(chalk.green('✅ Social Media Downloader plugin initialized'));
+  console.log(chalk.cyan(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`));
+  console.log(chalk.cyan(`Admin: ${process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not configured'}`));
+  
+  if (settings.premiumEnabled) {
+    console.log(chalk.cyan(`Cost: ₦${settings.downloadCost} per download`));
+  } else {
+    console.log(chalk.cyan(`Free limit: ${settings.rateLimitFree} downloads per day`));
+  }
+}
 
 // Supported platforms with regex patterns
 const PLATFORMS = {
@@ -30,7 +88,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|m\.|web\.|mbasic\.)?facebook\.com\/(?:watch\/?\?v=|[\w-]+\/videos?\/|reel\/|share\/r\/|groups\/[\w-]+\/permalink\/|[\w-]+\/posts\/|story\.php\?story_fbid=|permalink\.php\?story_fbid=)[\w\d-]+/gi,
       /(?:https?:\/\/)?fb\.watch\/[\w-]+/gi
     ],
-    icon: '📘'
+    icon: '𝐟'
   },
   TIKTOK: {
     name: 'TikTok',
@@ -48,7 +106,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|mobile\.)?(?:twitter|x)\.com\/[\w]+\/status\/\d+/gi,
       /(?:https?:\/\/)?t\.co\/[\w]+/gi
     ],
-    icon: '🐦'
+    icon: '𝕏'
   },
   INSTAGRAM: {
     name: 'Instagram',
@@ -57,7 +115,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/[\w-]+/gi,
       /(?:https?:\/\/)?(?:www\.)?instagram\.com\/stories\/[\w.-]+\/\d+/gi
     ],
-    icon: '📷'
+    icon: '🅾'
   }
 };
 
@@ -795,7 +853,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         } else {
           caption += `🆓 Remaining: ${remaining}/${settings.rateLimitFree}\n`;
         }
-        caption += `\n⚡ Downloaded via ${bot?.name || 'Bot'}`;
+        caption += `\n⚡ Powered by ${bot?.name || '*Groq*'}`;
 
         // Send video
         await sock.sendMessage(from, {
@@ -856,64 +914,5 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
   } catch (error) {
     console.error(chalk.red('Social media downloader plugin error:'), error.message);
     console.error(chalk.red('Stack:'), error.stack);
-  }
-}
-
-// Plugin info
-export const info = {
-  name: 'Social Media Downloader',
-  version: '2.0.1',
-  author: 'Bot Developer',
-  description: 'Download videos from social media with admin settings and MongoDB persistence',
-  category: 'media',
-  commands: [
-    {
-      command: '.dl <url>',
-      alias: ['.download'],
-      description: 'Download video from supported platforms',
-      usage: '.dl https://tiktok.com/@user/video/123'
-    },
-    {
-      command: '.dlsettings',
-      description: 'Manage downloader settings (admin only)',
-      usage: '.dlsettings [option] [value]'
-    },
-    {
-      command: '.dlstats',
-      description: 'View statistics (admin only)',
-      usage: '.dlstats'
-    },
-    {
-      command: '.dlhistory',
-      description: 'View your download history',
-      usage: '.dlhistory'
-    }
-  ],
-  features: [
-    'Multi-platform support (Facebook, TikTok, Twitter, Instagram)',
-    'Admin settings via commands (no code editing required)',
-    'MongoDB persistence for settings and usage tracking',
-    'Premium mode with economy wallet integration',
-    'Rate limiting with daily reset',
-    'Download history tracking',
-    'Comprehensive statistics',
-    'Group/private chat controls',
-    'Platform enable/disable controls'
-  ]
-};
-
-// Initialize function
-export async function initialize(config) {
-  await downloader.initialize();
-  
-  const settings = downloader.getSettings();
-  console.log(chalk.green('✅ Social Media Downloader plugin initialized'));
-  console.log(chalk.cyan(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`));
-  console.log(chalk.cyan(`Admin: ${process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not configured'}`));
-  
-  if (settings.premiumEnabled) {
-    console.log(chalk.cyan(`Cost: ₦${settings.downloadCost} per download`));
-  } else {
-    console.log(chalk.cyan(`Free limit: ${settings.rateLimitFree} downloads per day`));
   }
 }
