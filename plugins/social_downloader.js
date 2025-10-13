@@ -665,7 +665,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
       if (settingArgs.length === 0) {
         // Show current settings
         const settings = downloader.getSettings();
-        const adminNum = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not configured';
+        const adminNum = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBERS || 'Not configured';
         
         await reply(
           `*⚙️ Downloader Settings*\n\n` +
