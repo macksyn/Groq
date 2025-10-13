@@ -30,7 +30,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|m\.|web\.|mbasic\.)?facebook\.com\/(?:watch\/?\?v=|[\w-]+\/videos?\/|reel\/|share\/r\/|groups\/[\w-]+\/permalink\/|[\w-]+\/posts\/|story\.php\?story_fbid=|permalink\.php\?story_fbid=)[\w\d-]+/gi,
       /(?:https?:\/\/)?fb\.watch\/[\w-]+/gi
     ],
-    icon: '𝐟'
+    icon: 'FB'
   },
   TIKTOK: {
     name: 'TikTok',
@@ -39,7 +39,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|vm\.|vt\.)?tiktok\.com\/(?:@[\w.-]+\/video\/|v\/|t\/)?\w+/gi,
       /(?:https?:\/\/)?(?:www\.)?tiktok\.com\/@[\w.-]+\/video\/\d+/gi
     ],
-    icon: '🎵'
+    icon: 'TT'
   },
   TWITTER: {
     name: 'Twitter/X',
@@ -48,7 +48,7 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.|mobile\.)?(?:twitter|x)\.com\/[\w]+\/status\/\d+/gi,
       /(?:https?:\/\/)?t\.co\/[\w]+/gi
     ],
-    icon: '𝕏'
+    icon: 'X'
   },
   INSTAGRAM: {
     name: 'Instagram',
@@ -57,16 +57,30 @@ const PLATFORMS = {
       /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/[\w-]+/gi,
       /(?:https?:\/\/)?(?:www\.)?instagram\.com\/stories\/[\w.-]+\/\d+/gi
     ],
-    icon: '🅾'
+    icon: 'IG'
   }
 };
 
-// API endpoints
+// Updated API services with working alternatives
 const API_SERVICES = {
-  primary: 'https://api.cobalt.tools/api/json',
-  fallback: [
-    'https://api.downloadgram.org/media',
+  // Primary APIs by platform
+  tiktok: [
+    'https://api.tiklydown.eu.org/api/download',
     'https://api.tikmate.app/api/download'
+  ],
+  twitter: [
+    'https://twitsave.com/api/info',
+    'https://ssstwitter.com/api/info'
+  ],
+  instagram: [
+    'https://api.downloadgram.org/media'
+  ],
+  facebook: [
+    'https://api.saveform.com/download'
+  ],
+  // Generic fallback
+  generic: [
+    'https://api.cobalt.tools/api/json'
   ]
 };
 
@@ -146,13 +160,31 @@ class SocialMediaDownloader {
     return this.settings || { ...DEFAULT_SETTINGS };
   }
 
-  // Check if user is admin (from ENV)
+  // FIXED: Check if user is admin (improved logic)
   isAdmin(userId) {
-    const adminNumber = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER;
-    if (!adminNumber) return false;
-    
-    const userNumber = userId.split('@')[0];
-    return adminNumber === userNumber || adminNumber.includes(userNumber);
+    try {
+      const adminNumber = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER;
+      if (!adminNumber) {
+        console.log(chalk.yellow('⚠️ No admin number configured in ENV'));
+        return false;
+      }
+      
+      // Extract just the phone number from userId (remove @s.whatsapp.net or @g.us)
+      const userNumber = userId.split('@')[0];
+      
+      // Support comma-separated admin numbers
+      const adminNumbers = adminNumber.split(',').map(n => n.trim());
+      
+      const isAdminUser = adminNumbers.some(admin => 
+        admin === userNumber || userNumber === admin
+      );
+      
+      console.log(chalk.cyan(`Admin check: ${userNumber} -> ${isAdminUser ? 'YES' : 'NO'}`));
+      return isAdminUser;
+    } catch (error) {
+      console.error(chalk.red('Error checking admin:'), error.message);
+      return false;
+    }
   }
 
   // Detect platform from URL
@@ -256,12 +288,49 @@ class SocialMediaDownloader {
     }
   }
 
-  // Download with Cobalt API
-  async downloadWithCobalt(url, platform) {
+  // FIXED: Download with multiple API fallbacks
+  async downloadMedia(url, platformKey) {
+    const apis = API_SERVICES[platformKey] || API_SERVICES.generic;
+    let lastError = null;
+
+    // Try each API for this platform
+    for (const apiUrl of apis) {
+      try {
+        console.log(chalk.cyan(`🔄 Trying API: ${apiUrl}`));
+        
+        // Platform-specific download logic
+        if (platformKey === 'tiktok') {
+          const result = await this.downloadTikTok(url, apiUrl);
+          if (result) return result;
+        } else if (platformKey === 'twitter') {
+          const result = await this.downloadTwitter(url, apiUrl);
+          if (result) return result;
+        } else if (platformKey === 'instagram') {
+          const result = await this.downloadInstagram(url, apiUrl);
+          if (result) return result;
+        } else if (platformKey === 'facebook') {
+          const result = await this.downloadFacebook(url, apiUrl);
+          if (result) return result;
+        }
+        
+        // Try generic Cobalt API as last resort
+        const result = await this.downloadWithCobalt(url);
+        if (result) return result;
+        
+      } catch (error) {
+        console.error(chalk.yellow(`⚠️ API ${apiUrl} failed:`, error.message));
+        lastError = error;
+        continue;
+      }
+    }
+
+    throw lastError || new Error('All download methods failed');
+  }
+
+  // Download with Cobalt API (generic fallback)
+  async downloadWithCobalt(url) {
     try {
-      console.log(chalk.cyan(`🔄 Attempting Cobalt download for: ${url}`));
-      
-      const response = await axios.post(API_SERVICES.primary, {
+      const response = await axios.post('https://api.cobalt.tools/api/json', {
         url: url,
         vCodec: 'h264',
         vQuality: '720',
@@ -276,8 +345,6 @@ class SocialMediaDownloader {
         timeout: 30000
       });
 
-      console.log(chalk.green(`✅ Cobalt response status: ${response.data.status}`));
-
       if (response.data.status === 'error' || response.data.status === 'rate-limit') {
         throw new Error(response.data.text || 'Download failed');
       }
@@ -287,19 +354,15 @@ class SocialMediaDownloader {
           url: response.data.url,
           thumbnail: response.data.thumb || null,
           title: response.data.filename || 'media',
-          duration: null,
           source: 'cobalt'
         };
       }
 
-      // Handle picker response (multiple quality options)
       if (response.data.status === 'picker' && response.data.picker?.length > 0) {
-        const bestQuality = response.data.picker[0];
         return {
-          url: bestQuality.url,
+          url: response.data.picker[0].url,
           thumbnail: response.data.thumb || null,
           title: response.data.filename || 'media',
-          duration: null,
           source: 'cobalt'
         };
       }
@@ -308,57 +371,115 @@ class SocialMediaDownloader {
         url: response.data.url,
         thumbnail: response.data.thumb || null,
         title: response.data.filename || 'media',
-        duration: null,
         source: 'cobalt'
       };
     } catch (error) {
       console.error(chalk.red('Cobalt API error:'), error.message);
-      
-      // Log more details for debugging
-      if (error.response) {
-        console.error(chalk.red('Response status:'), error.response.status);
-        console.error(chalk.red('Response data:'), JSON.stringify(error.response.data, null, 2));
-      }
-      
       throw error;
     }
   }
 
-  // Alternative download method using a different API
-  async downloadWithAlternative(url, platform) {
+  // TikTok-specific download
+  async downloadTikTok(url, apiUrl) {
     try {
-      console.log(chalk.cyan(`🔄 Attempting alternative download for: ${url}`));
-      
-      // Try a simpler approach - just return the video URL for direct platforms
-      // This is a fallback that works for some platforms
-      
-      // For Twitter/X, try using a different service
-      if (platform === 'TWITTER') {
-        try {
-          const response = await axios.get(`https://twitsave.com/info?url=${encodeURIComponent(url)}`, {
-            timeout: 15000
-          });
-          
-          // Parse the response to extract video URL
-          // This is a simplified version - you might need to adjust based on actual response
-          const videoMatch = response.data.match(/https?:\/\/[^\s<>"]+\.mp4/);
-          if (videoMatch) {
-            return {
-              url: videoMatch[0],
-              thumbnail: null,
-              title: 'Twitter Video',
-              duration: null,
-              source: 'alternative'
-            };
-          }
-        } catch (err) {
-          console.error(chalk.yellow('Alternative method 1 failed:', err.message));
-        }
+      const response = await axios.post(apiUrl, { url }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 20000
+      });
+
+      if (response.data.video || response.data.data?.video) {
+        const videoUrl = response.data.video || response.data.data.video;
+        return {
+          url: videoUrl,
+          thumbnail: response.data.thumbnail || response.data.data?.thumbnail || null,
+          title: response.data.title || response.data.data?.title || 'TikTok Video',
+          source: 'tiktok-api'
+        };
       }
       
-      throw new Error('No alternative method available');
+      throw new Error('No video URL in response');
     } catch (error) {
-      console.error(chalk.red('Alternative download error:'), error.message);
+      throw error;
+    }
+  }
+
+  // Twitter-specific download
+  async downloadTwitter(url, apiUrl) {
+    try {
+      const response = await axios.get(`${apiUrl}?url=${encodeURIComponent(url)}`, {
+        timeout: 20000
+      });
+
+      // Different API responses
+      if (response.data.data && Array.isArray(response.data.data)) {
+        const videos = response.data.data.filter(item => item.type === 'video');
+        if (videos.length > 0) {
+          return {
+            url: videos[0].url,
+            thumbnail: videos[0].thumbnail || null,
+            title: 'Twitter Video',
+            source: 'twitter-api'
+          };
+        }
+      }
+
+      if (response.data.url) {
+        return {
+          url: response.data.url,
+          thumbnail: response.data.thumbnail || null,
+          title: 'Twitter Video',
+          source: 'twitter-api'
+        };
+      }
+
+      throw new Error('No video URL in response');
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Instagram-specific download
+  async downloadInstagram(url, apiUrl) {
+    try {
+      const response = await axios.post(apiUrl, { url }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 20000
+      });
+
+      if (response.data.video_url || response.data.data?.video_url) {
+        return {
+          url: response.data.video_url || response.data.data.video_url,
+          thumbnail: response.data.thumbnail || response.data.data?.thumbnail || null,
+          title: 'Instagram Video',
+          source: 'instagram-api'
+        };
+      }
+
+      throw new Error('No video URL in response');
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Facebook-specific download
+  async downloadFacebook(url, apiUrl) {
+    try {
+      const response = await axios.post(apiUrl, { url }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 20000
+      });
+
+      if (response.data.video || response.data.data?.video) {
+        return {
+          url: response.data.video || response.data.data.video,
+          thumbnail: response.data.thumbnail || response.data.data?.thumbnail || null,
+          title: 'Facebook Video',
+          source: 'facebook-api'
+        };
+      }
+
+      throw new Error('No video URL in response');
+    } catch (error) {
       throw error;
     }
   }
@@ -423,33 +544,18 @@ class SocialMediaDownloader {
         }
       }
 
-      // Attempt download with fallback
-      let result;
-      let lastError;
-      
-      try {
-        result = await this.downloadWithCobalt(url, platform);
-      } catch (primaryError) {
-        console.error(chalk.yellow('⚠️ Cobalt failed, trying alternative...'));
-        lastError = primaryError;
-        
-        // Try alternative method
-        try {
-          result = await this.downloadWithAlternative(url, platform);
-        } catch (alternativeError) {
-          console.error(chalk.red('❌ All download methods failed'));
-          
-          return { 
-            error: `❌ *Download Failed*\n\n` +
-                   `The video couldn't be downloaded. Possible reasons:\n` +
-                   `• The link is invalid or expired\n` +
-                   `• The content is private/protected\n` +
-                   `• The platform is temporarily unavailable\n\n` +
-                   `*Primary Error:* ${primaryError.message}\n` +
-                   `*Alternative Error:* ${alternativeError.message}\n\n` +
-                   `_Try a different link or contact admin_`
-          };
-        }
+      // Attempt download with improved fallback system
+      const result = await this.downloadMedia(url, config.key);
+
+      if (!result) {
+        return { 
+          error: `❌ *Download Failed*\n\n` +
+                 `The video couldn't be downloaded. Possible reasons:\n` +
+                 `• The link is invalid or expired\n` +
+                 `• The content is private/protected\n` +
+                 `• The platform is temporarily unavailable\n\n` +
+                 `_Try a different link or contact admin_`
+        };
       }
 
       // Charge user if premium mode
@@ -472,7 +578,9 @@ class SocialMediaDownloader {
 
     } catch (error) {
       console.error(chalk.red('Download error:'), error.message);
-      return { error: `An unexpected error occurred: ${error.message}` };
+      return { 
+        error: `❌ Download failed: ${error.message}\n\n_All available APIs are currently unavailable. Please try again later._` 
+      };
     } finally {
       this.activeDownloads.delete(userId);
     }
@@ -620,7 +728,12 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
     };
 
     // Admin Settings Command: .dlsettings
-    if (command === 'dlsettings' && isAdmin) {
+    if (command === 'dlsettings') {
+      if (!isAdmin) {
+        await reply('⛔ *Access Denied*\n\nThis command is only available to administrators.');
+        return;
+      }
+
       const settingArgs = args.slice(1);
       
       if (settingArgs.length === 0) {
@@ -628,26 +741,26 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         const settings = downloader.getSettings();
         const adminNum = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER || 'Not Set';
         
-        await sock.sendMessage(from, {
-          text: `*⚙️ Downloader Settings*\n\n` +
-                `*Admin Number:* ${adminNum}\n\n` +
-                `*Premium Mode:* ${settings.premiumEnabled ? '✅ Enabled' : '❌ Disabled'}\n` +
-                `*Download Cost:* ₦${settings.downloadCost}\n` +
-                `*Free Limit:* ${settings.rateLimitFree} per day\n` +
-                `*Cooldown:* ${settings.rateLimitCooldown / (60 * 60 * 1000)}h\n\n` +
-                `*Enabled Platforms:*\n${settings.enabledPlatforms.map(p => `• ${p}`).join('\n')}\n\n` +
-                `*Allow Groups:* ${settings.allowGroups ? '✅' : '❌'}\n` +
-                `*Allow Private:* ${settings.allowPrivate ? '✅' : '❌'}\n\n` +
-                `*Last Updated:* ${new Date(settings.updatedAt).toLocaleString()}\n` +
-                `*Updated By:* ${settings.updatedBy}\n\n` +
-                `*Commands:*\n` +
-                `${config.PREFIX}dlsettings premium on/off\n` +
-                `${config.PREFIX}dlsettings cost <amount>\n` +
-                `${config.PREFIX}dlsettings limit <number>\n` +
-                `${config.PREFIX}dlsettings platform <name> on/off\n` +
-                `${config.PREFIX}dlsettings groups on/off\n` +
-                `${config.PREFIX}dlsettings private on/off`
-        }, { quoted: m });
+        await reply(
+          `*⚙️ Downloader Settings*\n\n` +
+          `*Admin Number:* ${adminNum}\n\n` +
+          `*Premium Mode:* ${settings.premiumEnabled ? '✅ Enabled' : '❌ Disabled'}\n` +
+          `*Download Cost:* ₦${settings.downloadCost}\n` +
+          `*Free Limit:* ${settings.rateLimitFree} per day\n` +
+          `*Cooldown:* ${settings.rateLimitCooldown / (60 * 60 * 1000)}h\n\n` +
+          `*Enabled Platforms:*\n${settings.enabledPlatforms.map(p => `• ${p}`).join('\n')}\n\n` +
+          `*Allow Groups:* ${settings.allowGroups ? '✅' : '❌'}\n` +
+          `*Allow Private:* ${settings.allowPrivate ? '✅' : '❌'}\n\n` +
+          `*Last Updated:* ${new Date(settings.updatedAt).toLocaleString()}\n` +
+          `*Updated By:* ${settings.updatedBy}\n\n` +
+          `*Commands:*\n` +
+          `${config.PREFIX}dlsettings premium on/off\n` +
+          `${config.PREFIX}dlsettings cost <amount>\n` +
+          `${config.PREFIX}dlsettings limit <number>\n` +
+          `${config.PREFIX}dlsettings platform <name> on/off\n` +
+          `${config.PREFIX}dlsettings groups on/off\n` +
+          `${config.PREFIX}dlsettings private on/off`
+        );
         return;
       }
 
@@ -660,9 +773,9 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
           if (value === 'on' || value === 'off') {
             updates.premiumEnabled = value === 'on';
             await downloader.saveSettings(updates, sender);
-            await sock.sendMessage(from, {
-              text: `✅ Premium mode ${value === 'on' ? 'enabled' : 'disabled'}`
-            }, { quoted: m });
+            await reply(`✅ Premium mode ${value === 'on' ? 'enabled' : 'disabled'}`);
+          } else {
+            await reply('❌ Usage: .dlsettings premium on/off');
           }
           break;
 
@@ -671,9 +784,9 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
           if (!isNaN(cost) && cost >= 0) {
             updates.downloadCost = cost;
             await downloader.saveSettings(updates, sender);
-            await sock.sendMessage(from, {
-              text: `✅ Download cost set to ₦${cost}`
-            }, { quoted: m });
+            await reply(`✅ Download cost set to ₦${cost}`);
+          } else {
+            await reply('❌ Invalid cost. Usage: .dlsettings cost <number>');
           }
           break;
 
@@ -682,9 +795,9 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
           if (!isNaN(limit) && limit > 0) {
             updates.rateLimitFree = limit;
             await downloader.saveSettings(updates, sender);
-            await sock.sendMessage(from, {
-              text: `✅ Free download limit set to ${limit} per day`
-            }, { quoted: m });
+            await reply(`✅ Free download limit set to ${limit} per day`);
+          } else {
+            await reply('❌ Invalid limit. Usage: .dlsettings limit <number>');
           }
           break;
 
@@ -693,7 +806,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
           const state = settingArgs[2];
           if (platform && (state === 'on' || state === 'off')) {
             const settings = downloader.getSettings();
-            const platforms = settings.enabledPlatforms || [];
+            const platforms = [...settings.enabledPlatforms] || [];
             
             if (state === 'on' && !platforms.includes(platform)) {
               platforms.push(platform);
@@ -704,9 +817,9 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
             
             updates.enabledPlatforms = platforms;
             await downloader.saveSettings(updates, sender);
-            await sock.sendMessage(from, {
-              text: `✅ ${platform} ${state === 'on' ? 'enabled' : 'disabled'}`
-            }, { quoted: m });
+            await reply(`✅ ${platform} ${state === 'on' ? 'enabled' : 'disabled'}`);
+          } else {
+            await reply('❌ Usage: .dlsettings platform <facebook|tiktok|twitter|instagram> on/off');
           }
           break;
 
@@ -714,9 +827,9 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
           if (value === 'on' || value === 'off') {
             updates.allowGroups = value === 'on';
             await downloader.saveSettings(updates, sender);
-            await sock.sendMessage(from, {
-              text: `✅ Group downloads ${value === 'on' ? 'enabled' : 'disabled'}`
-            }, { quoted: m });
+            await reply(`✅ Group downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
+          } else {
+            await reply('❌ Usage: .dlsettings groups on/off');
           }
           break;
 
@@ -724,16 +837,14 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
           if (value === 'on' || value === 'off') {
             updates.allowPrivate = value === 'on';
             await downloader.saveSettings(updates, sender);
-            await sock.sendMessage(from, {
-              text: `✅ Private downloads ${value === 'on' ? 'enabled' : 'disabled'}`
-            }, { quoted: m });
+            await reply(`✅ Private downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
+          } else {
+            await reply('❌ Usage: .dlsettings private on/off');
           }
           break;
 
         default:
-          await sock.sendMessage(from, {
-            text: `❌ Unknown setting: ${action}\n\nUse ${config.PREFIX}dlsettings to see available commands`
-          }, { quoted: m });
+          await reply(`❌ Unknown setting: ${action}\n\nUse ${config.PREFIX}dlsettings to see available commands`);
       }
       return;
     }
@@ -766,15 +877,16 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         return;
       }
 
-      // Send processing message
+      // FIXED: Send processing message and keep the message key
       const processingMsg = await sock.sendMessage(from, {
-        text: `⏳ *Processing Download...*\n\nThis may take a few seconds.`
+        text: `⏳ *Processing Download...*\n\nPlease wait while we fetch your media.`
       }, { quoted: m });
 
       // Attempt download
       const result = await downloader.download(url, sender, isGroup);
 
       if (result.error) {
+        // FIXED: Edit the processing message instead of sending new one
         await sock.sendMessage(from, {
           text: result.error,
           edit: processingMsg.key
@@ -787,7 +899,7 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         const remaining = await downloader.getRemainingDownloads(sender);
         
         let caption = `${result.icon} *${result.platform} Download*\n\n`;
-        if (result.title) {
+        if (result.title && result.title !== 'media') {
           caption += `📝 ${result.title}\n`;
         }
         if (settings.premiumEnabled) {
@@ -795,25 +907,40 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         } else {
           caption += `🆓 Remaining: ${remaining}/${settings.rateLimitFree}\n`;
         }
-        caption += `\n⚡ Powered by ${bot?.name || '*Groq*'}`;
+        caption += `\n⚡ Powered by ${bot?.name || 'Groq Bot'}`;
 
-        // Send video
-        await sock.sendMessage(from, {
-          video: { url: result.url },
-          caption: caption,
-          mimetype: 'video/mp4'
-        }, { quoted: m });
+        try {
+          // Send video with caption
+          await sock.sendMessage(from, {
+            video: { url: result.url },
+            caption: caption,
+            mimetype: 'video/mp4'
+          }, { quoted: m });
 
-        // Delete processing message
-        await sock.sendMessage(from, {
-          delete: processingMsg.key
-        });
+          // FIXED: Delete processing message after successful send
+          await sock.sendMessage(from, {
+            delete: processingMsg.key
+          });
+        } catch (sendError) {
+          console.error(chalk.red('Error sending video:'), sendError.message);
+          
+          // If sending fails, update the processing message with error
+          await sock.sendMessage(from, {
+            text: `❌ *Send Failed*\n\nThe video was downloaded but couldn't be sent. This might be due to:\n• File size too large\n• Network issues\n• WhatsApp restrictions\n\nDirect link: ${result.url}`,
+            edit: processingMsg.key
+          });
+        }
       }
       return;
     }
 
     // Statistics Command
-    if (command === 'dlstats' && isAdmin) {
+    if (command === 'dlstats') {
+      if (!isAdmin) {
+        await reply('⛔ *Access Denied*\n\nThis command is only available to administrators.');
+        return;
+      }
+
       const stats = await downloader.getStats();
       
       await reply(
@@ -856,13 +983,22 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
   } catch (error) {
     console.error(chalk.red('Social media downloader plugin error:'), error.message);
     console.error(chalk.red('Stack:'), error.stack);
+    
+    // Try to send error message to user
+    try {
+      await sock.sendMessage(m.key.remoteJid, {
+        text: `❌ *Plugin Error*\n\nAn unexpected error occurred. Please try again or contact admin.\n\n_Error: ${error.message}_`
+      }, { quoted: m });
+    } catch (replyError) {
+      console.error(chalk.red('Failed to send error message:'), replyError.message);
+    }
   }
 }
 
 // Plugin info
 export const info = {
   name: 'Social Media Downloader',
-  version: '2.0.1',
+  version: '2.1.0',
   author: 'Alex Macksyn',
   description: 'Download videos from social media with admin settings and MongoDB persistence',
   category: 'media',
@@ -898,8 +1034,21 @@ export const info = {
     'Download history tracking',
     'Comprehensive statistics',
     'Group/private chat controls',
-    'Platform enable/disable controls'
-  ]
+    'Platform enable/disable controls',
+    'Multiple API fallbacks for reliability',
+    'Improved error handling and user feedback'
+  ],
+  changelog: {
+    '2.1.0': [
+      'Fixed admin command authentication',
+      'Improved message editing (no more delete, just edit)',
+      'Added multiple API fallbacks per platform',
+      'Replaced unicode symbols with standard text',
+      'Enhanced error handling and user feedback',
+      'Better admin number checking (supports multiple admins)',
+      'Improved download reliability with platform-specific APIs'
+    ]
+  }
 };
 
 // Initialize function
@@ -916,5 +1065,6 @@ export async function initialize(config) {
   } else {
     console.log(chalk.cyan(`Free limit: ${settings.rateLimitFree} downloads per day`));
   }
+  
+  console.log(chalk.yellow('⚠️ Note: Some APIs may have rate limits or require keys'));
 }
-
