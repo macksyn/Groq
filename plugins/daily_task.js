@@ -1,49 +1,42 @@
-// plugins/daily_task.js - Migrated to Centralized MongoDB Connection System
+// plugins/daily_task.js - With Group Activation System
 import moment from 'moment-timezone';
-// ✅ REMOVED: Direct import of MongoClient.
-// ✅ ADDED: Import of PluginHelpers for unified database and user functions.
 import { PluginHelpers } from '../lib/pluginIntegration.js';
 
-// Plugin information export
 export const info = {
   name: 'Daily Task System',
-  // ✅ UPDATED: Version number reflects migration.
-  version: '3.0.0-migrated',
-  author: 'Bot Developer',
-  description: 'Enhanced daily quiz task system migrated to use a centralized MongoDB connection pool for improved performance and stability.',
+  version: '3.1.0',
+  author: 'Alex Macksyn',
+  description: 'Enhanced daily quiz task system with group activation control',
   commands: [
     { name: 'task', aliases: ['dailytask', 'dt'], description: 'Access the daily task system' },
     { name: 'taskstats', aliases: ['mystats'], description: 'View your task statistics' },
-    { name: 'testtask', aliases: ['testdt'], description: 'Test task answer validation' }
+    { name: 'testtask', aliases: ['testdt'], description: 'Test task answer validation' },
+    { name: 'activatetask', aliases: ['taskon'], description: 'Activate daily task in this group (Admin only)' },
+    { name: 'deactivatetask', aliases: ['taskoff'], description: 'Deactivate daily task in this group (Admin only)' }
   ]
 };
 
-// Collection names remain the same.
 const COLLECTIONS = {
   TASK_RECORDS: 'task_records',
   QUESTIONS: 'task_questions',
   SETTINGS: 'task_settings',
-  DAILY_TASKS: 'daily_tasks'
+  DAILY_TASKS: 'daily_tasks',
+  ACTIVE_GROUPS: 'task_active_groups' // ✅ NEW: Collection for activated groups
 };
 
-// ✅ REMOVED: Local 'db' and 'mongoClient' variables. The connection is now managed globally.
-
-// Set Nigeria timezone
 moment.tz.setDefault('Africa/Lagos');
 
-// Default task settings with new themes
 const defaultSettings = {
   baseReward: 1500,
   correctnessBonus: 100,
   enableStreakBonus: true,
   streakBonusMultiplier: 1.5,
   minStreakForBonus: 3,
-  autoPostTime: '08:00',
+  autoPostTime: '08:30',
   autoPostEnabled: true,
   questionCount: 5,
   submissionDeadline: '23:59',
   adminNumbers: [],
-  groupJids: [],
   tagAllMembers: true,
   themes: {
     monday: 'Business Ideas & Entrepreneurship',
@@ -57,9 +50,8 @@ const defaultSettings = {
 };
 
 let taskSettings = { ...defaultSettings };
-let isPluginInitialized = false; // Flag to run initialization once.
+let isPluginInitialized = false;
 
-// EXPANDED AND NEW QUESTION CATEGORIES (Unchanged)
 const questionDatabase = {
   business: [
     { question: "What business can you start with just ₦20,000?", correctAnswer: "food vending, retail, digital services, online tutoring, photography, recharge card sales" },
@@ -99,23 +91,100 @@ const questionDatabase = {
   ]
 };
 
+// ✅ NEW: Check if daily task is active in a group
+async function isTaskActiveInGroup(groupJid) {
+  try {
+    const result = await PluginHelpers.safeDBOperation(async (db) => {
+      const groupData = await db.collection(COLLECTIONS.ACTIVE_GROUPS).findOne({ groupJid });
+      return groupData && groupData.isActive;
+    });
+    return result;
+  } catch (error) {
+    console.error('Error checking group activation:', error);
+    return false;
+  }
+}
 
-// ✅ REMOVED: initDatabase() function. Connection is handled by mongoManager.
+// ✅ NEW: Activate daily task in a group
+async function activateTaskInGroup(groupJid, groupName, activatedBy) {
+  try {
+    await PluginHelpers.safeDBOperation(async (db) => {
+      await db.collection(COLLECTIONS.ACTIVE_GROUPS).updateOne(
+        { groupJid },
+        {
+          $set: {
+            groupJid,
+            groupName,
+            isActive: true,
+            activatedBy,
+            activatedAt: new Date(),
+            lastUpdated: new Date()
+          }
+        },
+        { upsert: true }
+      );
+    });
+    console.log(`✅ Daily task activated for group: ${groupName}`);
+    return true;
+  } catch (error) {
+    console.error('Error activating task in group:', error);
+    return false;
+  }
+}
 
-// ✅ NEW: One-time initialization function for the plugin.
+// ✅ NEW: Deactivate daily task in a group
+async function deactivateTaskInGroup(groupJid) {
+  try {
+    await PluginHelpers.safeDBOperation(async (db) => {
+      await db.collection(COLLECTIONS.ACTIVE_GROUPS).updateOne(
+        { groupJid },
+        {
+          $set: {
+            isActive: false,
+            deactivatedAt: new Date(),
+            lastUpdated: new Date()
+          }
+        }
+      );
+    });
+    console.log(`❌ Daily task deactivated for group: ${groupJid}`);
+    return true;
+  } catch (error) {
+    console.error('Error deactivating task in group:', error);
+    return false;
+  }
+}
+
+// ✅ NEW: Get all active groups
+async function getActiveGroups() {
+  try {
+    const groups = await PluginHelpers.safeDBOperation(async (db) => {
+      return await db.collection(COLLECTIONS.ACTIVE_GROUPS)
+        .find({ isActive: true })
+        .toArray();
+    });
+    return groups.map(g => g.groupJid);
+  } catch (error) {
+    console.error('Error getting active groups:', error);
+    return [];
+  }
+}
+
 async function initializePlugin() {
   if (isPluginInitialized) return;
   try {
     console.log('🔌 Initializing Daily Task plugin...');
-    // Use safeDBOperation to ensure indexes are created safely.
     await PluginHelpers.safeDBOperation(async (db) => {
       await db.collection(COLLECTIONS.TASK_RECORDS).createIndex({ userId: 1, date: -1 });
       await db.collection(COLLECTIONS.QUESTIONS).createIndex({ category: 1 });
       await db.collection(COLLECTIONS.DAILY_TASKS).createIndex({ date: 1 }, { unique: true });
+      // ✅ NEW: Create index for active groups
+      await db.collection(COLLECTIONS.ACTIVE_GROUPS).createIndex({ groupJid: 1 }, { unique: true });
+      await db.collection(COLLECTIONS.ACTIVE_GROUPS).createIndex({ isActive: 1 });
     });
     
     await loadSettings();
-    await initializeQuestionDatabase(); // Syncs questions from code to DB.
+    await initializeQuestionDatabase();
     
     isPluginInitialized = true;
     console.log('✅ Daily Task plugin initialized successfully.');
@@ -175,7 +244,6 @@ async function initializeQuestionDatabase() {
   });
 }
 
-// Answer validation and checking logic remains unchanged.
 function validateAnswerFormat(text) {
   const answers = [];
   const answerPattern = /\*Answer:\*\s*([^\n\r*]+)/gi;
@@ -184,12 +252,6 @@ function validateAnswerFormat(text) {
     const answer = match[1].trim();
     if (answer.length > 0 && !answer.toLowerCase().includes('answer:') && answer !== '*Answer:*') {
       answers.push(answer);
-    }
-  }
-  if (answers.length === 0) {
-    const numberedPattern = /(\d+)\.\s*(.+?)(?=\s*\d+\.|$)/gs;
-    while ((match = numberedPattern.exec(text)) !== null) {
-      answers[parseInt(match[1]) - 1] = match[2].trim();
     }
   }
   return answers;
@@ -213,7 +275,6 @@ function checkAnswerCorrectness(userAnswer, question) {
   }
 }
 
-// Time and theme functions remain unchanged.
 function getNigeriaTime() { return moment.tz('Africa/Lagos'); }
 function getCurrentDate() { return getNigeriaTime().format('DD-MM-YYYY'); }
 function getCurrentTheme() { const today = getNigeriaTime().format('dddd').toLowerCase(); return taskSettings.themes[today] || taskSettings.themes.sunday; }
@@ -262,7 +323,6 @@ async function createDailyTask(groupJid) {
     });
 }
 
-// Message formatting and group logic remain unchanged.
 function formatDailyTaskMessage(taskData) {
   const nigeriaTime = getNigeriaTime();
   const dayName = nigeriaTime.format('dddd');
@@ -293,6 +353,13 @@ async function getGroupMembers(sock, groupJid) {
 
 async function postDailyTask(sock, groupJid) {
   try {
+    // ✅ CHANGED: Check if task is active in this group
+    const isActive = await isTaskActiveInGroup(groupJid);
+    if (!isActive) {
+      console.log(`⚠️ Daily task not active in group ${groupJid}, skipping post`);
+      return false;
+    }
+    
     const taskData = await createDailyTask(groupJid);
     const message = formatDailyTaskMessage(taskData);
     let mentions = [];
@@ -345,6 +412,15 @@ async function processTaskSubmission(m, sock) {
     const messageText = m.body || '';
     const senderId = m.key.participant || m.key.remoteJid;
     const from = m.key.remoteJid;
+    
+    // ✅ CHANGED: Check if task is active in this group
+    if (from.endsWith('@g.us')) {
+      const isActive = await isTaskActiveInGroup(from);
+      if (!isActive) {
+        return false; // Silently ignore if task not active
+      }
+    }
+    
     const today = getCurrentDate();
     
     const answers = validateAnswerFormat(messageText);
@@ -352,7 +428,6 @@ async function processTaskSubmission(m, sock) {
     
     console.log(`📝 Task submission detected from ${senderId}`);
     
-    // ✅ All DB operations are now wrapped in safeOperation for resilience.
     const result = await PluginHelpers.safeDBOperation(async (db) => {
       const todayTask = await db.collection(COLLECTIONS.DAILY_TASKS).findOne({ date: today });
       if (!todayTask) return { error: 'No active task for today.' };
@@ -442,12 +517,17 @@ async function checkAndPostDailyTask(sock) {
 
     if (wasPosted) return;
     
-    if (!taskSettings.groupJids || taskSettings.groupJids.length === 0) {
-      console.log('⚠️ No groups registered for auto-posting');
+    // ✅ CHANGED: Get only active groups instead of all groups
+    const activeGroups = await getActiveGroups();
+    
+    if (activeGroups.length === 0) {
+      console.log('⚠️ No active groups for daily task auto-posting');
       return;
     }
     
-    for (const groupJid of taskSettings.groupJids) {
+    console.log(`📤 Posting daily task to ${activeGroups.length} active group(s)`);
+    
+    for (const groupJid of activeGroups) {
       await postDailyTask(sock, groupJid).catch(e => console.error(`Error posting to ${groupJid}:`, e));
     }
   } catch (error) {
@@ -455,7 +535,6 @@ async function checkAndPostDailyTask(sock) {
   }
 }
 
-// Scheduler and authorization logic remain mostly unchanged.
 class TaskScheduler {
   constructor(sock) { this.sock = sock; this.interval = null; this.running = false; }
   start() { if (this.running) return; this.running = true; console.log('⏰ Daily Task scheduler started'); this.interval = setInterval(() => checkAndPostDailyTask(this.sock), 60000); }
@@ -475,25 +554,130 @@ async function isAuthorized(sock, from, sender) {
   } catch { return false; }
 }
 
+// ✅ NEW: Handle task activation command
+async function handleActivateTask({ reply, senderId, sock, from }) {
+  if (!from.endsWith('@g.us')) {
+    return reply('❌ This command only works in groups!');
+  }
+  
+  if (!await isAuthorized(sock, from, senderId)) {
+    return reply('🚫 Only group admins can activate the daily task system!');
+  }
+  
+  try {
+    // Check if already active
+    const isActive = await isTaskActiveInGroup(from);
+    if (isActive) {
+      return reply('✅ Daily task is already active in this group!');
+    }
+    
+    // Get group name
+    const groupMetadata = await sock.groupMetadata(from);
+    const groupName = groupMetadata.subject;
+    
+    // Activate
+    await activateTaskInGroup(from, groupName, senderId);
+    
+    const activationMessage = `✅ *DAILY TASK ACTIVATED!* ✅\n\n` +
+                              `🏢 Group: ${groupName}\n` +
+                              `👤 Activated by: @${senderId.split('@')[0]}\n\n` +
+                              `📅 Daily tasks will now be posted at ${taskSettings.autoPostTime}\n` +
+                              `💰 Base reward: ₦${taskSettings.baseReward.toLocaleString()}\n\n` +
+                              `💡 Use *${process.env.PREFIX || '.'}task* to view available commands`;
+    
+    await sock.sendMessage(from, { text: activationMessage, mentions: [senderId] });
+  } catch (error) {
+    console.error('Error activating task:', error);
+    await reply('❌ Error activating daily task. Please try again.');
+  }
+}
+
+// ✅ NEW: Handle task deactivation command
+async function handleDeactivateTask({ reply, senderId, sock, from }) {
+  if (!from.endsWith('@g.us')) {
+    return reply('❌ This command only works in groups!');
+  }
+  
+  if (!await isAuthorized(sock, from, senderId)) {
+    return reply('🚫 Only group admins can deactivate the daily task system!');
+  }
+  
+  try {
+    // Check if currently active
+    const isActive = await isTaskActiveInGroup(from);
+    if (!isActive) {
+      return reply('⚠️ Daily task is not active in this group!');
+    }
+    
+    // Deactivate
+    await deactivateTaskInGroup(from);
+    
+    const deactivationMessage = `🚫 *DAILY TASK DEACTIVATED* 🚫\n\n` +
+                                `Daily tasks will no longer be posted in this group.\n\n` +
+                                `To re-activate, use: *${process.env.PREFIX || '.'}activatetask*`;
+    
+    await reply(deactivationMessage);
+  } catch (error) {
+    console.error('Error deactivating task:', error);
+    await reply('❌ Error deactivating daily task. Please try again.');
+  }
+}
+
+// ✅ NEW: Show activation status
+async function handleTaskStatus({ reply, from }) {
+  if (!from.endsWith('@g.us')) {
+    return reply('❌ This command only works in groups!');
+  }
+  
+  try {
+    const isActive = await isTaskActiveInGroup(from);
+    
+    const groupData = await PluginHelpers.safeDBOperation(async (db) => {
+      return await db.collection(COLLECTIONS.ACTIVE_GROUPS).findOne({ groupJid: from });
+    });
+    
+    let statusMessage = `📊 *DAILY TASK STATUS* 📊\n\n`;
+    statusMessage += `🏢 Group: ${from.split('@')[0]}\n`;
+    statusMessage += `Status: ${isActive ? '✅ ACTIVE' : '❌ INACTIVE'}\n\n`;
+    
+    if (groupData && isActive) {
+      statusMessage += `📅 Activated: ${new Date(groupData.activatedAt).toLocaleDateString()}\n`;
+      statusMessage += `👤 Activated by: @${groupData.activatedBy.split('@')[0]}\n`;
+      statusMessage += `⏰ Post time: ${taskSettings.autoPostTime}\n`;
+      statusMessage += `💰 Base reward: ₦${taskSettings.baseReward.toLocaleString()}\n`;
+    } else {
+      statusMessage += `💡 To activate daily tasks, use:\n*${process.env.PREFIX || '.'}activatetask*`;
+    }
+    
+    const mentions = groupData && groupData.activatedBy ? [groupData.activatedBy] : [];
+    await sock.sendMessage(from, { text: statusMessage, mentions });
+    
+  } catch (error) {
+    console.error('Error checking task status:', error);
+    await reply('❌ Error checking task status. Please try again.');
+  }
+}
+
 // MAIN PLUGIN HANDLER
 export default async function dailyTaskHandler(m, sock, config) {
   try {
-    // ✅ Simplified initialization call.
     await initializePlugin();
 
-    if (m.key.remoteJid.endsWith('@g.us') && !taskSettings.groupJids.includes(m.key.remoteJid)) {
-        taskSettings.groupJids.push(m.key.remoteJid);
-        await saveSettings();
-    }
+    // ✅ REMOVED: Auto-registration of groups - now requires explicit activation
     
     if (!taskScheduler) {
         taskScheduler = new TaskScheduler(sock);
         taskScheduler.start();
     }
 
+    // ✅ CHANGED: Only process submissions in activated groups
     if (m.body && !m.body.startsWith(config.PREFIX)) {
-      if (await processTaskSubmission(m, sock)) return;
+      if (m.key.remoteJid.endsWith('@g.us')) {
+        const isActive = await isTaskActiveInGroup(m.key.remoteJid);
+        if (isActive && await processTaskSubmission(m, sock)) return;
+      }
     }
+    
     if (!m.body || !m.body.startsWith(config.PREFIX)) return;
     
     const args = m.body.slice(config.PREFIX.length).trim().split(' ');
@@ -503,19 +687,42 @@ export default async function dailyTaskHandler(m, sock, config) {
     const reply = (text) => sock.sendMessage(from, { text }, { quoted: m });
     const context = { m, sock, config, senderId, from, reply };
     
+    // ✅ NEW: Handle activation commands
     switch (command) {
-      case 'task': case 'dailytask': case 'dt':
+      case 'activatetask':
+      case 'taskon':
+        await handleActivateTask(context);
+        break;
+        
+      case 'deactivatetask':
+      case 'taskoff':
+        await handleDeactivateTask(context);
+        break;
+        
+      case 'taskstatus':
+        await handleTaskStatus(context);
+        break;
+        
+      case 'task':
+      case 'dailytask':
+      case 'dt':
         if (args.length === 1) await showTaskMenu(reply, config.PREFIX);
         else await handleSubCommand(args[1], args.slice(2), context);
         break;
-      case 'taskstats': await handleTaskStats(context); break;
-      case 'testtask': await handleTestTask(context, args.slice(1)); break;
+        
+      case 'taskstats':
+        await handleTaskStats(context);
+        break;
+        
+      case 'testtask':
+        await handleTestTask(context, args.slice(1));
+        break;
     }
-  } catch (error) { console.error('❌ Daily Task plugin error:', error); }
+  } catch (error) {
+    console.error('❌ Daily Task plugin error:', error);
+  }
 }
 
-// Sub-command handlers now use safeOperation implicitly via other functions.
-// Logic within handlers is the same, but the underlying DB calls are safer.
 async function handleSubCommand(subCommand, args, context) {
     const commands = {
         'post': handlePostTask,
@@ -524,6 +731,8 @@ async function handleSubCommand(subCommand, args, context) {
         'settings': (ctx) => handleTaskSettings(ctx, args),
         'completions': (ctx) => handleCompletionsView(ctx, args),
         'records': (ctx) => handleTaskRecords(ctx, args),
+        'status': handleTaskStatus, // ✅ NEW: Added to sub-commands
+        'activegroups': handleActiveGroups, // ✅ NEW: List all active groups
         'help': (ctx) => showTaskMenu(ctx.reply, ctx.config.PREFIX)
     };
     const handler = commands[subCommand.toLowerCase()];
@@ -534,24 +743,84 @@ async function handleSubCommand(subCommand, args, context) {
 async function showTaskMenu(reply, prefix) {
   const menuText = `🎯 *DAILY TASK SYSTEM* 🎯\n\n` +
                    `📊 *User Commands:*\n` +
-                   `• *current* - View today's task\n• *stats* - View your statistics\n• *records* - View completion history\n• *completions* - See who completed today\n\n` +
+                   `• *current* - View today's task\n` +
+                   `• *stats* - View your statistics\n` +
+                   `• *records* - View completion history\n` +
+                   `• *completions* - See who completed today\n` +
+                   `• *status* - Check if task is active in this group\n\n` +
                    `👑 *Admin Commands:*\n` +
-                   `• *post* - Post today's task manually\n• *settings* - System settings\n\n` +
+                   `• *${prefix}activatetask* - Activate in this group\n` +
+                   `• *${prefix}deactivatetask* - Deactivate in this group\n` +
+                   `• *post* - Post today's task manually\n` +
+                   `• *settings* - System settings\n` +
+                   `• *activegroups* - List all active groups\n\n` +
                    `💰 *Rewards:* ₦${taskSettings.baseReward.toLocaleString()} base + ₦${taskSettings.correctnessBonus} per correct answer\n` +
                    `💡 *Usage:* ${prefix}task [command]`;
   await reply(menuText);
 }
 
+// ✅ NEW: List all active groups (owner/admin only)
+async function handleActiveGroups({ reply, senderId, config }) {
+  const ownerNumber = process.env.OWNER_NUMBER || '';
+  const isOwner = senderId.split('@')[0] === ownerNumber;
+  
+  if (!isOwner && !config.ADMIN_NUMBERS?.includes(senderId.split('@')[0])) {
+    return reply('🚫 Only bot owner can view active groups!');
+  }
+  
+  try {
+    const activeGroups = await PluginHelpers.safeDBOperation(async (db) => {
+      return await db.collection(COLLECTIONS.ACTIVE_GROUPS)
+        .find({ isActive: true })
+        .sort({ activatedAt: -1 })
+        .toArray();
+    });
+    
+    if (activeGroups.length === 0) {
+      return reply('📋 *No active groups*\n\nUse *activatetask* in a group to activate daily tasks.');
+    }
+    
+    let listMessage = `📋 *ACTIVE GROUPS* (${activeGroups.length})\n\n`;
+    
+    activeGroups.forEach((group, index) => {
+      listMessage += `${index + 1}. ${group.groupName || 'Unknown Group'}\n`;
+      listMessage += `   📅 Activated: ${new Date(group.activatedAt).toLocaleDateString()}\n`;
+      listMessage += `   🆔 ID: ${group.groupJid.split('@')[0]}\n\n`;
+    });
+    
+    await reply(listMessage);
+    
+  } catch (error) {
+    console.error('Error listing active groups:', error);
+    await reply('❌ Error loading active groups.');
+  }
+}
+
 async function handlePostTask({ reply, senderId, sock, from }) {
   if (!await isAuthorized(sock, from, senderId)) return reply('🚫 Only admins can post tasks.');
   if (!from.endsWith('@g.us')) return reply('❌ This command works only in groups.');
+  
+  // ✅ CHANGED: Check if task is active before posting
+  const isActive = await isTaskActiveInGroup(from);
+  if (!isActive) {
+    return reply(`⚠️ Daily task is not active in this group!\n\nActivate it first: *${process.env.PREFIX || '.'}activatetask*`);
+  }
+  
   try {
     await postDailyTask(sock, from) ? await reply('✅ *Daily task posted successfully!*') : await reply('❌ *Failed to post task.*');
   } catch (error) { await reply('❌ *Error posting task.*'); }
 }
 
-async function handleCurrentTask({ reply, config }) {
+async function handleCurrentTask({ reply, config, from }) {
     try {
+        // ✅ CHANGED: Check if task is active in this group
+        if (from.endsWith('@g.us')) {
+          const isActive = await isTaskActiveInGroup(from);
+          if (!isActive) {
+            return reply(`⚠️ Daily task is not active in this group!\n\nAdmins can activate it: *${config.PREFIX}activatetask*`);
+          }
+        }
+        
         const todayTask = await PluginHelpers.safeDBOperation(db => db.collection(COLLECTIONS.DAILY_TASKS).findOne({ date: getCurrentDate() }));
         if (!todayTask) return reply(`📅 *No task for today.*\n\nAdmins can post manually: *${config.PREFIX}task post*`);
         await reply(formatDailyTaskMessage(todayTask));
@@ -649,8 +918,11 @@ async function handleTestTask({ reply, config }, args) {
   await reply(result);
 }
 
-// Export functions for external use
 export { 
   checkAndPostDailyTask,
-  taskSettings
+  taskSettings,
+  isTaskActiveInGroup,
+  activateTaskInGroup,
+  deactivateTaskInGroup,
+  getActiveGroups
 };
