@@ -1,1433 +1,1365 @@
-// plugins/interview.js - Complete AI-Driven Interview Management System
-import chalk from 'chalk';
+// plugins/autoInterview.js - Enhanced with MongoDB persistence, admin tools, mandatory photo after name, flexible DOB
 import axios from 'axios';
-import moment from 'moment-timezone';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
 
-// Plugin metadata
 export const info = {
-  name: 'Interview System',
-  version: '2.0.0',
+  name: 'autoInterview',
+  version: '2.3.0',
   author: 'Alex Macksyn',
-  description: 'Complete AI-driven interview management system with automated Q&A, reminders, and evaluation',
-  category: 'group-management',
+  description: 'Intelligent AI-powered interview system for Gist HQ group screening 🎯🤖 - Enhanced with mandatory photo, DOB flexibility, and conflict assessment',
   commands: [
-    { cmd: 'interview', desc: 'Main interview command' },
-    { cmd: 'setinterview', desc: 'Configure interview settings' },
-    { cmd: 'interviewstats', desc: 'View interview statistics' },
-    { cmd: 'interviewhelp', desc: 'Show interview help' },
-    { cmd: 'skipquestion', desc: 'Skip current question (admin only)' },
-    { cmd: 'endinterview', desc: 'End ongoing interview (admin only)' },
-    { cmd: 'resetinterview', desc: 'Reset user interview (admin only)' }
-  ],
-  scheduledTasks: [
-    {
-      name: 'interviewReminder',
-      schedule: '0 */2 * * *', // Every 2 hours
-      description: 'Send reminders to users with pending interviews',
-      handler: async () => {
-        await InterviewScheduler.sendReminders();
-      }
-    },
-    {
-      name: 'interviewCleanup',
-      schedule: '0 0 * * *', // Daily at midnight
-      description: 'Clean up expired interviews',
-      handler: async () => {
-        await InterviewScheduler.cleanupExpired();
-      }
-    }
+    { name: 'interview', aliases: ['startinterview'], description: 'Manually start interview process' },
+    { name: 'addquestion', description: 'Add new interview question (Admin only)' },
+    { name: 'removequestion', description: 'Remove interview question (Admin only)' },
+    { name: 'listquestions', description: 'View all interview questions (Admin only)' },
+    { name: 'interviewsettings', description: 'Configure interview settings (Admin only)' },
+    { name: 'interviewstats', description: 'View interview statistics (Admin only)' },
+    { name: 'approveuser', description: 'Manually approve interview candidate (Admin only)' },
+    { name: 'rejectuser', description: 'Manually reject interview candidate (Admin only)' },
+    { name: 'setmaingroup', description: 'Set main group invite link (Admin only)' },
+    { name: 'pendingreviews', description: 'View pending interview reviews (Admin only)' },
+    { name: 'viewtranscript', description: 'View full transcript for a pending session (Admin only)' },
+    { name: 'editevalprompt', description: 'Edit the AI evaluation prompt (Admin only)' },
+    { name: 'resetquestions', description: 'Reset questions to defaults (Admin only)' },
+    { name: 'cancelsession', description: 'Cancel an ongoing interview session (Admin only)' }
   ]
 };
 
-// MongoDB Collections
-const COLLECTIONS = {
-  SETTINGS: 'interview_settings',
-  SESSIONS: 'interview_sessions',
-  QUESTIONS: 'interview_questions',
-  RESULTS: 'interview_results',
-  STATS: 'interview_stats'
+// Groq API configuration
+const GROQ_CONFIG = {
+  API_KEY: process.env.GROQ_API_KEY || '',
+  BASE_URL: 'https://api.groq.com/openai/v1/chat/completions',
+  MODEL: 'llama-3.1-70b-versatile'
 };
 
-// Interview configuration
-const INTERVIEW_CONFIG = {
-  MAX_QUESTIONS: 10,
-  TIME_PER_QUESTION: 5 * 60 * 1000, // 5 minutes
-  PASS_THRESHOLD: 70, // 70% to pass
-  MAX_RETRIES: 3,
-  REMINDER_INTERVAL: 2 * 60 * 60 * 1000, // 2 hours
-  SESSION_EXPIRY: 24 * 60 * 60 * 1000, // 24 hours
-  AI_MODEL: 'llama-3.1-70b-versatile'
-};
+// Updated evaluation prompt (removed bonus for photo since mandatory)
+const DEFAULT_EVAL_PROMPT = `You are evaluating a candidate for "Gist HQ", a fun Nigerian WhatsApp community group focused on sharing good vibes, making friends, and helping each other.
 
-// Default interview questions
+INTERVIEW RESPONSES:
+${'${responses}'}
+
+EVALUATION CRITERIA:
+1. Friendliness and positive attitude (20 points)
+2. Genuine interest in community participation (20 points)
+3. Respectful communication style (15 points)
+4. Clear understanding of group purpose (15 points)
+5. Likelihood to follow group rules (e.g., no spam, respect privacy) (15 points)
+6. Conflict resolution skills and non-violent temperament (15 points)
+7. Age appropriateness (reasonable day/month, adult-like responses) (10 points)
+8. Activity level and commitment to tasks/attendance (10 points)
+
+RED FLAGS (automatic rejection):
+- Disrespectful language or attitude
+- Spam/promotional intent
+- Inappropriate or offensive content
+- Signs of aggression, violence, or hostility
+- Likely underage (based on DOB or immature responses)
+- Clear intent to break rules (e.g., spamming, DMing without consent)
+- Unresponsive or evasive answers
+- No photo provided (mandatory for verification)
+
+SCORING:
+- 80-100: Excellent candidate (APPROVE)
+- 60-79: Good candidate (APPROVE)
+- 40-59: Average candidate (REVIEW - provide specific feedback)
+- 0-39: Poor candidate (REJECT)
+
+Provide your response as a JSON object with three keys: "decision" (string: "APPROVE", "REJECT", or "REVIEW"), "score" (integer: 0-100), and "feedback" (string, max 100 words).
+
+Example:
+{
+  "decision": "APPROVE",
+  "score": 85,
+  "feedback": "Excellent candidate with a positive attitude."
+}
+`;
+
+// Gist HQ Rules (unchanged)
+const GHQ_RULES = `--++-- Welcome to Gist Headquarters! --++--
+This group is A ꜰᴜɴ ᴘʟᴀᴄᴇ ᴛᴏ ꜱʜᴀʀᴇ ɢᴏᴏᴅ ᴠɪʙᴇꜱ, ᴍᴀᴋᴇ Nᴇᴡ Fʀɪᴇɴᴅꜱ ᴀɴᴅ ʜᴇʟᴘ ᴇᴀᴄʜ ᴏᴛʜᴇʀ.
+
+*GHQ Rules*
+1. *Respect and courtesy*: Treat others respectfully and kindly, even when disagreeing or arguing.
+2. *Stay on topic*: Keep conversations relevant to the groups purpose and topic(s).
+3. *No spamming or Link-promotion*: Refrain from sharing unsolicited links, ads, or promoting personal interests without an admin's approval.
+4. *No explicit or offensive content*: Avoid sharing explicit, graphic, or offensive material. It's only allowed on Freaky Fridays.
+5. *No harassment or bullying*: Do not harass, bully, bodyshame or intimidate other group members.
+6. *Respect Members' Privacy*: Please always ask for consent before you DM a member. Do not private chat a member here without their permission.
+7. *No Fighting & Insulting*: Fighting and throwing insults or abusive words or cursing another member is strongly prohibited. 🚫 
+8. *Marking of Attendance*: Marking your daily attendance shows you are actively involved in the group. Skipping 3 days of attendance without stating your reasons to an admin beforehand is a violation.
+9. *Do your Tasks*: Always do your daily tasks the admins assign. Failure to do your tasks for 3 days in a row is a violation.
+10. *Admin decisions are final*: Admins reserve the right to make decisions regarding group management and member conduct. Respect their decisions, no insults or foul words to them will be tolerated.
+
+*Consequences of Rule Violations*
+1. *First offense*: Warning from an admin.
+2. *Second offence*: Temporary removal from the group (1-3 days depending).
+3. *Third offense*: Permanent removal from the group.
+
+*Reporting Issues*
+If you witness or experience any privacy violations, disrespect, or insults, please report them to an admin immediately.
+
+*Admin Contact*
+For any questions, concerns, or issues, please reach out to the *Admins*.
+
+> By joining this group, you acknowledge that you have read, understood, and agree to abide by these rules and regulations. 🖋️`;
+
+// Updated default questions with photo as Q2 (mandatory)
 const DEFAULT_QUESTIONS = [
   {
     id: 1,
-    category: 'introduction',
-    question: 'Tell us about yourself and why you want to join Gist HQ.',
-    type: 'open',
-    weight: 15,
-    aiEvalCriteria: ['clarity', 'enthusiasm', 'relevance', 'length']
+    question: "What's your name and where are you from? Tell us a bit about yourself! 😊",
+    required: true,
+    category: "personal"
   },
   {
     id: 2,
-    category: 'community',
-    question: 'What can you contribute to our community? Share your skills or interests.',
-    type: 'open',
-    weight: 15,
-    aiEvalCriteria: ['specificity', 'value_proposition', 'authenticity']
+    question: "Please upload a photo of yourself (mandatory for verification—send an image in this chat now!)",
+    required: true,
+    type: "photo",
+    category: "personal"
   },
   {
     id: 3,
-    category: 'rules',
-    question: 'How would you handle disagreements or conflicts in a group setting?',
-    type: 'open',
-    weight: 12,
-    aiEvalCriteria: ['maturity', 'conflict_resolution', 'respect']
+    question: "What's your date of birth? (Please provide day and month, e.g., 8/12 or 8th Dec. Year is optional.)",
+    required: true,
+    type: "dob",
+    category: "personal"
   },
   {
     id: 4,
-    category: 'commitment',
-    question: 'Are you willing to actively participate and follow group rules? (Yes/No)',
-    type: 'boolean',
-    weight: 10,
-    correctAnswer: 'yes'
+    question: "How did you hear about Gist HQ and what made you want to join our community?",
+    required: true,
+    category: "motivation"
   },
   {
     id: 5,
-    category: 'engagement',
-    question: 'What topics interest you most? (Tech, Business, Entertainment, Education, Other)',
-    type: 'choice',
-    weight: 8,
-    options: ['Tech', 'Business', 'Entertainment', 'Education', 'Other']
+    question: "What kind of gist (discussions/topics) are you most interested in? Entertainment, business, tech, lifestyle, etc?",
+    required: true,
+    category: "interests"
   },
   {
     id: 6,
-    category: 'values',
-    question: 'Describe what makes a good community member in 2-3 sentences.',
-    type: 'open',
-    weight: 15,
-    aiEvalCriteria: ['understanding', 'values_alignment', 'thoughtfulness']
+    question: "Are you here to share gist, learn from others, or just catch up on what's happening?",
+    required: true,
+    category: "purpose"
   },
   {
     id: 7,
-    category: 'availability',
-    question: 'How often can you engage with the community? (Daily, Few times a week, Weekly)',
-    type: 'choice',
-    weight: 8,
-    options: ['Daily', 'Few times a week', 'Weekly', 'Occasionally']
+    question: "What's one interesting thing about yourself that you'd like the community to know?",
+    required: false,
+    category: "personal"
   },
   {
     id: 8,
-    category: 'spam',
-    question: 'Will you refrain from spamming or sharing inappropriate content? (Yes/No)',
-    type: 'boolean',
-    weight: 12,
-    correctAnswer: 'yes'
+    question: "How do you plan to contribute positively to our Gist HQ family?",
+    required: true,
+    category: "contribution"
   },
   {
     id: 9,
-    category: 'experience',
-    question: 'Have you been part of similar communities before? Share your experience.',
-    type: 'open',
-    weight: 10,
-    aiEvalCriteria: ['experience', 'lessons_learned', 'growth']
+    question: "Imagine a group member disagrees with your opinion strongly and starts arguing—how would you handle the situation to keep things respectful?",
+    required: true,
+    category: "conflict"
   },
   {
     id: 10,
-    category: 'final',
-    question: 'Any final thoughts or questions about joining Gist HQ?',
-    type: 'open',
-    weight: 5,
-    aiEvalCriteria: ['curiosity', 'engagement', 'professionalism']
+    question: "Have you ever been in a situation where a group chat got heated? What did you do, and what would you do differently now to prevent escalation?",
+  required: true,
+    category: "conflict"
+  },
+  {
+    id: 11,
+    question: "On a scale of 1-10, how patient are you in dealing with differing views, and can you give an example of resolving a conflict peacefully?",
+    required: true,
+    category: "conflict"
+  },
+  {
+    id: 12,
+    question: "What time zone are you in, and how often do you think you'll be active in the group (e.g., daily, a few times a week)?",
+    required: true,
+    category: "activity"
+  },
+  {
+    id: 13,
+    question: "Have you been part of other WhatsApp groups before? What did you like or dislike about them, and how will that influence your participation here?",
+    required: false,
+    category: "experience"
+  },
+  {
+    id: 14,
+    question: "How do you feel about group rules like no spamming, respecting privacy (e.g., asking before DMing), and marking daily attendance? Are there any you might find challenging?",
+    required: true,
+    category: "rules"
+  },
+  {
+    id: 15,
+    question: "What’s your preferred way to communicate in groups—text, voice notes, memes, or polls? And how do you ensure your messages add value without overwhelming others?",
+    required: false,
+    category: "communication"
+  },
+  {
+    id: 16,
+    question: "If you notice someone breaking a rule (e.g., sharing offensive content), would you report it to an admin, ignore it, or confront them directly? Why?",
+    required: true,
+    category: "responsibility"
   }
 ];
 
-// Interview Manager Class
-class InterviewManager {
-  // Initialize interview settings for a group
-  static async initializeGroup(groupId, config) {
-    try {
-      const col = await PluginHelpers.getCollection(COLLECTIONS.SETTINGS);
-      
-      const settings = {
-        groupId,
-        enabled: true,
-        mainGroupLink: config.mainGroupLink || '',
-        mainGroupId: config.mainGroupId || '',
-        welcomeMessage: config.welcomeMessage || this.getDefaultWelcomeMessage(),
-        passMessage: config.passMessage || this.getDefaultPassMessage(),
-        failMessage: config.failMessage || this.getDefaultFailMessage(),
-        questions: config.questions || DEFAULT_QUESTIONS,
-        passThreshold: config.passThreshold || INTERVIEW_CONFIG.PASS_THRESHOLD,
-        maxRetries: config.maxRetries || INTERVIEW_CONFIG.MAX_RETRIES,
-        autoKickOnFail: config.autoKickOnFail !== false,
-        requireAllQuestions: config.requireAllQuestions !== false,
-        useAI: config.useAI !== false,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        createdBy: config.createdBy || 'system'
-      };
-      
-      await col.updateOne(
-        { groupId },
-        { $set: settings },
-        { upsert: true }
-      );
-      
-      console.log(chalk.green(`✅ Interview initialized for group: ${groupId}`));
-      return settings;
-      
-    } catch (error) {
-      console.error(chalk.red('❌ Error initializing interview:'), error.message);
-      throw error;
-    }
-  }
-  
-  // Get group settings
-  static async getGroupSettings(groupId) {
-    try {
-      const col = await PluginHelpers.getCollection(COLLECTIONS.SETTINGS);
-      return await col.findOne({ groupId });
-    } catch (error) {
-      console.error(chalk.red('❌ Error getting settings:'), error.message);
-      return null;
-    }
-  }
-  
-  // Update group settings
-  static async updateSettings(groupId, updates) {
-    try {
-      const col = await PluginHelpers.getCollection(COLLECTIONS.SETTINGS);
-      
-      await col.updateOne(
-        { groupId },
-        { 
-          $set: { 
-            ...updates, 
-            updatedAt: new Date() 
-          } 
-        }
-      );
-      
-      return true;
-    } catch (error) {
-      console.error(chalk.red('❌ Error updating settings:'), error.message);
-      return false;
-    }
-  }
-  
-  // Start interview session
-  static async startSession(groupId, userId, userName) {
-    try {
-      const settings = await this.getGroupSettings(groupId);
-      
-      if (!settings || !settings.enabled) {
-        return { success: false, reason: 'Interview not enabled for this group' };
-      }
-      
-      const col = await PluginHelpers.getCollection(COLLECTIONS.SESSIONS);
-      
-      // Check for existing session
-      const existing = await col.findOne({ 
-        groupId, 
-        userId, 
-        status: { $in: ['active', 'pending'] }
-      });
-      
-      if (existing) {
-        return { 
-          success: false, 
-          reason: 'You already have an active interview session',
-          session: existing
-        };
-      }
-      
-      // Check retry limit
-      const previousAttempts = await col.countDocuments({
-        groupId,
-        userId,
-        status: 'failed'
-      });
-      
-      if (previousAttempts >= settings.maxRetries) {
-        return {
-          success: false,
-          reason: `Maximum retry limit (${settings.maxRetries}) reached`
-        };
-      }
-      
-      // Create new session
-      const session = {
-        groupId,
-        userId,
-        userName,
-        status: 'active',
-        currentQuestion: 0,
-        answers: [],
-        score: 0,
-        startedAt: new Date(),
-        lastActivity: new Date(),
-        expiresAt: new Date(Date.now() + INTERVIEW_CONFIG.SESSION_EXPIRY),
-        attempt: previousAttempts + 1,
-        remindersSent: 0
-      };
-      
-      const result = await col.insertOne(session);
-      session._id = result.insertedId;
-      
-      console.log(chalk.green(`🎯 Interview started for ${userName} in ${groupId}`));
-      return { success: true, session };
-      
-    } catch (error) {
-      console.error(chalk.red('❌ Error starting session:'), error.message);
-      return { success: false, reason: error.message };
-    }
-  }
-  
-  // Get active session
-  static async getSession(groupId, userId) {
-    try {
-      const col = await PluginHelpers.getCollection(COLLECTIONS.SESSIONS);
-      return await col.findOne({ 
-        groupId, 
-        userId, 
-        status: 'active'
-      });
-    } catch (error) {
-      console.error(chalk.red('❌ Error getting session:'), error.message);
-      return null;
-    }
-  }
-  
-  // Submit answer
-  static async submitAnswer(groupId, userId, answer) {
-    try {
-      const session = await this.getSession(groupId, userId);
-      
-      if (!session) {
-        return { success: false, reason: 'No active interview session found' };
-      }
-      
-      const settings = await this.getGroupSettings(groupId);
-      const question = settings.questions[session.currentQuestion];
-      
-      if (!question) {
-        return { success: false, reason: 'Invalid question state' };
-      }
-      
-      // Evaluate answer
-      const evaluation = await this.evaluateAnswer(question, answer, settings.useAI);
-      
-      // Store answer
-      const answerRecord = {
-        questionId: question.id,
-        question: question.question,
-        answer: answer,
-        score: evaluation.score,
-        maxScore: question.weight,
-        feedback: evaluation.feedback,
-        timestamp: new Date()
-      };
-      
-      // Update session
-      const col = await PluginHelpers.getCollection(COLLECTIONS.SESSIONS);
-      
-      const newScore = session.score + evaluation.score;
-      const nextQuestion = session.currentQuestion + 1;
-      const isComplete = nextQuestion >= settings.questions.length;
-      
-      const updateData = {
-        $push: { answers: answerRecord },
-        $set: {
-          score: newScore,
-          currentQuestion: nextQuestion,
-          lastActivity: new Date()
-        }
-      };
-      
-      if (isComplete) {
-        const totalPossible = settings.questions.reduce((sum, q) => sum + q.weight, 0);
-        const percentage = (newScore / totalPossible) * 100;
-        const passed = percentage >= settings.passThreshold;
-        
-        updateData.$set.status = passed ? 'passed' : 'failed';
-        updateData.$set.completedAt = new Date();
-        updateData.$set.finalScore = newScore;
-        updateData.$set.percentage = percentage;
-        
-        // Save result
-        await this.saveResult(groupId, userId, session, passed, percentage);
-      }
-      
-      await col.updateOne({ _id: session._id }, updateData);
-      
-      return {
-        success: true,
-        evaluation,
-        isComplete,
-        nextQuestion: isComplete ? null : nextQuestion,
-        score: newScore
-      };
-      
-    } catch (error) {
-      console.error(chalk.red('❌ Error submitting answer:'), error.message);
-      return { success: false, reason: error.message };
-    }
-  }
-  
-  // Evaluate answer using AI or rules
-  static async evaluateAnswer(question, answer, useAI = true) {
-    try {
-      // Basic validation
-      if (!answer || answer.trim().length === 0) {
-        return {
-          score: 0,
-          feedback: '❌ Empty answer. Please provide a response.',
-          passed: false
-        };
-      }
-      
-      // Boolean questions
-      if (question.type === 'boolean') {
-        const normalizedAnswer = answer.toLowerCase().trim();
-        const correct = normalizedAnswer === question.correctAnswer.toLowerCase() ||
-                       (question.correctAnswer.toLowerCase() === 'yes' && ['yes', 'y', 'yeah', 'sure', 'okay'].includes(normalizedAnswer)) ||
-                       (question.correctAnswer.toLowerCase() === 'no' && ['no', 'n', 'nope', 'nah'].includes(normalizedAnswer));
-        
-        return {
-          score: correct ? question.weight : 0,
-          feedback: correct ? '✅ Correct!' : '❌ Incorrect answer.',
-          passed: correct
-        };
-      }
-      
-      // Choice questions
-      if (question.type === 'choice') {
-        const isValidChoice = question.options.some(opt => 
-          answer.toLowerCase().includes(opt.toLowerCase())
-        );
-        
-        const score = isValidChoice ? question.weight : question.weight * 0.5;
-        
-        return {
-          score,
-          feedback: isValidChoice ? '✅ Valid choice' : '⚠️ Acceptable answer',
-          passed: isValidChoice
-        };
-      }
-      
-      // Open-ended questions with AI evaluation
-      if (question.type === 'open' && useAI && question.aiEvalCriteria) {
-        return await this.aiEvaluate(question, answer);
-      }
-      
-      // Fallback: Basic length and quality check
-      const wordCount = answer.trim().split(/\s+/).length;
-      let score = 0;
-      let feedback = '';
-      
-      if (wordCount < 5) {
-        score = question.weight * 0.3;
-        feedback = '⚠️ Answer is too short. Please elaborate more.';
-      } else if (wordCount < 20) {
-        score = question.weight * 0.7;
-        feedback = '✓ Good answer, but could use more detail.';
-      } else {
-        score = question.weight;
-        feedback = '✅ Well-detailed answer!';
-      }
-      
-      return { score, feedback, passed: score >= question.weight * 0.6 };
-      
-    } catch (error) {
-      console.error(chalk.red('❌ Evaluation error:'), error.message);
-      return {
-        score: question.weight * 0.5,
-        feedback: '⚠️ Auto-scored based on length',
-        passed: true
-      };
-    }
-  }
-  
-  // AI-powered evaluation using Groq
-  static async aiEvaluate(question, answer) {
-    try {
-      const groqApiKey = process.env.GROQ_API_KEY;
-      
-      if (!groqApiKey) {
-        console.warn(chalk.yellow('⚠️ GROQ_API_KEY not set, using fallback evaluation'));
-        return {
-          score: question.weight * 0.7,
-          feedback: '✓ Answer recorded (AI evaluation unavailable)',
-          passed: true
-        };
-      }
-      
-      const prompt = `You are an interview evaluator for a WhatsApp community called "Gist HQ".
+// MongoDB Collections
+const COLLECTIONS = {
+  sessions: 'interviewSessions',
+  questions: 'interviewQuestions',
+  settings: 'groupSettings',
+  stats: 'interviewStats',
+  evalPrompts: 'evaluationPrompts'
+};
 
-Question: ${question.question}
-Category: ${question.category}
-User's Answer: ${answer}
+// Interview storage
+const interviewSessions = new Map();
+const interviewQuestions = new Map();
+const groupSettings = new Map();
+const interviewStats = new Map();
+const evalPrompts = new Map();
 
-Evaluation Criteria: ${question.aiEvalCriteria.join(', ')}
+// Interview session structure
+class InterviewSession {
+  constructor(userId, groupId, userName) {
+    this.userId = userId;
+    this.groupId = groupId;
+    this.userName = userName;
+    this.displayName = '';
+    this.dob = { day: null, month: null, year: null }; // Store parsed DOB
+    this.photo = null; // Store photo metadata (mandatory)
+    this.startTime = new Date();
+    this.currentQuestion = 0;
+    this.responses = [];
+    this.followUpResponses = [];
+    this.conversationHistory = [];
+    this.status = 'active';
+    this.remindersSent = 0;
+    this.lastResponseTime = new Date();
+    this.aiFollowUps = 0;
+    this.rulesAcknowledged = false;
+    this.score = 0;
+    this.feedback = '';
+    this.rulesAckAttempts = 0;
+  }
 
-Evaluate this answer and provide:
-1. A score from 0-${question.weight} (be fair but critical)
-2. Brief constructive feedback (1-2 sentences)
-3. Whether they passed (score >= ${question.weight * 0.6})
+  toDB() {
+    const obj = { ...this };
+    obj.startTime = this.startTime.toISOString();
+    obj.lastResponseTime = this.lastResponseTime.toISOString();
+    return obj;
+  }
 
-Respond in this exact JSON format:
-{
-  "score": <number>,
-  "feedback": "<feedback text>",
-  "passed": <boolean>
-}`;
+  static fromDB(obj) {
+    const session = new InterviewSession(obj.userId, obj.groupId, obj.userName);
+    Object.assign(session, obj);
+    session.startTime = new Date(obj.startTime);
+    session.lastResponseTime = new Date(obj.lastResponseTime);
+    return session;
+  }
+}
+
+// Group settings structure
+class GroupSettings {
+  constructor(groupId) {
+    this.groupId = groupId;
+    this.interviewGroupId = groupId;
+    this.mainGroupLink = '';
+    this.linkExpiryMinutes = 30;
+    this.responseTimeoutMinutes = 10;
+    this.reminderTimeoutMinutes = 5;
+    this.maxReminders = 2;
+    this.minRequiredQuestions = 0; // Deprecated, will be calculated dynamically
+    this.aiFollowUpEnabled = true;
+    this.autoRemoveEnabled = true;
+    this.adminIds = [];
+    this.isActive = true;
+    this.maxSessionAttempts = 3;
+    this.sessionAttempts = new Map();
+  }
+
+  toDB() {
+    const obj = { ...this };
+    obj.sessionAttempts = Object.fromEntries(this.sessionAttempts); // Convert Map to object
+    return obj;
+  }
+
+  static fromDB(obj) {
+    const settings = new GroupSettings(obj.groupId);
+    Object.assign(settings, obj);
+    // Ensure sessionAttempts is a Map, converting from object if needed
+    settings.sessionAttempts = new Map(Object.entries(obj.sessionAttempts || {}));
+    return settings;
+  }
+}
+
+// AI Interview Engine
+class AIInterviewEngine {
+  constructor() {
+    this.rateLimits = new Map();
+  }
+
+  isRateLimited(userId) {
+    const now = Date.now();
+    const limit = this.rateLimits.get(userId) || { calls: 0, resetTime: now + 60000 };
+    if (now > limit.resetTime) {
+      limit.calls = 0;
+      limit.resetTime = now + 60000;
+    }
+    if (limit.calls >= 5) return true;
+    limit.calls++;
+    this.rateLimits.set(userId, limit);
+    return false;
+  }
+
+  async generateFollowUp(question, userResponse, conversationHistory, userName = '') {
+    if (this.isRateLimited('ai')) return null;
+
+    try {
+      const messages = [
+        {
+          role: 'system',
+          content: `You are an intelligent interviewer for "Gist HQ". Ask thoughtful follow-up questions to get to know the candidate better.
+
+Rules:
+1. Keep it conversational, friendly, use ${userName}'s name
+2. Use Nigerian expressions like "Ehen", "Omo" sparingly
+3. ONE question, <100 characters
+4. Relevant to response
+5. Curious about background/interests
+6. Avoid repetition
+
+Original: "${question}"
+Response: "${userResponse}"
+User: ${userName}`
+        },
+        ...conversationHistory.slice(-4),
+        { role: 'user', content: `Generate a follow-up question based on: "${userResponse}"` }
+      ];
 
       const response = await axios.post(
-        'https://api.groq.com/openai/v1/chat/completions',
+        GROQ_CONFIG.BASE_URL,
         {
-          model: INTERVIEW_CONFIG.AI_MODEL,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3,
-          max_tokens: 200
+          model: GROQ_CONFIG.MODEL,
+          messages: messages,
+          temperature: 0.8,
+          max_tokens: 100,
+          top_p: 0.9
         },
         {
           headers: {
-            'Authorization': `Bearer ${groqApiKey}`,
+            'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 15000
+        }
+      );
+
+      return response.data?.choices?.[0]?.message?.content?.trim() || null;
+
+    } catch (error) {
+      console.error('AI Follow-up Error:', error);
+      return null;
+    }
+  }
+
+  async parseDOB(userResponse, userName) {
+    try {
+      const messages = [
+        {
+          role: 'system',
+          content: `Parse a date of birth from a user's response. The user may provide day and month (year optional) in formats like "8/12", "8th Dec", "December 8", or "Dec 8". Return JSON with day, month (1-12), and year (null if not provided). If ambiguous or invalid, return null and a clarification question.`
+        },
+        {
+          role: 'user',
+          content: `User: ${userName}\nResponse: "${userResponse}"`
+        }
+      ];
+
+      const response = await axios.post(
+        GROQ_CONFIG.BASE_URL,
+        {
+          model: GROQ_CONFIG.MODEL,
+          messages: messages,
+          temperature: 0.3,
+          max_tokens: 150
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
             'Content-Type': 'application/json'
           },
           timeout: 10000
         }
       );
-      
-      const aiResponse = response.data.choices[0].message.content;
-      const parsed = JSON.parse(aiResponse);
-      
-      console.log(chalk.cyan(`🤖 AI evaluated: ${parsed.score}/${question.weight}`));
-      
-      return {
-        score: Math.min(parsed.score, question.weight),
-        feedback: parsed.feedback,
-        passed: parsed.passed
-      };
-      
+
+      const result = response.data?.choices?.[0]?.message?.content?.trim();
+      try {
+        const parsed = JSON.parse(result);
+        if (parsed.day && parsed.month) return parsed;
+        return { day: null, month: null, year: null, clarification: parsed.clarification || 'Please provide your DOB as day/month, e.g., 8/12 or 8th Dec.' };
+      } catch {
+        return { day: null, month: null, year: null, clarification: 'Please provide your DOB as day/month, e.g., 8/12 or 8th Dec.' };
+      }
     } catch (error) {
-      console.error(chalk.red('❌ AI evaluation error:'), error.message);
-      
-      // Fallback scoring
-      const wordCount = answer.trim().split(/\s+/).length;
-      const score = wordCount >= 20 ? question.weight : question.weight * 0.7;
-      
-      return {
-        score,
-        feedback: '✓ Answer recorded and evaluated',
-        passed: true
-      };
+      console.error('DOB Parse Error:', error);
+      return { day: null, month: null, year: null, clarification: 'Please provide your DOB as day/month, e.g., 8/12 or 8th Dec.' };
     }
   }
-  
-  // Save interview result
-  static async saveResult(groupId, userId, session, passed, percentage) {
+
+  async evaluateInterview(session, customPrompt = '') {
     try {
-      const col = await PluginHelpers.getCollection(COLLECTIONS.RESULTS);
+      const responses = session.responses.map(r => `Q: ${r.question}\nA: ${r.answer}`).join('\n\n');
+      const followUps = session.followUpResponses.map(f => `Follow-up: ${f.question}\nA: ${f.answer}`).join('\n\n');
+      const photoInfo = session.photo ? `Photo provided: Yes` : `Photo provided: No (mandatory - potential red flag)`;
       
-      const result = {
-        groupId,
-        userId,
-        sessionId: session._id,
-        userName: session.userName,
-        passed,
-        score: session.score,
-        percentage,
-        answers: session.answers,
-        attempt: session.attempt,
-        completedAt: new Date(),
-        duration: new Date() - session.startedAt
-      };
-      
-      await col.insertOne(result);
-      
-      // Update stats
-      await this.updateStats(groupId, passed);
-      
-      return result;
-      
-    } catch (error) {
-      console.error(chalk.red('❌ Error saving result:'), error.message);
-    }
-  }
-  
-  // Update statistics
-  static async updateStats(groupId, passed) {
-    try {
-      const col = await PluginHelpers.getCollection(COLLECTIONS.STATS);
-      
-      await col.updateOne(
-        { groupId },
+      const prompt = customPrompt || DEFAULT_EVAL_PROMPT.replace('${responses}', responses + (followUps ? '\n\n' + followUps : '') + `\n\n${photoInfo}`);
+
+      const messages = [
+        { role: 'system', content: 'You are a fair community moderator evaluating new members.' },
+        { role: 'user', content: prompt }
+      ];
+
+      const response = await axios.post(
+        GROQ_CONFIG.BASE_URL,
         {
-          $inc: {
-            totalInterviews: 1,
-            passed: passed ? 1 : 0,
-            failed: passed ? 0 : 1
+          model: GROQ_CONFIG.MODEL,
+          messages: messages,
+          temperature: 0.3,
+          max_tokens: 200
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
+            'Content-Type': 'application/json'
           },
-          $set: { updatedAt: new Date() }
-        },
-        { upsert: true }
-      );
-      
-    } catch (error) {
-      console.error(chalk.red('❌ Error updating stats:'), error.message);
-    }
-  }
-  
-  // Get statistics
-  static async getStats(groupId) {
-    try {
-      const col = await PluginHelpers.getCollection(COLLECTIONS.STATS);
-      const stats = await col.findOne({ groupId });
-      
-      if (!stats) {
-        return {
-          totalInterviews: 0,
-          passed: 0,
-          failed: 0,
-          passRate: 0
-        };
-      }
-      
-      stats.passRate = stats.totalInterviews > 0 
-        ? Math.round((stats.passed / stats.totalInterviews) * 100)
-        : 0;
-      
-      return stats;
-      
-    } catch (error) {
-      console.error(chalk.red('❌ Error getting stats:'), error.message);
-      return null;
-    }
-  }
-  
-  // Default messages
-  static getDefaultWelcomeMessage() {
-    return `╭─────────────────────╮
-│   🎯 INTERVIEW TIME!   │
-╰─────────────────────╯
-
-Welcome to Gist HQ Interview! 🎉
-
-You'll answer {total} questions to join our main group.
-
-📋 *Interview Rules:*
-• Answer honestly and thoughtfully
-• Take your time (5 min per question)
-• Score at least {threshold}% to pass
-• You have {maxRetries} attempts
-
-🤖 *AI Evaluation:* Your answers will be evaluated by our AI system for quality and relevance.
-
-✨ Ready? Let's begin!
-
-Type anything to start! 🚀`;
-  }
-  
-  static getDefaultPassMessage() {
-    return `╭─────────────────────╮
-│   🎊 CONGRATULATIONS!   │
-╰─────────────────────╯
-
-✅ *You passed the interview!*
-
-📊 *Your Score:* {score}/{total} ({percentage}%)
-
-🎉 You've demonstrated great potential and we're excited to have you in Gist HQ!
-
-🔗 *Join Main Group:*
-{groupLink}
-
-Welcome aboard! 🚀`;
-  }
-  
-  static getDefaultFailMessage() {
-    return `╭─────────────────────╮
-│   😔 TRY AGAIN!   │
-╰─────────────────────╯
-
-❌ *Interview Not Passed*
-
-📊 *Your Score:* {score}/{total} ({percentage}%)
-🎯 *Required:* {threshold}%
-
-💡 *Feedback:* Your answers need more detail and thoughtfulness.
-
-🔄 *Retries Left:* {retriesLeft}
-
-Don't worry! Review your answers and try again. You can do it! 💪`;
-  }
-}
-
-// Scheduler for reminders and cleanup
-class InterviewScheduler {
-  static async sendReminders() {
-    try {
-      console.log(chalk.blue('⏰ Sending interview reminders...'));
-      
-      const col = await PluginHelpers.getCollection(COLLECTIONS.SESSIONS);
-      
-      const stuckSessions = await col.find({
-        status: 'active',
-        lastActivity: { 
-          $lt: new Date(Date.now() - INTERVIEW_CONFIG.REMINDER_INTERVAL) 
-        },
-        remindersSent: { $lt: 3 }
-      }).toArray();
-      
-      console.log(chalk.cyan(`📬 Found ${stuckSessions.length} sessions needing reminders`));
-      
-      for (const session of stuckSessions) {
-        // This will be sent via the bot's message handler
-        console.log(chalk.yellow(`⏰ Reminder needed for ${session.userName}`));
-        
-        await col.updateOne(
-          { _id: session._id },
-          { 
-            $inc: { remindersSent: 1 },
-            $set: { lastReminder: new Date() }
-          }
-        );
-      }
-      
-    } catch (error) {
-      console.error(chalk.red('❌ Reminder error:'), error.message);
-    }
-  }
-  
-  static async cleanupExpired() {
-    try {
-      console.log(chalk.blue('🧹 Cleaning up expired interview sessions...'));
-      
-      const col = await PluginHelpers.getCollection(COLLECTIONS.SESSIONS);
-      
-      const result = await col.updateMany(
-        {
-          status: 'active',
-          expiresAt: { $lt: new Date() }
-        },
-        {
-          $set: {
-            status: 'expired',
-            expiredAt: new Date()
-          }
+          timeout: 20000
         }
       );
-      
-      if (result.modifiedCount > 0) {
-        console.log(chalk.green(`✅ Cleaned up ${result.modifiedCount} expired sessions`));
+
+      if (response.data?.choices?.[0]?.message?.content) {
+        const result = response.data.choices[0].message.content.trim();
+        try {
+          // Attempt to find JSON block if markdown is used
+          const jsonMatch = result.match(/```json\n([\s\S]*?)\n```/);
+          const jsonString = jsonMatch ? jsonMatch[1] : result;
+          const evalResult = JSON.parse(jsonString);
+          return {
+            decision: (evalResult.decision || 'REVIEW').toUpperCase(),
+            score: parseInt(evalResult.score) || 50,
+            feedback: (evalResult.feedback || 'No feedback provided').substring(0, 150)
+          };
+        } catch (e) {
+          console.error('Failed to parse AI evaluation JSON:', e);
+          return { decision: 'REVIEW', score: 50, feedback: 'AI evaluation parsing failed' };
+        }
       }
-      
+      return { decision: 'REVIEW', score: 50, feedback: 'AI evaluation failed' };
+
     } catch (error) {
-      console.error(chalk.red('❌ Cleanup error:'), error.message);
+      console.error('AI Evaluation Error:', error);
+      return { decision: 'REVIEW', score: 50, feedback: 'Technical evaluation error' };
     }
   }
 }
 
-// Main plugin handler
-export default async function interviewPlugin(m, sock, config, bot) {
-  try {
-    const body = m.body?.trim() || '';
-    const prefix = config.PREFIX;
-    
-    // Only process commands that start with prefix
-    if (!body.startsWith(prefix)) {
-      // Handle interview responses (non-command messages in interview groups)
-      await handleInterviewResponse(m, sock, config);
+const aiEngine = new AIInterviewEngine();
+
+// Timer management (unchanged)
+const responseTimers = new Map();
+const reminderTimers = new Map();
+
+function setResponseTimer(userId, timeoutMs, callback) {
+  clearResponseTimer(userId);
+  responseTimers.set(userId, setTimeout(callback, timeoutMs));
+}
+
+function setReminderTimer(userId, timeoutMs, callback) {
+  clearReminderTimer(userId);
+  reminderTimers.set(userId, setTimeout(callback, timeoutMs));
+}
+
+function clearResponseTimer(userId) {
+  if (responseTimers.has(userId)) {
+    clearTimeout(responseTimers.get(userId));
+    responseTimers.delete(userId);
+  }
+}
+
+function clearReminderTimer(userId) {
+  if (reminderTimers.has(userId)) {
+    clearTimeout(reminderTimers.get(userId));
+    reminderTimers.delete(userId);
+  }
+}
+
+// MongoDB Helper Functions (unchanged)
+async function saveSession(session) {
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.replaceOne({ userId: session.userId }, session.toDB(), { upsert: true });
+  }, COLLECTIONS.sessions);
+}
+
+async function loadSession(userId) {
+  const obj = await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.findOne({ userId });
+  }, COLLECTIONS.sessions);
+  if (obj) {
+    const session = InterviewSession.fromDB(obj);
+    interviewSessions.set(userId, session);
+    return session;
+  }
+  return null;
+}
+
+async function deleteSession(userId) {
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.deleteOne({ userId });
+  }, COLLECTIONS.sessions);
+  interviewSessions.delete(userId);
+  clearResponseTimer(userId);
+  clearReminderTimer(userId);
+}
+
+async function initGroupSettings(groupId) {
+  let settings = await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.findOne({ groupId });
+  }, COLLECTIONS.settings);
+
+  if (!settings) {
+    settings = new GroupSettings(groupId);
+    await PluginHelpers.safeDBOperation(async (db, collection) => {
+      await collection.insertOne(settings.toDB());
+    }, COLLECTIONS.settings);
+  } else {
+    settings = GroupSettings.fromDB(settings);
+  }
+  groupSettings.set(groupId, settings);
+
+  let questions = await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.findOne({ groupId });
+  }, COLLECTIONS.questions);
+  if (!questions || !questions.questions) {
+    questions = { groupId, questions: [...DEFAULT_QUESTIONS] };
+    await PluginHelpers.safeDBOperation(async (db, collection) => {
+      await collection.insertOne(questions);
+    }, COLLECTIONS.questions);
+  }
+  interviewQuestions.set(groupId, questions.questions);
+
+  let stats = await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.findOne({ groupId });
+  }, COLLECTIONS.stats);
+  if (!stats) {
+    stats = { groupId, totalInterviews: 0, approved: 0, rejected: 0, autoRemoved: 0, pendingReviews: 0, averageScore: 0, averageDuration: 0 };
+    await PluginHelpers.safeDBOperation(async (db, collection) => {
+      await collection.insertOne(stats);
+    }, COLLECTIONS.stats);
+  }
+  interviewStats.set(groupId, stats);
+
+  let prompt = await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.findOne({ groupId });
+  }, COLLECTIONS.evalPrompts);
+  if (!prompt) {
+    prompt = { groupId, prompt: DEFAULT_EVAL_PROMPT };
+    await PluginHelpers.safeDBOperation(async (db, collection) => {
+      await collection.insertOne(prompt);
+    }, COLLECTIONS.evalPrompts);
+  }
+  evalPrompts.set(groupId, prompt.prompt);
+
+  return settings;
+}
+
+async function saveSettings(groupId, settings) {
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.replaceOne({ groupId }, settings.toDB());
+  }, COLLECTIONS.settings);
+}
+
+async function saveQuestions(groupId, questions) {
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.updateOne({ groupId }, { $set: { questions } }, { upsert: true });
+  }, COLLECTIONS.questions);
+}
+
+async function saveStats(groupId, stats) {
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.replaceOne({ groupId }, { groupId, ...stats });
+  }, COLLECTIONS.stats);
+}
+
+async function saveEvalPrompt(groupId, prompt) {
+  await PluginHelpers.safeDBOperation(async (db, collection) => {
+    await collection.replaceOne({ groupId }, { groupId, prompt }, { upsert: true });
+  }, COLLECTIONS.evalPrompts);
+}
+
+async function getPendingSessions(groupId) {
+  return await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.find({ groupId, status: 'pending_review' }).toArray();
+  }, COLLECTIONS.sessions);
+}
+
+async function getActiveSessions(groupId) {
+  return await PluginHelpers.safeDBOperation(async (db, collection) => {
+    return await collection.find({ groupId, status: 'active' }).toArray();
+  }, COLLECTIONS.sessions);
+}
+
+async function startInterview(userId, groupId, userName, sock) {
+  const settings = await initGroupSettings(groupId);
+  if (!settings.isActive) return;
+
+  const attemptsKey = `${groupId}_${userId}`;
+  const attempts = settings.sessionAttempts.get(attemptsKey) || 0;
+  if (attempts >= settings.maxSessionAttempts) {
+    await sock.sendMessage(groupId, { text: `⚠️ ${userName}, you've reached the max interview attempts. Contact an admin if needed!` });
+    return;
+  }
+  settings.sessionAttempts.set(attemptsKey, attempts + 1);
+  await saveSettings(groupId, settings);
+
+  let session = interviewSessions.get(userId) || await loadSession(userId);
+  if (session) {
+    await sock.sendMessage(groupId, { text: `⚠️ ${userName}, you have an ongoing interview. Current: Question ${session.currentQuestion + 1}/${interviewQuestions.get(groupId).length}. Reply to continue!` });
+    return;
+  }
+
+  session = new InterviewSession(userId, groupId, userName);
+  interviewSessions.set(userId, session);
+  await saveSession(session);
+
+  const welcomeMsg = `🎉 *Welcome to Gist HQ Interview, ${userName}!* 🎉
+
+Ehen, ${userName}! 👋 I'm your friendly AI interviewer, here to gist with you before you join our main Gist HQ fam! 
+
+This na just 10-15 minutes. Ready? Omo, let's start! 🚀
+
+*Question 1:* What's your name and where are you from? Tell us a bit about yourself! 😊`;
+
+  await sock.sendMessage(groupId, { text: welcomeMsg });
+
+  const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
+  setResponseTimer(userId, timeoutMs, () => handleResponseTimeout(userId, sock));
+
+  console.log(`✅ Interview started for ${userName} (${userId}) in group ${groupId}`);
+}
+
+async function handleInterviewResponse(session, userMessage, sock, isImage = false, imageData = null) {
+  const settings = groupSettings.get(session.groupId);
+  const questions = interviewQuestions.get(session.groupId) || DEFAULT_QUESTIONS;
+
+  session.lastResponseTime = new Date();
+  clearResponseTimer(session.userId);
+  clearReminderTimer(session.userId);
+  await saveSession(session);
+
+  session.conversationHistory.push({
+    role: 'user',
+    content: isImage ? '[Image]' : userMessage,
+    timestamp: new Date()
+  });
+
+  // Extract display name from Q1
+  if (session.currentQuestion === 0 && !session.displayName && !isImage) {
+    const nameMatch = userMessage.match(/name\s*(is|called)?\s*([A-Za-z\s]+)/i);
+    session.displayName = nameMatch ? nameMatch[2].trim() : session.userName;
+    await saveSession(session);
+  }
+
+  const currentQ = questions[session.currentQuestion];
+  if (!currentQ) {
+    await finishInterview(session, sock);
+    return;
+  }
+
+  // Handle photo question (mandatory)
+  if (currentQ.type === 'photo') {
+    if (isImage) {
+      session.photo = { mimetype: imageData.mimetype, url: imageData.url || 'uploaded' };
+      await saveSession(session);
+    } else {
+      const clarificationMsg = `${session.displayName}, photo is mandatory for verification! Please send an image in this chat now. No wahala, just upload it! 📸`;
+      await sock.sendMessage(session.groupId, { text: clarificationMsg });
+      const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
+      setResponseTimer(session.userId, timeoutMs, () => handleResponseTimeout(session.userId, sock));
       return;
     }
-    
-    const args = body.slice(prefix.length).trim().split(/\s+/);
-    const cmd = args[0]?.toLowerCase();
-    
-    // Interview commands
-    if (cmd === 'setinterview') {
-      await handleSetInterview(m, sock, config, args);
-    } else if (cmd === 'interview') {
-      await handleInterviewCommand(m, sock, config, args);
-    } else if (cmd === 'interviewstats') {
-      await handleInterviewStats(m, sock, config);
-    } else if (cmd === 'interviewhelp') {
-      await handleInterviewHelp(m, sock, config);
-    } else if (cmd === 'skipquestion') {
-      await handleSkipQuestion(m, sock, config);
-    } else if (cmd === 'endinterview') {
-      await handleEndInterview(m, sock, config, args);
-    } else if (cmd === 'resetinterview') {
-      await handleResetInterview(m, sock, config, args);
+  }
+
+  // Handle DOB question
+if (currentQ.type === 'dob' && !isImage) {
+  let dobResult = await aiEngine.parseDOB(userMessage, session.displayName);
+
+  // 🔧 Fallback local regex parser if AI failed
+  if (!dobResult.day || !dobResult.month) {
+    const match = userMessage.match(/(\d{1,2})[\/\-\. ]?(\d{1,2})/);
+    if (match) {
+      dobResult = { day: parseInt(match[1]), month: parseInt(match[2]), year: null };
     }
-    
+  }
+
+  if (dobResult.day && dobResult.month) {
+    session.dob = { day: dobResult.day, month: dobResult.month, year: dobResult.year };
+  } else {
+    const clarificationMsg = `${session.displayName}, please send your DOB like *8/12* or *8th Dec*.`;
+    await sock.sendMessage(session.groupId, { text: clarificationMsg });
+    await saveSession(session);
+    const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
+    setResponseTimer(session.userId, timeoutMs, () => handleResponseTimeout(session.userId, sock));
+    return;
+  }
+}
+
+
+  // Save response
+  const isFollowUp = session.currentQuestion % 1 !== 0;
+  const responsesArray = isFollowUp ? session.followUpResponses : session.responses;
+  responsesArray.push({
+    questionId: currentQ.id,
+    question: currentQ.question,
+    answer: isImage ? '[Image uploaded]' : userMessage,
+    timestamp: new Date()
+  });
+  await saveSession(session);
+
+  // AI follow-up logic (skip for special types)
+  if (currentQ.type !== 'photo' && currentQ.type !== 'dob' && !isImage) {
+    const shouldFollowUp = session.aiFollowUps < 2 &&
+                          settings.aiFollowUpEnabled &&
+                          userMessage.length > 10 &&
+                          Math.random() > 0.5;
+
+    if (shouldFollowUp) {
+      const followUp = await aiEngine.generateFollowUp(
+        currentQ.question,
+        userMessage,
+        session.conversationHistory,
+        session.displayName
+      );
+
+      if (followUp) {
+        const followUpMsg = `${session.displayName}, ${followUp} Wetin you think? 😊`;
+        await sock.sendMessage(session.groupId, { text: followUpMsg });
+        session.aiFollowUps++;
+        session.currentQuestion += 0.1;
+        await saveSession(session);
+
+        const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
+        setResponseTimer(session.userId, timeoutMs, () => handleResponseTimeout(session.userId, sock));
+        return;
+      }
+    }
+  }
+
+  session.currentQuestion = Math.floor(session.currentQuestion);
+  session.currentQuestion++;
+
+  if (session.currentQuestion === questions.length && !session.rulesAcknowledged) {
+    await showRulesAndGuidelines(session, sock);
+    return;
+  }
+
+  if (session.currentQuestion >= questions.length && session.rulesAcknowledged) {
+    await finishInterview(session, sock);
+    return;
+  }
+
+  const nextQuestion = questions[session.currentQuestion];
+  if (nextQuestion) {
+    const personalName = session.displayName || 'friend';
+    const questionMsg = `*Question ${session.currentQuestion + 1}/${questions.length}:* ${nextQuestion.question}\n\nTake your time, ${personalName}! No wahala. 😊`;
+    await sock.sendMessage(session.groupId, { text: questionMsg });
+
+    const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
+    setResponseTimer(session.userId, timeoutMs, () => handleResponseTimeout(session.userId, sock));
+  }
+}
+
+async function showRulesAndGuidelines(session, sock) {
+  const personalName = session.displayName || session.userName;
+  const rulesMsg = `${GHQ_RULES}
+
+📝 *Please confirm, ${personalName}:* Do you understand and agree to follow all these rules? (Reply with "Yes, I agree" or similar)`;
+
+  await sock.sendMessage(session.groupId, { text: rulesMsg });
+
+  const settings = groupSettings.get(session.groupId);
+  const timeoutMs = settings.responseTimeoutMinutes * 60 * 1000;
+  setResponseTimer(session.userId, timeoutMs, () => handleResponseTimeout(session.userId, sock));
+}
+
+async function handleRulesAck(session, response, sock) {
+  session.rulesAckAttempts++;
+  const maxAttempts = 3;
+  if (session.rulesAckAttempts >= maxAttempts) {
+    await removeUserFromInterview(session, 'Failed to acknowledge rules after multiple attempts', sock);
+    return;
+  }
+
+  const lowerResponse = response.toLowerCase();
+  if (lowerResponse.includes('yes') && lowerResponse.includes('agree')) {
+    session.rulesAcknowledged = true;
+    await saveSession(session);
+    const personalName = session.displayName || session.userName;
+    await sock.sendMessage(session.groupId, { 
+      text: `✅ Perfect! Thanks for agreeing, ${personalName}! Ehen, now let me evaluate your responses... ⏳` 
+    });
+    await finishInterview(session, sock);
+  } else {
+    await sock.sendMessage(session.groupId, {
+      text: `❌ ${session.displayName || 'Hey'}, I need you to explicitly agree to our rules to proceed. Please reply with "Yes, I agree" or similar. 
+
+If you don't want to, no wahala, but you won't be able to join the main group. 🤷‍♀️ (Attempt ${session.rulesAckAttempts + 1}/${maxAttempts})`
+    });
+  }
+}
+
+async function handleResponseTimeout(userId, sock) {
+  const session = interviewSessions.get(userId) || await loadSession(userId);
+  if (!session || session.status !== 'active') return;
+
+  const settings = groupSettings.get(session.groupId);
+  session.remindersSent++;
+
+  if (session.remindersSent <= settings.maxReminders) {
+    const personalName = session.displayName || session.userName;
+    const reminderMsg = session.remindersSent === 1 
+      ? `⏰ Hey ${personalName}! I'm still waiting for your response to continue the interview. Please reply when you're ready! No wahala 😊`
+      : `⏰ Last reminder! Please respond to continue your Gist HQ interview, or you'll be automatically removed. 🙏`;
+
+    await sock.sendMessage(session.groupId, { text: reminderMsg });
+
+    const reminderMs = settings.reminderTimeoutMinutes * 60 * 1000;
+    setReminderTimer(userId, reminderMs, () => handleResponseTimeout(userId, sock));
+  } else {
+    await removeUserFromInterview(session, 'No response after reminders', sock);
+  }
+}
+
+async function finishInterview(session, sock) {
+  // Check if photo was provided (mandatory)
+  if (!session.photo) {
+    await sock.sendMessage(session.groupId, { text: `❌ ${session.displayName || session.userName}, photo is mandatory! Please upload it to continue.` });
+    return; // Don't proceed to evaluation
+  }
+
+  session.status = 'completed';
+  await saveSession(session);
+  
+  const personalName = session.displayName || session.userName;
+  const evaluationMsg = `✅ *Interview Complete!* 
+
+Thanks ${personalName} for taking the time to answer all questions! 🙏
+
+I'm now evaluating your responses... This will take just a moment! ⏳`;
+
+  await sock.sendMessage(session.groupId, { text: evaluationMsg });
+
+  try {
+    const customPrompt = evalPrompts.get(session.groupId);
+    const evaluation = await aiEngine.evaluateInterview(session, customPrompt);
+    session.score = evaluation.score;
+    session.feedback = evaluation.feedback;
+    await saveSession(session);
+
+    console.log(`Interview evaluation for ${session.userName}: ${evaluation.decision} (${evaluation.score}/100)`);
+
+    if (evaluation.decision === 'APPROVE' && evaluation.score >= 60) {
+      await approveUser(session, evaluation, sock);
+    } else if (evaluation.decision === 'REJECT' || evaluation.score < 40) {
+      await rejectUser(session, evaluation, sock);
+    } else {
+      session.status = 'pending_review';
+      await saveSession(session);
+      await updateStats(session.groupId, { pendingReviews: 1 }, session);
+      await requestManualReview(session, evaluation, sock);
+    }
+
   } catch (error) {
-    console.error(chalk.red('❌ Interview plugin error:'), error.message);
+    console.error('Interview evaluation failed:', error);
+    session.status = 'pending_review';
+    await saveSession(session);
+    await requestManualReview(session, { score: 50, feedback: 'Technical evaluation error' }, sock);
   }
 }
 
-// Handle non-command messages (interview responses)
-async function handleInterviewResponse(m, sock, config) {
+async function approveUser(session, evaluation, sock) {
+  session.status = 'approved';
+  await saveSession(session);
+  const settings = groupSettings.get(session.groupId);
+  
+  await updateStats(session.groupId, { approved: 1 }, session);
+
+  const personalName = session.displayName || session.userName;
+  const approvalMsg = `🎉 *CONGRATULATIONS!* 🎉
+
+Welcome to the Gist HQ family, ${personalName}! 🥳 Opor!
+
+You've successfully passed the interview! Here's your link to join our main group:
+
+${settings.mainGroupLink || 'Link will be provided by admin'}
+
+⚠️ *Important:* This link will expire in ${settings.linkExpiryMinutes} minutes for security reasons.
+
+Can't wait to see you in the main group, ${personalName}! 🚀✨`;
+
+  await sock.sendMessage(session.groupId, { text: approvalMsg });
+
+  if (settings.mainGroupLink) {
+    setTimeout(() => {
+      console.log(`Link expired for approved user: ${session.userName}`);
+    }, settings.linkExpiryMinutes * 60 * 1000);
+  }
+
+  setTimeout(() => deleteSession(session.userId), 10 * 60 * 1000);
+}
+
+async function rejectUser(session, evaluation, sock) {
+  session.status = 'rejected';
+  await saveSession(session);
+  
+  await updateStats(session.groupId, { rejected: 1 }, session);
+
+  const personalName = session.displayName || session.userName;
+  const rejectionMsg = `❌ *Interview Result* 
+
+Thanks for your interest in Gist HQ, ${personalName}.
+
+Unfortunately, we won't be moving forward with your application at this time. 
+
+${evaluation.feedback ? `Feedback: ${evaluation.feedback}` : ''}
+
+You're welcome to reapply in the future! Best wishes! 🙏`;
+
+  await sock.sendMessage(session.groupId, { text: rejectionMsg });
+
+  setTimeout(async () => {
+    try {
+      await sock.groupParticipantsUpdate(session.groupId, [session.userId], 'remove');
+      console.log(`Removed rejected user: ${session.userName}`);
+    } catch (error) {
+      console.error('Failed to remove rejected user:', error);
+    }
+    await deleteSession(session.userId);
+  }, 5 * 60 * 1000);
+}
+
+async function requestManualReview(session, evaluation, sock) {
+  const personalName = session.displayName || session.userName;
+  const reviewMsg = `🔍 *Manual Review Required*
+
+Thanks ${personalName}! Your interview has been submitted for admin review.
+
+Score: ${evaluation.score}/100
+${evaluation.feedback ? `Feedback: ${evaluation.feedback}` : ''}
+
+An admin will review your application and get back to you soon! Please wait patiently. ⏳`;
+
+  await sock.sendMessage(session.groupId, { text: reviewMsg });
+
+  console.log(`Manual review requested for ${session.userName} - Score: ${evaluation.score}`);
+}
+
+async function removeUserFromInterview(session, reason, sock) {
+  session.status = 'failed';
+  await saveSession(session);
+  
+  await updateStats(session.groupId, { autoRemoved: 1 }, session);
+
+  const personalName = session.displayName || session.userName;
+  const removalMsg = `⚠️ *Interview Timeout*
+
+Sorry ${personalName}, you've been removed from the interview process due to: ${reason}
+
+You're welcome to rejoin and restart the interview anytime! 🔄 No wahala.`;
+
+  await sock.sendMessage(session.groupId, { text: removalMsg });
+
+  if (groupSettings.get(session.groupId)?.autoRemoveEnabled) {
+    setTimeout(async () => {
+      try {
+        await sock.groupParticipantsUpdate(session.groupId, [session.userId], 'remove');
+        console.log(`Auto-removed user: ${session.userName} - Reason: ${reason}`);
+      } catch (error) {
+        console.error('Failed to auto-remove user:', error);
+      }
+      await deleteSession(session.userId);
+    }, 2000);
+  }
+}
+
+async function updateStats(groupId, updates, session) {
+  const stats = interviewStats.get(groupId);
+  if (!stats) return;
+
+  Object.keys(updates).forEach(key => {
+    stats[key] = (stats[key] || 0) + updates[key];
+  });
+  stats.totalInterviews++;
+
+  if (session) {
+    stats.averageScore = ((stats.averageScore * (stats.totalInterviews - 1)) + (session.score || 0)) / stats.totalInterviews;
+    const duration = (new Date() - new Date(session.startTime)) / (1000 * 60);
+    stats.averageDuration = ((stats.averageDuration * (stats.totalInterviews - 1)) + duration) / stats.totalInterviews;
+  }
+
+  interviewStats.set(groupId, stats);
+  await saveStats(groupId, stats);
+}
+
+// COMPLETE REPLACEMENT for isAdmin function in interview.js
+// Replace the entire existing isAdmin function with this version
+
+async function isAdmin(userId, groupId) {
   try {
-    if (!m.isGroup || m.isSelf) return;
+    if (!userId || typeof userId !== 'string') return false;
     
-    const session = await InterviewManager.getSession(m.from, m.sender);
-    
-    if (!session) return; // No active interview
-    
-    const settings = await InterviewManager.getGroupSettings(m.from);
-    
-    if (!settings || !settings.enabled) return;
-    
-    const answer = m.body?.trim();
-    
-    if (!answer) {
-      await m.reply('⚠️ Please provide an answer to continue.');
-      return;
+    // Extract bare number consistently (same method as attendance plugin)
+    const bareNumber = userId.split('@')[0];
+
+    // 1. Check owner from ENV directly (PRIMARY SOURCE)
+    const ownerNumber = process.env.OWNER_NUMBER || '';
+    if (ownerNumber && bareNumber === ownerNumber.split('@')[0]) {
+      return true;
     }
-    
-    // Submit answer
-    const result = await InterviewManager.submitAnswer(m.from, m.sender, answer);
-    
-    if (!result.success) {
-      await m.reply(`❌ Error: ${result.reason}`);
-      return;
+
+    // 2. Check admin numbers from ENV directly (PRIMARY SOURCE)
+    const adminNumbersEnv = process.env.ADMIN_NUMBERS || '';
+    if (adminNumbersEnv) {
+      const adminNumbers = adminNumbersEnv.split(',').map(num => num.trim().split('@')[0]);
+      if (adminNumbers.includes(bareNumber)) {
+        return true;
+      }
     }
-    
-    // Show feedback
-    let response = `${result.evaluation.feedback}\n\n`;
-    response += `📊 *Score:* ${result.evaluation.score}/${settings.questions[session.currentQuestion].weight}\n`;
-    response += `🎯 *Total Score:* ${result.score}\n\n`;
-    
-    if (result.isComplete) {
-      // Interview complete
-      const totalPossible = settings.questions.reduce((sum, q) => sum + q.weight, 0);
-      const percentage = (result.score / totalPossible) * 100;
-      const passed = percentage >= settings.passThreshold;
-      
-      if (passed) {
-        response = settings.passMessage
-          .replace('{score}', result.score)
-          .replace('{total}', totalPossible)
-          .replace('{percentage}', percentage.toFixed(1))
-          .replace('{groupLink}', settings.mainGroupLink);
+
+    // 3. Check database admins (SECONDARY SOURCE)
+    try {
+      const dbAdmins = await OwnerHelpers.getAdmins();
+      if (dbAdmins && dbAdmins.some(admin => {
+        const adminPhone = admin.phone ? admin.phone.split('@')[0] : '';
+        return adminPhone === bareNumber;
+      })) {
+        return true;
+      }
+    } catch (dbError) {
+      console.error('Database admin check failed:', dbError);
+      // Continue to other checks even if DB fails
+    }
+
+    // 4. Check group-specific admins from interview settings (TERTIARY SOURCE)
+    const settings = groupSettings.get(groupId);
+    if (settings?.adminIds?.length > 0) {
+      const cleanGroupAdmins = settings.adminIds.map(admin => String(admin).split('@')[0]);
+      if (cleanGroupAdmins.includes(bareNumber)) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch (error) {
+    console.error('isAdmin error:', error);
+    return false;
+  }
+}
+
+// BONUS: You can also remove/simplify the initialize function since we're not using botConfig anymore
+// The initialize function can now be simplified or removed:
+
+export function initialize(config) {
+  // Keep this minimal or empty since we read from ENV directly
+  config = config; // Keep for backward compatibility if needed elsewhere
+  console.log('✅ Interview plugin initialized (reading admins from ENV)');
+}
+
+async function handleAdminCommand(command, args, m, sock, config, groupId) {
+  const userId = m.sender;
+  if (!isAdmin(userId, groupId, config)) {
+    await sock.sendMessage(groupId, { text: `❌ This command is only available to admins! 👮‍♀️` }, { quoted: m });
+    return;
+  }
+
+  await initGroupSettings(groupId);
+  const settings = groupSettings.get(groupId);
+  const questions = interviewQuestions.get(groupId) || DEFAULT_QUESTIONS;
+
+  switch (command.toLowerCase()) {
+    case 'addquestion': {
+      if (args.length < 3) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}addquestion <category> <required:yes/no> <question>` }, { quoted: m });
+        return;
+      }
+      const category = args[1].toLowerCase();
+      const required = args[2].toLowerCase() === 'yes';
+      const questionText = args.slice(3).join(' ');
+      const newQuestion = { id: questions.length + 1, question: questionText, required, category };
+      questions.push(newQuestion);
+      await saveQuestions(groupId, questions);
+      await sock.sendMessage(groupId, { text: `✅ Added question: "${questionText}" (ID: ${newQuestion.id})` }, { quoted: m });
+      break;
+    }
+
+    case 'removequestion': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}removequestion <question_id>` }, { quoted: m });
+        return;
+      }
+      const id = parseInt(args[1]);
+      const index = questions.findIndex(q => q.id === id);
+      if (index === -1) {
+        await sock.sendMessage(groupId, { text: `❌ Question ID ${id} not found!` }, { quoted: m });
+        return;
+      }
+      const removed = questions.splice(index, 1)[0];
+      await saveQuestions(groupId, questions);
+      await sock.sendMessage(groupId, { text: `✅ Removed question ID ${id}: "${removed.question}"` }, { quoted: m });
+      break;
+    }
+
+    case 'listquestions': {
+      const questionList = questions.map(q => `ID: ${q.id} | ${q.question} | Required: ${q.required} | Category: ${q.category}`).join('\n');
+      await sock.sendMessage(groupId, { text: `📋 *Questions*\n\n${questionList || 'No questions set.'}` }, { quoted: m });
+      break;
+    }
+
+    case 'interviewsettings': {
+      if (args.length < 3 || !['linkExpiry', 'responseTimeout', 'reminderTimeout', 'maxReminders', 'aiFollowUp', 'autoRemove'].includes(args[1])) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}interviewsettings <setting> <value>\nOptions: linkExpiry, responseTimeout, reminderTimeout, maxReminders, aiFollowUp (on/off), autoRemove (on/off)` }, { quoted: m });
+        return;
+      }
+      const setting = args[1];
+      const value = args[2].toLowerCase();
+      if (['linkExpiry', 'responseTimeout', 'reminderTimeout', 'maxReminders'].includes(setting)) {
+        const num = parseInt(value);
+        if (isNaN(num) || num < 1) {
+          await sock.sendMessage(groupId, { text: `❌ Invalid number for ${setting}!` }, { quoted: m });
+          return;
+        }
+        settings[`${setting}Minutes`] = num;
       } else {
-        const retriesLeft = settings.maxRetries - session.attempt;
-        response = settings.failMessage
-          .replace('{score}', result.score)
-          .replace('{total}', totalPossible)
-          .replace('{percentage}', percentage.toFixed(1))
-          .replace('{threshold}', settings.passThreshold)
-          .replace('{retriesLeft}', retriesLeft);
-        
-        // Auto-kick if enabled and no retries left
-        if (settings.autoKickOnFail && retriesLeft <= 0) {
-          setTimeout(async () => {
-            try {
-              await sock.groupParticipantsUpdate(m.from, [m.sender], 'remove');
-              console.log(chalk.yellow(`🚪 Auto-kicked ${m.sender} after failed interview`));
-            } catch (error) {
-              console.error('Auto-kick error:', error.message);
-            }
-          }, 10000); // 10 second delay
+        settings[setting + 'Enabled'] = value === 'on';
+      }
+      await saveSettings(groupId, settings);
+      await sock.sendMessage(groupId, { text: `✅ Updated ${setting} to ${value}` }, { quoted: m });
+      break;
+    }
+
+    case 'interviewstats': {
+      const stats = interviewStats.get(groupId);
+      const statsMsg = `📊 *Interview Stats*
+Total Interviews: ${stats.totalInterviews}
+Approved: ${stats.approved}
+Rejected: ${stats.rejected}
+Auto-Removed: ${stats.autoRemoved}
+Pending Reviews: ${stats.pendingReviews}
+Average Score: ${stats.averageScore.toFixed(2)}/100
+Average Duration: ${stats.averageDuration.toFixed(2)} mins`;
+      await sock.sendMessage(groupId, { text: statsMsg }, { quoted: m });
+      break;
+    }
+
+    case 'approveuser': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}approveuser <user_id>` }, { quoted: m });
+        return;
+      }
+      const targetUserId = args[1].includes('@') ? args[1] : `${args[1]}@s.whatsapp.net`;
+      const targetSession = await loadSession(targetUserId);
+      if (!targetSession || targetSession.status !== 'pending_review') {
+        await sock.sendMessage(groupId, { text: `❌ No pending session for user ${args[1]}!` }, { quoted: m });
+        return;
+      }
+      await approveUser(targetSession, { score: targetSession.score, feedback: 'Manually approved by admin' }, sock);
+      await sock.sendMessage(groupId, { text: `✅ Approved user ${targetSession.userName}` }, { quoted: m });
+      break;
+    }
+
+    case 'rejectuser': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}rejectuser <user_id>` }, { quoted: m });
+        return;
+      }
+      const targetUserId = args[1].includes('@') ? args[1] : `${args[1]}@s.whatsapp.net`;
+      const targetSession = await loadSession(targetUserId);
+      if (!targetSession || targetSession.status !== 'pending_review') {
+        await sock.sendMessage(groupId, { text: `❌ No pending session for user ${args[1]}!` }, { quoted: m });
+        return;
+      }
+      await rejectUser(targetSession, { score: targetSession.score, feedback: 'Manually rejected by admin' }, sock);
+      await sock.sendMessage(groupId, { text: `✅ Rejected user ${targetSession.userName}` }, { quoted: m });
+      break;
+    }
+
+    case 'setmaingroup': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}setmaingroup <link>` }, { quoted: m });
+        return;
+      }
+      const link = args[1];
+      if (!link.match(/^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9]+$/)) {
+        await sock.sendMessage(groupId, { text: `❌ Invalid WhatsApp group link!` }, { quoted: m });
+        return;
+      }
+      settings.mainGroupLink = link;
+      await saveSettings(groupId, settings);
+      await sock.sendMessage(groupId, { text: `✅ Main group link set to: ${link}` }, { quoted: m });
+      break;
+    }
+
+    case 'pendingreviews': {
+      const pending = await getPendingSessions(groupId);
+      const pendingList = pending.map(s => `${s.userName} (${s.userId}): Score ${s.score}/100`).join('\n');
+      await sock.sendMessage(groupId, { text: `🔍 *Pending Reviews*\n\n${pendingList || 'No pending reviews.'}` }, { quoted: m });
+      break;
+    }
+
+    case 'viewtranscript': {   // ✅ FIXED BLOCK START
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}viewtranscript <user_id>` }, { quoted: m });
+        return;
+      }
+
+      const targetUserId = args[1].includes('@') ? args[1] : `${args[1]}@s.whatsapp.net`;
+      const targetSession = await loadSession(targetUserId);
+
+      if (!targetSession) {
+        await sock.sendMessage(groupId, { text: `❌ No session found for user ${args[1]}` }, { quoted: m });
+        return;
+      }
+
+      let transcript = `📄 *Transcript for ${targetSession.userName}*\n\n`;
+      targetSession.responses.forEach(r => {
+        transcript += `Q${r.questionId}: ${r.question}\nA: ${r.answer}\n\n`;
+      });
+      targetSession.followUpResponses?.forEach(f => {
+        transcript += `FU: ${f.question}\nA: ${f.answer}\n\n`;
+      });
+      transcript += `Score: ${targetSession.score}/100\nFeedback: ${targetSession.feedback}\nPhoto: ${targetSession.photo ? 'Provided' : 'Not provided'}\nDOB: ${targetSession.dob?.day || 'N/A'}/${targetSession.dob?.month || 'N/A'}/${targetSession.dob?.year || 'N/A'}`;
+
+      await sock.sendMessage(groupId, { text: transcript }, { quoted: m });
+      break;
+    } // ✅ FIXED BLOCK END
+
+    case 'editevalprompt': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}editevalprompt <new_prompt>` }, { quoted: m });
+        return;
+      }
+      const newPrompt = args.slice(1).join(' ');
+      await saveEvalPrompt(groupId, newPrompt);
+      evalPrompts.set(groupId, newPrompt);
+      await sock.sendMessage(groupId, { text: `✅ Evaluation prompt updated.` }, { quoted: m });
+      break;
+    }
+
+    case 'resetquestions': {
+      await saveQuestions(groupId, [...DEFAULT_QUESTIONS]);
+      interviewQuestions.set(groupId, [...DEFAULT_QUESTIONS]);
+      await sock.sendMessage(groupId, { text: `✅ Questions reset to defaults.` }, { quoted: m });
+      break;
+    }
+
+    case 'cancelsession': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}cancelsession <user_id>` }, { quoted: m });
+        return;
+      }
+      const targetUserId = args[1].includes('@') ? args[1] : `${args[1]}@s.whatsapp.net`;
+      const targetSession = await loadSession(targetUserId);
+      if (!targetSession || targetSession.status !== 'active') {
+        await sock.sendMessage(groupId, { text: `❌ No active session for user ${args[1]}!` }, { quoted: m });
+        return;
+      }
+      await removeUserFromInterview(targetSession, 'Session cancelled by admin', sock);
+      await sock.sendMessage(groupId, { text: `✅ Cancelled session for ${targetSession.userName}` }, { quoted: m });
+      break;
+    }
+
+    default:
+      await sock.sendMessage(groupId, { text: `❌ Unknown admin command: ${command}` }, { quoted: m });
+  }
+}
+
+// New function to handle new member events
+export async function handleNewMember(userId, groupId, userName, sock) {
+  try {
+    if (userId === sock.user.id || (await isAdmin(userId, groupId))) return;
+    console.log(`🎯 New member: ${userName} (${userId}) in group ${groupId}`);
+    setTimeout(() => startInterview(userId, groupId, userName, sock), 2000);
+  } catch (error) {
+    console.error('handleNewMember error:', error);
+    await sock.sendMessage(groupId, { text: `⚠️ Error processing new member ${userName}. Admins notified.` });
+  }
+}
+
+export default async function autoInterviewHandler(m, sock, config) {
+  try {
+    if (!m.key.remoteJid.endsWith('@g.us')) return;
+
+    const userId = m.key.participant || m.sender;
+    const groupId = m.key.remoteJid;
+    const userName = m.pushName || userId.split('@')[0];
+
+    await initGroupSettings(groupId);
+    const settings = groupSettings.get(groupId);
+
+    if (m.key.fromMe === false && m.messageStubType === 26) {
+      await handleNewMember(userId, groupId, userName, sock);
+      return;
+    }
+
+    let session = interviewSessions.get(userId) || await loadSession(userId);
+    if (session && session.status === 'active') {
+      if (m.message?.conversation) {
+        const userMessage = m.message.conversation.trim();
+        if (!session.rulesAcknowledged && session.currentQuestion >= interviewQuestions.get(groupId).length) {
+          await handleRulesAck(session, userMessage, sock);
+          return;
+        }
+        await handleInterviewResponse(session, userMessage, sock);
+        return;
+      }
+
+      if (m.message?.imageMessage && session.currentQuestion < interviewQuestions.get(groupId).length) {
+        const currentQ = interviewQuestions.get(groupId)[session.currentQuestion];
+        if (currentQ.type === 'photo') {
+          await handleInterviewResponse(session, '[Image]', sock, true, {
+            mimetype: m.message.imageMessage.mimetype,
+            url: m.message.imageMessage.url
+          });
+          return;
         }
       }
-      
-      await m.reply(response);
-      
-    } else {
-      // Next question
-      const nextQ = settings.questions[result.nextQuestion];
-      response += `━━━━━━━━━━━━━━━━━\n\n`;
-      response += `*Question ${result.nextQuestion + 1}/${settings.questions.length}*\n\n`;
-      response += `${nextQ.question}\n\n`;
-      
-      if (nextQ.type === 'choice') {
-        response += `*Options:* ${nextQ.options.join(', ')}\n\n`;
-      }
-      
-      response += `⏱️ You have 5 minutes to answer.`;
-      
-      await m.reply(response);
     }
-    
-  } catch (error) {
-    console.error(chalk.red('❌ Response handler error:'), error.message);
-  }
-}
 
-// Set up interview for group
-async function handleSetInterview(m, sock, config, args) {
-  try {
-    if (!m.isGroup) {
-      await m.reply('❌ This command can only be used in groups.');
-      return;
-    }
-    
-    const isOwner = m.sender === config.OWNER_NUMBER + '@s.whatsapp.net';
-    const isAdmin = await m.isGroupAdmin();
-    
-    if (!isOwner && !isAdmin) {
-      await m.reply('❌ Only group admins can configure interview settings.');
-      return;
-    }
-    
-    const subCmd = args[1]?.toLowerCase();
-    
-    if (subCmd === 'enable') {
-      const mainGroupLink = args[2];
-      
-      if (!mainGroupLink) {
-        await m.reply('❌ Usage: `setinterview enable <main_group_link>`');
-        return;
-      }
-      
-      const settings = await InterviewManager.initializeGroup(m.from, {
-        mainGroupLink,
-        createdBy: m.sender
-      });
-      
-      let response = `╭─────────────────────╮
-│ ✅ INTERVIEW ENABLED │
-╰─────────────────────╯
+    if (m.message?.conversation?.startsWith(config.PREFIX)) {
+      const [command, ...args] = m.message.conversation.slice(config.PREFIX.length).trim().split(/\s+/);
+      const cmd = command.toLowerCase();
+      const validCommands = info.commands.map(c => c.name).concat(info.commands.flatMap(c => c.aliases || []));
 
-🎯 Interview system is now active for this group!
-
-📋 *Configuration:*
-• Questions: ${settings.questions.length}
-• Pass Threshold: ${settings.passThreshold}%
-• Max Retries: ${settings.maxRetries}
-• Auto-kick on fail: ${settings.autoKickOnFail ? 'Yes' : 'No'}
-• AI Evaluation: ${settings.useAI ? 'Enabled' : 'Disabled'}
-
-🔗 *Main Group:* ${settings.mainGroupLink}
-
-💡 *What happens next?*
-When new members join, they'll automatically receive interview questions. Once they pass, they'll get the main group link.
-
-⚙️ *More Settings:*
-• \`${config.PREFIX}setinterview threshold <number>\` - Set pass percentage
-• \`${config.PREFIX}setinterview retries <number>\` - Set max attempts
-• \`${config.PREFIX}setinterview autokick <on|off>\` - Auto-remove failed users
-• \`${config.PREFIX}setinterview disable\` - Disable interview
-
-📊 View stats: \`${config.PREFIX}interviewstats\``;
-
-      await m.reply(response);
-      
-    } else if (subCmd === 'disable') {
-      await InterviewManager.updateSettings(m.from, { enabled: false });
-      await m.reply('🚫 Interview system disabled for this group.');
-      
-    } else if (subCmd === 'threshold') {
-      const threshold = parseInt(args[2]);
-      
-      if (isNaN(threshold) || threshold < 1 || threshold > 100) {
-        await m.reply('❌ Usage: `setinterview threshold <1-100>`');
-        return;
-      }
-      
-      await InterviewManager.updateSettings(m.from, { passThreshold: threshold });
-      await m.reply(`✅ Pass threshold set to ${threshold}%`);
-      
-    } else if (subCmd === 'retries') {
-      const retries = parseInt(args[2]);
-      
-      if (isNaN(retries) || retries < 1 || retries > 10) {
-        await m.reply('❌ Usage: `setinterview retries <1-10>`');
-        return;
-      }
-      
-      await InterviewManager.updateSettings(m.from, { maxRetries: retries });
-      await m.reply(`✅ Max retries set to ${retries}`);
-      
-    } else if (subCmd === 'autokick') {
-      const enabled = args[2]?.toLowerCase() === 'on';
-      
-      await InterviewManager.updateSettings(m.from, { autoKickOnFail: enabled });
-      await m.reply(`✅ Auto-kick ${enabled ? 'enabled' : 'disabled'}`);
-      
-    } else if (subCmd === 'link') {
-      const newLink = args[2];
-      
-      if (!newLink) {
-        await m.reply('❌ Usage: `setinterview link <new_group_link>`');
-        return;
-      }
-      
-      await InterviewManager.updateSettings(m.from, { mainGroupLink: newLink });
-      await m.reply(`✅ Main group link updated`);
-      
-    } else if (subCmd === 'ai') {
-      const enabled = args[2]?.toLowerCase() === 'on';
-      
-      await InterviewManager.updateSettings(m.from, { useAI: enabled });
-      await m.reply(`✅ AI evaluation ${enabled ? 'enabled' : 'disabled'}`);
-      
-    } else {
-      let response = `╭─────────────────────╮
-│ ⚙️ INTERVIEW SETTINGS │
-╰─────────────────────╯
-
-*Available Commands:*
-
-🟢 *Enable/Disable:*
-• \`${config.PREFIX}setinterview enable <link>\`
-• \`${config.PREFIX}setinterview disable\`
-
-⚙️ *Configuration:*
-• \`${config.PREFIX}setinterview threshold <1-100>\`
-• \`${config.PREFIX}setinterview retries <1-10>\`
-• \`${config.PREFIX}setinterview autokick <on|off>\`
-• \`${config.PREFIX}setinterview link <new_link>\`
-• \`${config.PREFIX}setinterview ai <on|off>\`
-
-📋 *Example:*
-\`${config.PREFIX}setinterview enable https://chat.whatsapp.com/xxxxx\`
-
-💡 Need help? Use \`${config.PREFIX}interviewhelp\``;
-
-      await m.reply(response);
-    }
-    
-  } catch (error) {
-    console.error(chalk.red('❌ SetInterview error:'), error.message);
-    await m.reply('❌ Error configuring interview: ' + error.message);
-  }
-}
-
-// Main interview command
-async function handleInterviewCommand(m, sock, config, args) {
-  try {
-    if (!m.isGroup) {
-      await m.reply('❌ This command can only be used in groups.');
-      return;
-    }
-    
-    const subCmd = args[1]?.toLowerCase();
-    
-    if (subCmd === 'start') {
-      // Manual start
-      const settings = await InterviewManager.getGroupSettings(m.from);
-      
-      if (!settings || !settings.enabled) {
-        await m.reply('❌ Interview is not enabled for this group.');
-        return;
-      }
-      
-      const result = await InterviewManager.startSession(m.from, m.sender, m.pushName || 'User');
-      
-      if (!result.success) {
-        await m.reply(`❌ ${result.reason}`);
-        return;
-      }
-      
-      // Send welcome message
-      const welcomeMsg = settings.welcomeMessage
-        .replace('{total}', settings.questions.length)
-        .replace('{threshold}', settings.passThreshold)
-        .replace('{maxRetries}', settings.maxRetries);
-      
-      await m.reply(welcomeMsg);
-      
-      // Wait 3 seconds then send first question
-      setTimeout(async () => {
-        const firstQ = settings.questions[0];
-        let response = `*Question 1/${settings.questions.length}*\n\n`;
-        response += `${firstQ.question}\n\n`;
-        
-        if (firstQ.type === 'choice') {
-          response += `*Options:* ${firstQ.options.join(', ')}\n\n`;
+      if (cmd === 'interview' || cmd === 'startinterview') {
+        session = interviewSessions.get(userId) || await loadSession(userId);
+        if (session) {
+          await sock.sendMessage(groupId, { text: `⚠️ Active interview session exists! Current: Question ${session.currentQuestion + 1}/${interviewQuestions.get(groupId).length}` }, { quoted: m });
+          return;
         }
-        
-        response += `⏱️ You have 5 minutes to answer.`;
-        
-        await m.reply(response);
-      }, 3000);
-      
-    } else if (subCmd === 'status') {
-      const session = await InterviewManager.getSession(m.from, m.sender);
-      
-      if (!session) {
-        await m.reply('❌ You don\'t have an active interview.');
+        await startInterview(userId, groupId, userName, sock);
         return;
       }
-      
-      const settings = await InterviewManager.getGroupSettings(m.from);
-      const totalPossible = settings.questions.reduce((sum, q) => sum + q.weight, 0);
-      const percentage = (session.score / totalPossible) * 100;
-      
-      let response = `╭─────────────────────╮
-│ 📊 INTERVIEW STATUS │
-╰─────────────────────╯
 
-👤 *User:* ${session.userName}
-🎯 *Progress:* ${session.currentQuestion}/${settings.questions.length}
-📈 *Current Score:* ${session.score}/${totalPossible} (${percentage.toFixed(1)}%)
-🎓 *Pass Threshold:* ${settings.passThreshold}%
-🔄 *Attempt:* ${session.attempt}/${settings.maxRetries}
-⏰ *Started:* ${moment(session.startedAt).fromNow()}
-📬 *Reminders Sent:* ${session.remindersSent}
-
-${percentage >= settings.passThreshold ? '✅ On track to pass!' : '⚠️ Need higher scores'}
-
-💡 Keep answering thoughtfully to improve your score!`;
-
-      await m.reply(response);
-      
-    } else if (subCmd === 'retry') {
-      const settings = await InterviewManager.getGroupSettings(m.from);
-      
-      if (!settings || !settings.enabled) {
-        await m.reply('❌ Interview is not enabled for this group.');
+      if (validCommands.includes(cmd)) {
+        await handleAdminCommand(cmd, args, m, sock, config, groupId);
         return;
       }
-      
-      // Check previous attempts
-      const col = await PluginHelpers.getCollection(COLLECTIONS.SESSIONS);
-      const attempts = await col.countDocuments({
-        groupId: m.from,
-        userId: m.sender,
-        status: 'failed'
-      });
-      
-      if (attempts >= settings.maxRetries) {
-        await m.reply(`❌ You've reached the maximum retry limit (${settings.maxRetries}).`);
-        return;
-      }
-      
-      // Start new attempt
-      const result = await InterviewManager.startSession(m.from, m.sender, m.pushName || 'User');
-      
-      if (!result.success) {
-        await m.reply(`❌ ${result.reason}`);
-        return;
-      }
-      
-      await m.reply(`🔄 Starting retry attempt ${attempts + 1}/${settings.maxRetries}...`);
-      
-      // Send first question
-      setTimeout(async () => {
-        const firstQ = settings.questions[0];
-        let response = `*Question 1/${settings.questions.length}*\n\n`;
-        response += `${firstQ.question}\n\n`;
-        
-        if (firstQ.type === 'choice') {
-          response += `*Options:* ${firstQ.options.join(', ')}\n\n`;
-        }
-        
-        response += `⏱️ You have 5 minutes to answer.`;
-        
-        await m.reply(response);
-      }, 2000);
-      
-    } else {
-      let response = `╭─────────────────────╮
-│ 🎯 INTERVIEW COMMANDS │
-╰─────────────────────╯
-
-*User Commands:*
-• \`${config.PREFIX}interview start\` - Start interview
-• \`${config.PREFIX}interview status\` - Check your progress
-• \`${config.PREFIX}interview retry\` - Retry after failure
-
-*Admin Commands:*
-• \`${config.PREFIX}setinterview\` - Configure settings
-• \`${config.PREFIX}interviewstats\` - View statistics
-• \`${config.PREFIX}skipquestion @user\` - Skip question
-• \`${config.PREFIX}endinterview @user\` - End interview
-• \`${config.PREFIX}resetinterview @user\` - Reset attempts
-
-💡 Type \`${config.PREFIX}interviewhelp\` for detailed help.`;
-
-      await m.reply(response);
     }
-    
   } catch (error) {
-    console.error(chalk.red('❌ Interview command error:'), error.message);
-    await m.reply('❌ Error: ' + error.message);
-  }
-}
-
-// Show interview statistics
-async function handleInterviewStats(m, sock, config) {
-  try {
-    if (!m.isGroup) {
-      await m.reply('❌ This command can only be used in groups.');
-      return;
-    }
-    
-    const settings = await InterviewManager.getGroupSettings(m.from);
-    
-    if (!settings) {
-      await m.reply('❌ Interview is not configured for this group.');
-      return;
-    }
-    
-    const stats = await InterviewManager.getStats(m.from);
-    const col = await PluginHelpers.getCollection(COLLECTIONS.SESSIONS);
-    
-    const activeSessions = await col.countDocuments({
-      groupId: m.from,
-      status: 'active'
-    });
-    
-    const recentResults = await PluginHelpers.getCollection(COLLECTIONS.RESULTS);
-    const recent = await recentResults.find({ groupId: m.from })
-      .sort({ completedAt: -1 })
-      .limit(5)
-      .toArray();
-    
-    let response = `╭─────────────────────╮
-│ 📊 INTERVIEW STATISTICS │
-╰─────────────────────╯
-
-📈 *Overall Stats:*
-• Total Interviews: ${stats.totalInterviews}
-• Passed: ${stats.passed} ✅
-• Failed: ${stats.failed} ❌
-• Pass Rate: ${stats.passRate}%
-• Active Sessions: ${activeSessions}
-
-⚙️ *Settings:*
-• Pass Threshold: ${settings.passThreshold}%
-• Max Retries: ${settings.maxRetries}
-• Auto-kick: ${settings.autoKickOnFail ? 'Yes' : 'No'}
-• AI Evaluation: ${settings.useAI ? 'Yes' : 'No'}
-
-📋 *Recent Completions:*`;
-
-    if (recent.length > 0) {
-      recent.forEach((r, i) => {
-        response += `\n${i + 1}. ${r.userName} - ${r.passed ? '✅' : '❌'} (${r.percentage.toFixed(1)}%)`;
-      });
-    } else {
-      response += '\n_No completed interviews yet_';
-    }
-    
-    response += `\n\n📅 *Last Updated:* ${moment(stats.updatedAt).fromNow()}`;
-    
-    await m.reply(response);
-    
-  } catch (error) {
-    console.error(chalk.red('❌ Stats error:'), error.message);
-    await m.reply('❌ Error fetching statistics.');
-  }
-}
-
-// Show detailed help
-async function handleInterviewHelp(m, sock, config) {
-  try {
-    let response = `╭─────────────────────╮
-│ 📚 INTERVIEW HELP │
-╰─────────────────────╯
-
-🎯 *What is this?*
-An AI-powered interview system to screen new members before they join the main group.
-
-📋 *How it works:*
-1. New members join interview group
-2. They answer ${DEFAULT_QUESTIONS.length} questions
-3. AI evaluates their responses
-4. Score ≥70% = Pass → Get main group link
-5. Score <70% = Can retry (max 3 attempts)
-
-🤖 *AI Evaluation:*
-Our AI checks for:
-• Answer quality and depth
-• Relevance to question
-• Sincerity and engagement
-• Grammar and clarity
-
-👥 *For Users:*
-\`${config.PREFIX}interview start\` - Begin interview
-\`${config.PREFIX}interview status\` - Check progress
-\`${config.PREFIX}interview retry\` - Try again
-
-👔 *For Admins:*
-\`${config.PREFIX}setinterview enable <link>\` - Setup
-\`${config.PREFIX}setinterview threshold <num>\` - Set pass %
-\`${config.PREFIX}interviewstats\` - View stats
-\`${config.PREFIX}skipquestion @user\` - Skip question
-\`${config.PREFIX}endinterview @user\` - End session
-\`${config.PREFIX}resetinterview @user\` - Reset attempts
-
-💡 *Tips for Success:*
-• Be honest and genuine
-• Write detailed answers (20+ words)
-• Show enthusiasm
-• Proofread before sending
-
-⚠️ *Important:*
-• Each question has 5 min timer
-• Empty answers score 0
-• Too many failures = auto-kick
-
-Need more help? Contact admins!`;
-
-    await m.reply(response);
-    
-  } catch (error) {
-    console.error(chalk.red('❌ Help error:'), error.message);
-  }
-}
-
-// Skip question (admin only)
-async function handleSkipQuestion(m, sock, config) {
-  try {
-    if (!m.isGroup) {
-      await m.reply('❌ This command can only be used in groups.');
-      return;
-    }
-    
-    const isOwner = m.sender === config.OWNER_NUMBER + '@s.whatsapp.net';
-    const isAdmin = await m.isGroupAdmin();
-    
-    if (!isOwner && !isAdmin) {
-      await m.reply('❌ Only admins can skip questions.');
-      return;
-    }
-    
-    const targetUser = m.mentions?.[0] || m.quoted?.sender;
-    
-    if (!targetUser) {
-      await m.reply('❌ Usage: Reply to user or mention them: `skipquestion @user`');
-      return;
-    }
-    
-    const session = await InterviewManager.getSession(m.from, targetUser);
-    
-    if (!session) {
-      await m.reply('❌ User doesn\'t have an active interview.');
-      return;
-    }
-    
-    const settings = await InterviewManager.getGroupSettings(m.from);
-    const currentQ = settings.questions[session.currentQuestion];
-    
-    // Auto-pass current question
-    const result = await InterviewManager.submitAnswer(
-      m.from, 
-      targetUser, 
-      'Admin skip - auto pass'
-    );
-    
-    await m.reply(`✅ Skipped question ${session.currentQuestion + 1} for ${targetUser.split('@')[0]}`);
-    
-    // Send next question
-    if (!result.isComplete) {
-      const nextQ = settings.questions[result.nextQuestion];
-      let response = `⏭️ *Question Skipped by Admin*\n\n`;
-      response += `*Question ${result.nextQuestion + 1}/${settings.questions.length}*\n\n`;
-      response += `${nextQ.question}\n\n`;
-      
-      if (nextQ.type === 'choice') {
-        response += `*Options:* ${nextQ.options.join(', ')}\n\n`;
-      }
-      
-      await sock.sendMessage(m.from, { text: response, mentions: [targetUser] });
-    }
-    
-  } catch (error) {
-    console.error(chalk.red('❌ Skip error:'), error.message);
-    await m.reply('❌ Error skipping question.');
-  }
-}
-
-// End interview (admin only)
-async function handleEndInterview(m, sock, config, args) {
-  try {
-    if (!m.isGroup) {
-      await m.reply('❌ This command can only be used in groups.');
-      return;
-    }
-    
-    const isOwner = m.sender === config.OWNER_NUMBER + '@s.whatsapp.net';
-    const isAdmin = await m.isGroupAdmin();
-    
-    if (!isOwner && !isAdmin) {
-      await m.reply('❌ Only admins can end interviews.');
-      return;
-    }
-    
-    const targetUser = m.mentions?.[0] || m.quoted?.sender;
-    
-    if (!targetUser) {
-      await m.reply('❌ Usage: Reply to user or mention them: `endinterview @user`');
-      return;
-    }
-    
-    const col = await PluginHelpers.getCollection(COLLECTIONS.SESSIONS);
-    
-    const result = await col.updateOne(
-      { groupId: m.from, userId: targetUser, status: 'active' },
-      { 
-        $set: { 
-          status: 'terminated',
-          terminatedBy: m.sender,
-          terminatedAt: new Date()
-        } 
-      }
-    );
-    
-    if (result.modifiedCount > 0) {
-      await m.reply(`✅ Interview terminated for ${targetUser.split('@')[0]}`);
-      await sock.sendMessage(m.from, {
-        text: '🚫 Your interview has been ended by an admin.',
-        mentions: [targetUser]
-      });
-    } else {
-      await m.reply('❌ User doesn\'t have an active interview.');
-    }
-    
-  } catch (error) {
-    console.error(chalk.red('❌ End interview error:'), error.message);
-    await m.reply('❌ Error ending interview.');
-  }
-}
-
-// Reset interview attempts (admin only)
-async function handleResetInterview(m, sock, config, args) {
-  try {
-    if (!m.isGroup) {
-      await m.reply('❌ This command can only be used in groups.');
-      return;
-    }
-    
-    const isOwner = m.sender === config.OWNER_NUMBER + '@s.whatsapp.net';
-    const isAdmin = await m.isGroupAdmin();
-    
-    if (!isOwner && !isAdmin) {
-      await m.reply('❌ Only admins can reset interviews.');
-      return;
-    }
-    
-    const targetUser = m.mentions?.[0] || m.quoted?.sender;
-    
-    if (!targetUser) {
-      await m.reply('❌ Usage: Reply to user or mention them: `resetinterview @user`');
-      return;
-    }
-    
-    const col = await PluginHelpers.getCollection(COLLECTIONS.SESSIONS);
-    
-    const result = await col.deleteMany({
-      groupId: m.from,
-      userId: targetUser
-    });
-    
-    if (result.deletedCount > 0) {
-      await m.reply(`✅ Reset ${result.deletedCount} interview session(s) for ${targetUser.split('@')[0]}\n\nThey can now start fresh.`);
-    } else {
-      await m.reply('❌ No interview sessions found for this user.');
-    }
-    
-  } catch (error) {
-    console.error(chalk.red('❌ Reset error:'), error.message);
-    await m.reply('❌ Error resetting interview.');
+    console.error('Auto Interview Error:', error);
+    await sock.sendMessage(groupId, { text: `⚠️ An error occurred. Admins have been notified.` });
+    clearResponseTimer(userId);
+    clearReminderTimer(userId);
   }
 }
