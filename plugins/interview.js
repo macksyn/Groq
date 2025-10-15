@@ -1273,3 +1273,83 @@ Average Duration: ${stats.averageDuration.toFixed(2)} mins`;
       await sock.sendMessage(groupId, { text: `❌ Unknown admin command: ${command}` }, { quoted: m });
   }
 }
+
+// New function to handle new member events
+export async function handleNewMember(userId, groupId, userName, sock) {
+  try {
+    if (userId === sock.user.id || (await isAdmin(userId, groupId))) return;
+    console.log(`🎯 New member: ${userName} (${userId}) in group ${groupId}`);
+    setTimeout(() => startInterview(userId, groupId, userName, sock), 2000);
+  } catch (error) {
+    console.error('handleNewMember error:', error);
+    await sock.sendMessage(groupId, { text: `⚠️ Error processing new member ${userName}. Admins notified.` });
+  }
+}
+
+export default async function autoInterviewHandler(m, sock, config) {
+  try {
+    if (!m.key.remoteJid.endsWith('@g.us')) return;
+
+    const userId = m.key.participant || m.sender;
+    const groupId = m.key.remoteJid;
+    const userName = m.pushName || userId.split('@')[0];
+
+    await initGroupSettings(groupId);
+    const settings = groupSettings.get(groupId);
+
+    if (m.key.fromMe === false && m.messageStubType === 26) {
+      await handleNewMember(userId, groupId, userName, sock);
+      return;
+    }
+
+    let session = interviewSessions.get(userId) || await loadSession(userId);
+    if (session && session.status === 'active') {
+      if (m.message?.conversation) {
+        const userMessage = m.message.conversation.trim();
+        if (!session.rulesAcknowledged && session.currentQuestion >= interviewQuestions.get(groupId).length) {
+          await handleRulesAck(session, userMessage, sock);
+          return;
+        }
+        await handleInterviewResponse(session, userMessage, sock);
+        return;
+      }
+
+      if (m.message?.imageMessage && session.currentQuestion < interviewQuestions.get(groupId).length) {
+        const currentQ = interviewQuestions.get(groupId)[session.currentQuestion];
+        if (currentQ.type === 'photo') {
+          await handleInterviewResponse(session, '[Image]', sock, true, {
+            mimetype: m.message.imageMessage.mimetype,
+            url: m.message.imageMessage.url
+          });
+          return;
+        }
+      }
+    }
+
+    if (m.message?.conversation?.startsWith(config.PREFIX)) {
+      const [command, ...args] = m.message.conversation.slice(config.PREFIX.length).trim().split(/\s+/);
+      const cmd = command.toLowerCase();
+      const validCommands = info.commands.map(c => c.name).concat(info.commands.flatMap(c => c.aliases || []));
+
+      if (cmd === 'interview' || cmd === 'startinterview') {
+        session = interviewSessions.get(userId) || await loadSession(userId);
+        if (session) {
+          await sock.sendMessage(groupId, { text: `⚠️ Active interview session exists! Current: Question ${session.currentQuestion + 1}/${interviewQuestions.get(groupId).length}` }, { quoted: m });
+          return;
+        }
+        await startInterview(userId, groupId, userName, sock);
+        return;
+      }
+
+      if (validCommands.includes(cmd)) {
+        await handleAdminCommand(cmd, args, m, sock, config, groupId);
+        return;
+      }
+    }
+  } catch (error) {
+    console.error('Auto Interview Error:', error);
+    await sock.sendMessage(groupId, { text: `⚠️ An error occurred. Admins have been notified.` });
+    clearResponseTimer(userId);
+    clearReminderTimer(userId);
+  }
+}
