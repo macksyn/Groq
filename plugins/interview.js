@@ -1074,107 +1074,202 @@ async function handleAdminCommand(command, args, m, sock, config, groupId) {
   }
 
   await initGroupSettings(groupId);
+  const settings = groupSettings.get(groupId);
+  const questions = interviewQuestions.get(groupId) || DEFAULT_QUESTIONS;
 
-  switch (command) {
-    // ... (other cases unchanged, omitted for brevity)
-    case 'viewtranscript':
-      // Updated to include photo info
+  switch (command.toLowerCase()) {
+    case 'addquestion': {
+      if (args.length < 3) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}addquestion <category> <required:yes/no> <question>` }, { quoted: m });
+        return;
+      }
+      const category = args[1].toLowerCase();
+      const required = args[2].toLowerCase() === 'yes';
+      const questionText = args.slice(3).join(' ');
+      const newQuestion = { id: questions.length + 1, question: questionText, required, category };
+      questions.push(newQuestion);
+      await saveQuestions(groupId, questions);
+      await sock.sendMessage(groupId, { text: `✅ Added question: "${questionText}" (ID: ${newQuestion.id})` }, { quoted: m });
+      break;
+    }
+
+    case 'removequestion': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}removequestion <question_id>` }, { quoted: m });
+        return;
+      }
+      const id = parseInt(args[1]);
+      const index = questions.findIndex(q => q.id === id);
+      if (index === -1) {
+        await sock.sendMessage(groupId, { text: `❌ Question ID ${id} not found!` }, { quoted: m });
+        return;
+      }
+      const removed = questions.splice(index, 1)[0];
+      await saveQuestions(groupId, questions);
+      await sock.sendMessage(groupId, { text: `✅ Removed question ID ${id}: "${removed.question}"` }, { quoted: m });
+      break;
+    }
+
+    case 'listquestions': {
+      const questionList = questions.map(q => `ID: ${q.id} | ${q.question} | Required: ${q.required} | Category: ${q.category}`).join('\n');
+      await sock.sendMessage(groupId, { text: `📋 *Questions*\n\n${questionList || 'No questions set.'}` }, { quoted: m });
+      break;
+    }
+
+    case 'interviewsettings': {
+      if (args.length < 3 || !['linkExpiry', 'responseTimeout', 'reminderTimeout', 'maxReminders', 'aiFollowUp', 'autoRemove'].includes(args[1])) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}interviewsettings <setting> <value>\nOptions: linkExpiry, responseTimeout, reminderTimeout, maxReminders, aiFollowUp (on/off), autoRemove (on/off)` }, { quoted: m });
+        return;
+      }
+      const setting = args[1];
+      const value = args[2].toLowerCase();
+      if (['linkExpiry', 'responseTimeout', 'reminderTimeout', 'maxReminders'].includes(setting)) {
+        const num = parseInt(value);
+        if (isNaN(num) || num < 1) {
+          await sock.sendMessage(groupId, { text: `❌ Invalid number for ${setting}!` }, { quoted: m });
+          return;
+        }
+        settings[`${setting}Minutes`] = num;
+      } else {
+        settings[setting + 'Enabled'] = value === 'on';
+      }
+      await saveSettings(groupId, settings);
+      await sock.sendMessage(groupId, { text: `✅ Updated ${setting} to ${value}` }, { quoted: m });
+      break;
+    }
+
+    case 'interviewstats': {
+      const stats = interviewStats.get(groupId);
+      const statsMsg = `📊 *Interview Stats*
+Total Interviews: ${stats.totalInterviews}
+Approved: ${stats.approved}
+Rejected: ${stats.rejected}
+Auto-Removed: ${stats.autoRemoved}
+Pending Reviews: ${stats.pendingReviews}
+Average Score: ${stats.averageScore.toFixed(2)}/100
+Average Duration: ${stats.averageDuration.toFixed(2)} mins`;
+      await sock.sendMessage(groupId, { text: statsMsg }, { quoted: m });
+      break;
+    }
+
+    case 'approveuser': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}approveuser <user_id>` }, { quoted: m });
+        return;
+      }
+      const targetUserId = args[1].includes('@') ? args[1] : `${args[1]}@s.whatsapp.net`;
+      const targetSession = await loadSession(targetUserId);
+      if (!targetSession || targetSession.status !== 'pending_review') {
+        await sock.sendMessage(groupId, { text: `❌ No pending session for user ${args[1]}!` }, { quoted: m });
+        return;
+      }
+      await approveUser(targetSession, { score: targetSession.score, feedback: 'Manually approved by admin' }, sock);
+      await sock.sendMessage(groupId, { text: `✅ Approved user ${targetSession.userName}` }, { quoted: m });
+      break;
+    }
+
+    case 'rejectuser': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}rejectuser <user_id>` }, { quoted: m });
+        return;
+      }
+      const targetUserId = args[1].includes('@') ? args[1] : `${args[1]}@s.whatsapp.net`;
+      const targetSession = await loadSession(targetUserId);
+      if (!targetSession || targetSession.status !== 'pending_review') {
+        await sock.sendMessage(groupId, { text: `❌ No pending session for user ${args[1]}!` }, { quoted: m });
+        return;
+      }
+      await rejectUser(targetSession, { score: targetSession.score, feedback: 'Manually rejected by admin' }, sock);
+      await sock.sendMessage(groupId, { text: `✅ Rejected user ${targetSession.userName}` }, { quoted: m });
+      break;
+    }
+
+    case 'setmaingroup': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}setmaingroup <link>` }, { quoted: m });
+        return;
+      }
+      const link = args[1];
+      if (!link.match(/^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9]+$/)) {
+        await sock.sendMessage(groupId, { text: `❌ Invalid WhatsApp group link!` }, { quoted: m });
+        return;
+      }
+      settings.mainGroupLink = link;
+      await saveSettings(groupId, settings);
+      await sock.sendMessage(groupId, { text: `✅ Main group link set to: ${link}` }, { quoted: m });
+      break;
+    }
+
+    case 'pendingreviews': {
+      const pending = await getPendingSessions(groupId);
+      const pendingList = pending.map(s => `${s.userName} (${s.userId}): Score ${s.score}/100`).join('\n');
+      await sock.sendMessage(groupId, { text: `🔍 *Pending Reviews*\n\n${pendingList || 'No pending reviews.'}` }, { quoted: m });
+      break;
+    }
+
+    case 'viewtranscript': {   // ✅ FIXED BLOCK START
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}viewtranscript <user_id>` }, { quoted: m });
+        return;
+      }
+
+      const targetUserId = args[1].includes('@') ? args[1] : `${args[1]}@s.whatsapp.net`;
+      const targetSession = await loadSession(targetUserId);
+
+      if (!targetSession) {
+        await sock.sendMessage(groupId, { text: `❌ No session found for user ${args[1]}` }, { quoted: m });
+        return;
+      }
+
       let transcript = `📄 *Transcript for ${targetSession.userName}*\n\n`;
       targetSession.responses.forEach(r => {
         transcript += `Q${r.questionId}: ${r.question}\nA: ${r.answer}\n\n`;
       });
-      targetSession.followUpResponses.forEach(f => {
+      targetSession.followUpResponses?.forEach(f => {
         transcript += `FU: ${f.question}\nA: ${f.answer}\n\n`;
       });
-      transcript += `Score: ${targetSession.score}/100\nFeedback: ${targetSession.feedback}\nPhoto: ${targetSession.photo ? 'Provided' : 'Not provided'}\nDOB: ${targetSession.dob.day}/${targetSession.dob.month || 'N/A'}/${targetSession.dob.year || 'N/A'}`;
+      transcript += `Score: ${targetSession.score}/100\nFeedback: ${targetSession.feedback}\nPhoto: ${targetSession.photo ? 'Provided' : 'Not provided'}\nDOB: ${targetSession.dob?.day || 'N/A'}/${targetSession.dob?.month || 'N/A'}/${targetSession.dob?.year || 'N/A'}`;
 
       await sock.sendMessage(groupId, { text: transcript }, { quoted: m });
       break;
-    // ... (rest unchanged)
-  }
-}
+    } // ✅ FIXED BLOCK END
 
-export default async function autoInterviewHandler(m, sock, config) {
-  try {
-    const isGroupChat = m.key.remoteJid.endsWith('@g.us');
-    if (!isGroupChat) return;
-
-    const userId = m.key.participant || m.sender;
-    const groupId = m.key.remoteJid;
-    const userName = m.pushName || userId.split('@')[0];
-    
-    await initGroupSettings(groupId);
-    const settings = groupSettings.get(groupId);
-
-    if (m.key.fromMe === false && m.messageStubType === 26) {
-      const newMembers = [userId];
-      
-      for (const newMember of newMembers) {
-        if (newMember === sock.user.id || isAdmin(newMember, groupId, config)) continue;
-
-        const memberName = newMember.split('@')[0];
-        console.log(`🎯 New member detected: ${memberName} in interview group ${groupId}`);
-        
-        setTimeout(() => startInterview(newMember, groupId, memberName, sock), 2000);
-      }
-      return;
-    }
-
-    let session = interviewSessions.get(userId) || await loadSession(userId);
-    if (session && session.status === 'active') {
-      if (m.message?.conversation) {
-        const userMessage = m.message.conversation;
-
-        if (!session.rulesAcknowledged && session.currentQuestion >= interviewQuestions.get(groupId).length) {
-          await handleRulesAck(session, userMessage, sock);
-          return;
-        }
-
-        await handleInterviewResponse(session, userMessage, sock);
+    case 'editevalprompt': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}editevalprompt <new_prompt>` }, { quoted: m });
         return;
       }
-
-      if (m.message?.imageMessage && session.currentQuestion < interviewQuestions.get(groupId).length) {
-        const currentQ = interviewQuestions.get(groupId)[session.currentQuestion];
-        if (currentQ.type === 'photo') {
-          await handleInterviewResponse(session, '[Image]', sock, true, {
-            mimetype: m.message.imageMessage.mimetype,
-            url: m.message.imageMessage.url
-          });
-          return;
-        }
-      }
+      const newPrompt = args.slice(1).join(' ');
+      await saveEvalPrompt(groupId, newPrompt);
+      evalPrompts.set(groupId, newPrompt);
+      await sock.sendMessage(groupId, { text: `✅ Evaluation prompt updated.` }, { quoted: m });
+      break;
     }
 
-    if (m.message?.conversation && m.message.conversation.startsWith(config.PREFIX)) {
-      const args = m.message.conversation.slice(config.PREFIX.length).trim().split(' ');
-      const command = args[0].toLowerCase();
+    case 'resetquestions': {
+      await saveQuestions(groupId, [...DEFAULT_QUESTIONS]);
+      interviewQuestions.set(groupId, [...DEFAULT_QUESTIONS]);
+      await sock.sendMessage(groupId, { text: `✅ Questions reset to defaults.` }, { quoted: m });
+      break;
+    }
 
-      if (command === 'interview' || command === 'startinterview') {
-        session = interviewSessions.get(userId) || await loadSession(userId);
-        if (session) {
-          await sock.sendMessage(groupId, { text: `⚠️ You already have an active interview session! Please complete it first. \n\nCurrent question: ${session.currentQuestion + 1}/${interviewQuestions.get(groupId).length}` }, { quoted: m });
-          return;
-        }
-
-        await startInterview(userId, groupId, userName, sock);
+    case 'cancelsession': {
+      if (args.length < 2) {
+        await sock.sendMessage(groupId, { text: `Usage: ${config.PREFIX}cancelsession <user_id>` }, { quoted: m });
         return;
       }
-
-      const adminOnlyCommands = ['addquestion', 'removequestion', 'listquestions', 'interviewsettings', 'interviewstats', 'approveuser', 'rejectuser', 'setmaingroup', 'pendingreviews', 'viewtranscript', 'editevalprompt', 'resetquestions', 'cancelsession'];
-      if (adminOnlyCommands.includes(command)) {
-        await handleAdminCommand(command, args, m, sock, config, groupId);
+      const targetUserId = args[1].includes('@') ? args[1] : `${args[1]}@s.whatsapp.net`;
+      const targetSession = await loadSession(targetUserId);
+      if (!targetSession || targetSession.status !== 'active') {
+        await sock.sendMessage(groupId, { text: `❌ No active session for user ${args[1]}!` }, { quoted: m });
         return;
       }
+      await removeUserFromInterview(targetSession, 'Session cancelled by admin', sock);
+      await sock.sendMessage(groupId, { text: `✅ Cancelled session for ${targetSession.userName}` }, { quoted: m });
+      break;
     }
 
-  } catch (error) {
-    console.error('Auto Interview Plugin Error:', error);
-    
-    const session = interviewSessions.get(m.key.participant || m.sender);
-    if (session) {
-      clearResponseTimer(m.key.participant || m.sender);
-      clearReminderTimer(m.key.participant || m.sender);
-    }
+    default:
+      await sock.sendMessage(groupId, { text: `❌ Unknown admin command: ${command}` }, { quoted: m });
   }
 }
