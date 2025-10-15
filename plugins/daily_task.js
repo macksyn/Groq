@@ -254,6 +254,7 @@ function validateAnswerFormat(text) {
       answers.push(answer);
     }
   }
+
   return answers;
 }
 

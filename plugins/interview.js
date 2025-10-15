@@ -1062,7 +1062,7 @@ async function isAdmin(userId, groupId) {
 
 export function initialize(config) {
   // Keep this minimal or empty since we read from ENV directly
-  botConfig = config; // Keep for backward compatibility if needed elsewhere
+  config = config; // Keep for backward compatibility if needed elsewhere
   console.log('✅ Interview plugin initialized (reading admins from ENV)');
 }
 
