@@ -411,15 +411,49 @@ User: ${userName}`
 
   async evaluateInterview(session, customPrompt = '') {
     try {
-      const responses = session.responses.map(r => `Q: ${r.question}\nA: ${r.answer}`).join('\n\n');
-      const followUps = session.followUpResponses.map(f => `Follow-up: ${f.question}\nA: ${f.answer}`).join('\n\n');
+      // Safely build responses, handling undefined arrays
+      const responses = (session.responses || [])
+        .map(r => `Q: ${r.question || 'N/A'}\nA: ${r.answer || 'N/A'}`)
+        .join('\n\n');
+      
+      const followUps = (session.followUpResponses || [])
+        .map(f => `Follow-up: ${f.question || 'N/A'}\nA: ${f.answer || 'N/A'}`)
+        .join('\n\n');
+      
       const photoInfo = session.photo ? `Photo provided: Yes` : `Photo provided: No (mandatory - potential red flag)`;
       
-      const prompt = customPrompt || DEFAULT_EVAL_PROMPT.replace('${responses}', responses + (followUps ? '\n\n' + followUps : '') + `\n\n${photoInfo}`);
+      const dobInfo = `DOB: ${session.dob?.day || 'N/A'}/${session.dob?.month || 'N/A'}/${session.dob?.year || 'N/A'}`;
+      
+      // Build complete response text
+      const allResponses = [
+        responses,
+        followUps ? `\n\n${followUps}` : '',
+        `\n\n${photoInfo}`,
+        `\n${dobInfo}`
+      ].join('');
+
+      // Build evaluation prompt - avoid template literal issues
+      let evalPrompt;
+      if (customPrompt) {
+        evalPrompt = customPrompt.replace('${responses}', allResponses);
+      } else {
+        evalPrompt = DEFAULT_EVAL_PROMPT.replace('${responses}', allResponses);
+      }
+
+      // Ensure prompt isn't too long (Groq limit ~8k tokens)
+      if (evalPrompt.length > 24000) {
+        evalPrompt = evalPrompt.substring(0, 24000) + '\n\n[Truncated due to length]';
+      }
 
       const messages = [
-        { role: 'system', content: 'You are a fair community moderator evaluating new members.' },
-        { role: 'user', content: prompt }
+        { 
+          role: 'system', 
+          content: 'You are a fair community moderator evaluating new members. Always respond with valid JSON only.' 
+        },
+        { 
+          role: 'user', 
+          content: evalPrompt 
+        }
       ];
 
       const response = await axios.post(
@@ -428,39 +462,51 @@ User: ${userName}`
           model: GROQ_CONFIG.MODEL,
           messages: messages,
           temperature: 0.3,
-          max_tokens: 200
+          max_tokens: 300,
+          response_format: { type: "json_object" } // Force JSON response
         },
         {
           headers: {
             'Authorization': `Bearer ${GROQ_CONFIG.API_KEY}`,
             'Content-Type': 'application/json'
           },
-          timeout: 20000
+          timeout: 25000
         }
       );
 
       if (response.data?.choices?.[0]?.message?.content) {
         const result = response.data.choices[0].message.content.trim();
         try {
-          // Attempt to find JSON block if markdown is used
-          const jsonMatch = result.match(/```json\n([\s\S]*?)\n```/);
-          const jsonString = jsonMatch ? jsonMatch[1] : result;
-          const evalResult = JSON.parse(jsonString);
+          // Try direct JSON parse first
+          let evalResult;
+          try {
+            evalResult = JSON.parse(result);
+          } catch {
+            // Fallback: extract JSON from markdown code blocks
+            const jsonMatch = result.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
+            const jsonString = jsonMatch ? jsonMatch[1] : result;
+            evalResult = JSON.parse(jsonString);
+          }
+          
           return {
             decision: (evalResult.decision || 'REVIEW').toUpperCase(),
-            score: parseInt(evalResult.score) || 50,
-            feedback: (evalResult.feedback || 'No feedback provided').substring(0, 150)
+            score: Math.min(100, Math.max(0, parseInt(evalResult.score) || 50)),
+            feedback: (evalResult.feedback || 'No feedback provided').substring(0, 200)
           };
         } catch (e) {
-          console.error('Failed to parse AI evaluation JSON:', e);
+          console.error('Failed to parse AI evaluation JSON:', e, '\nRaw result:', result);
           return { decision: 'REVIEW', score: 50, feedback: 'AI evaluation parsing failed' };
         }
       }
-      return { decision: 'REVIEW', score: 50, feedback: 'AI evaluation failed' };
+      return { decision: 'REVIEW', score: 50, feedback: 'AI evaluation returned no content' };
 
     } catch (error) {
-      console.error('AI Evaluation Error:', error);
-      return { decision: 'REVIEW', score: 50, feedback: 'Technical evaluation error' };
+      console.error('AI Evaluation Error:', error.response?.data || error.message);
+      // Log more details for debugging
+      if (error.response?.data) {
+        console.error('API Error Details:', JSON.stringify(error.response.data, null, 2));
+      }
+      return { decision: 'REVIEW', score: 50, feedback: 'Technical evaluation error - manual review required' };
     }
   }
 }
