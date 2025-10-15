@@ -803,20 +803,25 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         return;
       }
 
-      // Send processing message
-      const processingMsg = await sock.sendMessage(from, {
-        text: `⏳ *Processing Download...*\n\nPlease wait while we fetch your media.`
-      }, { quoted: m });
+      // React with hourglass emoji to show processing
+      await sock.sendMessage(from, {
+        react: { text: '⏳', key: m.key }
+      });
 
       // Attempt download
       const result = await downloader.download(url, sender, isGroup);
 
+      // Remove hourglass reaction
+      await sock.sendMessage(from, {
+        react: { text: '', key: m.key }
+      });
+
       if (result.error) {
-        // Edit the processing message with error
+        // React with error emoji and send error message
         await sock.sendMessage(from, {
-          text: result.error,
-          edit: processingMsg.key
+          react: { text: '❌', key: m.key }
         });
+        await reply(result.error);
         return;
       }
 
@@ -828,16 +833,16 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
         
         // Add title/artist info
         if (result.artist) {
-          caption += `🎤 ${result.artist}\n`;
+          caption += `🎤 *Artist:* ${result.artist}\n`;
         }
         if (result.title && result.title !== 'media') {
-          caption += `📝 ${result.title}\n`;
+          caption += `📝 *Title:* ${result.title}\n`;
         }
         if (result.album) {
-          caption += `💿 ${result.album}\n`;
+          caption += `💿 *Album:* ${result.album}\n`;
         }
         if (result.author) {
-          caption += `👤 ${result.author}\n`;
+          caption += `👤 *Creator:* ${result.author}\n`;
         }
         
         // Add cost/remaining info
@@ -879,18 +884,22 @@ export default async function socialMediaDownloader(m, sock, config, bot) {
             }, { quoted: m });
           }
 
-          // Delete processing message after successful send
+         // React with success emoji
           await sock.sendMessage(from, {
-            delete: processingMsg.key
+            react: { text: '✅', key: m.key }
           });
         } catch (sendError) {
           console.error(chalk.red('Error sending media:'), sendError.message);
           
-          // If sending fails, update the processing message with error and direct link
+          // React with error emoji
           await sock.sendMessage(from, {
-            text: `❌ *Send Failed*\n\nThe media was downloaded but couldn't be sent. This might be due to:\n• File size too large\n• Network issues\n• WhatsApp restrictions\n\nDirect link: ${result.url}`,
-            edit: processingMsg.key
+            react: { text: '❌', key: m.key }
           });
+          
+          // Send error message with direct link
+          await reply(
+            `❌ *Send Failed*\n\nThe media was downloaded but couldn't be sent. This might be due to:\n• File size too large\n• Network issues\n• WhatsApp restrictions\n\nDirect link: ${result.url}`
+          );
         }
       }
       return;
