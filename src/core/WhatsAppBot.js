@@ -1,18 +1,13 @@
+// src/core/WhatsAppBot.js (Corrected V2)
 import { EventEmitter } from 'events';
-import chalk from 'chalk';
 import moment from 'moment-timezone';
-
-// Import your existing managers (keeping them as-is)
+import logger from '../utils/logger.js';
 import mongoManager from '../../lib/mongoManager.js';
 import PluginManager from '../../lib/pluginManager.js';
-
-// Import new lightweight components
 import { SocketManager } from './SocketManager.js';
 import { WebServer } from './WebServer.js';
 import { SessionManager } from './SessionManager.js';
 import { HealthMonitor } from './HealthMonitor.js';
-
-// Import your existing handlers (keeping them)
 import MessageHandler from '../../handlers/messageHandler.js';
 import CallHandler from '../../handlers/callHandler.js';
 import GroupHandler from '../../handlers/groupHandler.js';
@@ -23,32 +18,28 @@ export class WhatsAppBot extends EventEmitter {
     this.config = config;
     this.status = 'initializing';
     this.startTime = Date.now();
-    
-    // Use your existing managers
     this.mongoManager = mongoManager;
     this.pluginManager = PluginManager;
-    
-    // New lightweight components
     this.sessionManager = null;
     this.socketManager = null;
     this.webServer = null;
     this.healthMonitor = null;
-    
     this.bioUpdateCount = 0;
     this.lastSuccessfulConnection = Date.now();
   }
 
+  // --- THIS IS THE CORRECTED START FUNCTION ---
   async start() {
     try {
-      console.log(chalk.blue('🚀 Starting Fresh WhatsApp Bot...'));
+      logger.info('🚀 Starting Fresh WhatsApp Bot...');
       
-      // Step 1: Initialize database (your existing mongoManager)
+      // Step 1: Initialize database
       await this.initializeDatabase();
       
       // Step 2: Initialize session management
       await this.initializeSessionManager();
       
-      // Step 3: Initialize plugins (your existing PluginManager)  
+      // Step 3: Initialize plugins
       await this.initializePlugins();
       
       // Step 4: Start web server
@@ -61,121 +52,110 @@ export class WhatsAppBot extends EventEmitter {
       await this.startMonitoring();
       
       this.status = 'running';
-      console.log(chalk.green('🎉 Bot started successfully!'));
+      logger.info('🎉 Bot started successfully!');
       this.emit('started');
-
       this.on('shutdown', () => {
         this.stop().then(() => process.exit(0));
       });
-
       this.on('restart', () => {
         this.restart();
       });
-      
     } catch (error) {
       this.status = 'error';
-      console.error(chalk.red('❌ Bot startup failed:'), error.message);
+      logger.error(error, '❌ Bot startup failed');
       throw error;
     }
   }
+  // --- END CORRECTED START FUNCTION ---
 
   async restart() {
     try {
       await this.stop();
       await this.start();
     } catch (error) {
-      console.error(chalk.red('❌ Bot restart failed:'), error.message);
+      logger.error(error, '❌ Bot restart failed');
       process.exit(1);
     }
   }
 
   async stop() {
     try {
-      console.log(chalk.yellow('🛑 Stopping bot...'));
+      logger.info('🛑 Stopping bot...');
       this.status = 'stopping';
-      
       if (this.healthMonitor) await this.healthMonitor.stop();
       if (this.socketManager) await this.socketManager.disconnect();
       if (this.webServer) await this.webServer.stop();
       if (this.mongoManager) await this.mongoManager.close();
-      
       this.status = 'stopped';
-      console.log(chalk.green('✅ Bot stopped'));
+      logger.info('✅ Bot stopped');
       this.emit('stopped');
-      
     } catch (error) {
-      console.error(chalk.red('❌ Bot stop failed:'), error.message);
+      logger.error(error, '❌ Bot stop failed');
       throw error;
     }
   }
 
   async initializeDatabase() {
     if (!this.config.MONGODB_URI) {
-      console.log(chalk.yellow('⚠️ No MongoDB URI - skipping database'));
+      logger.warn('⚠️ No MongoDB URI - skipping database');
       return;
     }
-
     try {
-      console.log(chalk.blue('🗄️ Initializing database...'));
+      logger.info('🗄️ Initializing database...');
       await this.mongoManager.connect();
-      console.log(chalk.green('✅ Database connected'));
     } catch (error) {
-      console.log(chalk.yellow('⚠️ Database failed, continuing without it'));
+      logger.warn(error, '⚠️ Database failed, continuing without it');
     }
   }
 
   async initializeSessionManager() {
-    console.log(chalk.blue('📁 Initializing session management...'));
+    logger.info('📁 Initializing session management...');
     this.sessionManager = new SessionManager(this.config);
     await this.sessionManager.initialize();
   }
 
   async initializePlugins() {
     try {
-      console.log(chalk.blue('🔌 Initializing plugins...'));
+      logger.info('🔌 Loading plugins...');
       await this.pluginManager.loadPlugins();
       const stats = this.pluginManager.getPluginStats();
-      console.log(chalk.green(`✅ Loaded ${stats.enabled}/${stats.total} plugins`));
+      logger.info(`✅ Loaded ${stats.enabled}/${stats.total} plugins`);
     } catch (error) {
-      console.warn(chalk.yellow('⚠️ Plugin initialization warning:'), error.message);
+      logger.warn(error, '⚠️ Plugin initialization warning');
     }
   }
 
   async startWebServer() {
-    console.log(chalk.blue('🌐 Starting web server...'));
+    logger.info('🌐 Starting web server...');
     this.webServer = new WebServer(this.config, this);
     await this.webServer.start();
   }
 
   async connectWhatsApp() {
-    console.log(chalk.blue('📱 Connecting to WhatsApp...'));
-    this.socketManager = new SocketManager(this.config, this.sessionManager);
-    
-    // Connect your existing handlers
+    logger.info('📱 Connecting to WhatsApp...');
+    this.socketManager = new SocketManager(
+      this.sessionManager, 
+      this.pluginManager, 
+      this.mongoManager
+    );
     this.socketManager.on('message', async (data) => {
-      await MessageHandler(data.messageUpdate, data.socket, console, this.config, this);
+      await MessageHandler(data.messageUpdate, data.socket, logger, this.config, this);
     });
-    
     this.socketManager.on('call', async (data) => {
-      await CallHandler(data.callUpdate, data.socket, this.config);
+      await CallHandler(data.callUpdate, data.socket, this.config, logger);
     });
-    
     this.socketManager.on('groupUpdate', async (data) => {
-      await GroupHandler(data.socket, data.groupUpdate, this.config);
+      await GroupHandler(data.socket, data.groupUpdate, this.config, logger);
     });
-    
     this.socketManager.on('statusChange', (status) => {
       this.handleStatusChange(status);
     });
-    
     await this.socketManager.connect();
   }
 
   async startMonitoring() {
     this.healthMonitor = new HealthMonitor(this, this.config);
     await this.healthMonitor.start();
-    
-    // Start bio updates if enabled
     if (this.config.AUTO_BIO) {
       this.startBioUpdates();
     }
@@ -184,29 +164,20 @@ export class WhatsAppBot extends EventEmitter {
   startBioUpdates() {
     setInterval(async () => {
       try {
-        if (this.bioUpdateCount >= 3) return; // Max 3 per hour
-        
+        if (this.bioUpdateCount >= 3) return; 
         const socket = this.socketManager?.getSocket();
         if (!socket || !socket.user?.id) return;
-        
         const time = moment().tz(this.config.TIMEZONE).format('HH:mm:ss');
         const date = moment().tz(this.config.TIMEZONE).format('DD/MM/YYYY');
         const dbStatus = this.mongoManager.isConnected ? '🔗' : '⚠️';
-        
-        const bioText = `🤖 ${this.config.BOT_NAME}
-📅 ${date} | ⏰ ${time}
-${dbStatus} Database ${this.mongoManager.isConnected ? 'Online' : 'Offline'}`;
-
+        const bioText = `🤖 ${this.config.BOT_NAME}\n📅 ${date} | ⏰ ${time}\n${dbStatus} Database ${this.mongoManager.isConnected ? 'Online' : 'Offline'}`;
         await socket.updateProfileStatus(bioText);
         this.bioUpdateCount++;
-        
-        console.log(chalk.cyan(`📝 Bio updated: ${bioText.replace(/\n/g, ' | ')}`));
+        logger.info(`📝 Bio updated: ${bioText.replace(/\n/g, ' | ')}`);
       } catch (error) {
-        console.log(chalk.yellow('⚠️ Bio update failed:'), error.message);
+        logger.warn(error, '⚠️ Bio update failed');
       }
-    }, 20 * 60 * 1000); // Every 20 minutes
-    
-    // Reset bio update count every hour
+    }, 20 * 60 * 1000); 
     setInterval(() => {
       this.bioUpdateCount = 0;
     }, 60 * 60 * 1000);
@@ -215,7 +186,6 @@ ${dbStatus} Database ${this.mongoManager.isConnected ? 'Online' : 'Offline'}`;
   handleStatusChange(status) {
     this.status = status;
     this.emit('statusChange', status);
-    
     if (status === 'connected') {
       this.lastSuccessfulConnection = Date.now();
       this.sendStartupNotification();
@@ -225,32 +195,27 @@ ${dbStatus} Database ${this.mongoManager.isConnected ? 'Online' : 'Offline'}`;
   async sendStartupNotification() {
     try {
       if (!this.config.OWNER_NUMBER) return;
-      
       const socket = this.socketManager?.getSocket();
       if (!socket || !socket.user?.id) return;
-      
-      // Wait a bit for socket to be fully ready
       setTimeout(async () => {
         try {
           const message = this.buildStartupMessage();
           await socket.sendMessage(this.config.OWNER_NUMBER + '@s.whatsapp.net', { 
             text: message 
           });
-          console.log(chalk.green('📤 Startup notification sent'));
+          logger.info('📤 Startup notification sent');
         } catch (error) {
-          console.log(chalk.yellow('⚠️ Startup notification failed:'), error.message);
+          logger.warn(error, '⚠️ Startup notification failed');
         }
-      }, 10000); // 10 second delay
-      
+      }, 10000); 
     } catch (error) {
-      console.log(chalk.yellow('⚠️ Startup notification error:'), error.message);
+      logger.warn(error, '⚠️ Startup notification error');
     }
   }
 
   buildStartupMessage() {
     const pluginStats = this.pluginManager.getPluginStats();
     const dbStatus = this.mongoManager.isConnected ? '✅ Connected' : '❌ Offline';
-    
     return `🤖 *${this.config.BOT_NAME} Online!*
 
 📊 Status: ✅ Running
@@ -281,10 +246,9 @@ ${this.config.REJECT_CALL ? '✅' : '❌'} Call Rejection
   
   getStats() {
     const memUsage = process.memoryUsage();
-    
     return {
       status: this.status,
-      uptime: this.getUptime(),
+      uptime: this.getUGptime(),
       memory: {
         heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
         heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
