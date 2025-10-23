@@ -218,7 +218,7 @@ export class SocketManager extends EventEmitter {
             break;
             
           case DisconnectReason.badSession:
-            logger.safeError(error, '🚫 Bad session file. Cleaning session and retrying...');
+            logger.safeError(lastDisconnect?.error, '🚫 Bad session file. Cleaning session and retrying...');
             cleanSessionFirst = true;
             break;
 
