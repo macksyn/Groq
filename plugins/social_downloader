@@ -1,13 +1,12 @@
-// plugins/socialMediaDownloader.js
+// plugins/social_downloader_v3.js
 import axios from 'axios';
 import chalk from 'chalk';
 import { PluginHelpers, safeOperation } from '../lib/pluginIntegration.js';
 
-// Collection name for settings
+// --- Constants (Copied from original) ---
 const SETTINGS_COLLECTION = 'downloader_settings';
 const USAGE_COLLECTION = 'downloader_usage';
 
-// Default settings (used when no DB settings exist)
 const DEFAULT_SETTINGS = {
   premiumEnabled: false,
   downloadCost: 50,
@@ -21,7 +20,6 @@ const DEFAULT_SETTINGS = {
   updatedBy: 'system'
 };
 
-// Supported platforms with regex patterns
 const PLATFORMS = {
   FACEBOOK: {
     name: 'Facebook',
@@ -70,7 +68,6 @@ const PLATFORMS = {
   }
 };
 
-// Platform-specific API configurations
 const PLATFORM_APIS = {
   tiktok: {
     endpoint: 'https://delirius-apiofc.vercel.app/download/tiktok',
@@ -100,7 +97,6 @@ const PLATFORM_APIS = {
         throw new Error('Invalid Instagram response format');
       }
       
-      // Get first media item (could be image or video)
       const media = data[0];
       return {
         url: media.url,
@@ -120,7 +116,6 @@ const PLATFORM_APIS = {
         throw new Error('Invalid Facebook response format');
       }
       
-      // Prefer HD quality
       const videoUrl = data.urls[0].hd || data.urls[1]?.sd;
       if (!videoUrl) {
         throw new Error('No video URL found in Facebook response');
@@ -155,10 +150,8 @@ const PLATFORM_APIS = {
     }
   },
   twitter: {
-    // Fallback Twitter API (using existing method)
     buildUrl: (url) => `https://twitsave.com/info?url=${encodeURIComponent(url)}`,
     extractData: (response) => {
-      // Parse HTML response to extract video URL
       const videoMatch = response.data.match(/https?:\/\/[^\s<>"]+\.mp4/);
       if (!videoMatch) {
         throw new Error('No video URL found in Twitter response');
@@ -174,6 +167,7 @@ const PLATFORM_APIS = {
   }
 };
 
+// --- Downloader Class (Copied from original) ---
 class SocialMediaDownloader {
   constructor() {
     this.settings = null;
@@ -183,7 +177,6 @@ class SocialMediaDownloader {
     this.statsCacheDuration = 5 * 60 * 1000; // 5 minutes
   }
 
-  // Initialize and load settings from MongoDB
   async initialize() {
     try {
       this.settings = await this.loadSettings();
@@ -196,14 +189,12 @@ class SocialMediaDownloader {
     }
   }
 
-  // Load settings from MongoDB
   async loadSettings() {
     try {
       return await safeOperation(async (db, collection) => {
         let settings = await collection.findOne({ _id: 'main_settings' });
         
         if (!settings) {
-          // Create default settings
           settings = { _id: 'main_settings', ...DEFAULT_SETTINGS };
           await collection.insertOne(settings);
           console.log(chalk.cyan('📝 Created default downloader settings'));
@@ -217,7 +208,6 @@ class SocialMediaDownloader {
     }
   }
 
-  // Save settings to MongoDB
   async saveSettings(updates, updatedBy = 'system') {
     try {
       return await safeOperation(async (db, collection) => {
@@ -233,7 +223,6 @@ class SocialMediaDownloader {
           { upsert: true }
         );
         
-        // Update local cache
         this.settings = await this.loadSettings();
         
         console.log(chalk.green('✅ Downloader settings updated'));
@@ -245,12 +234,10 @@ class SocialMediaDownloader {
     }
   }
 
-  // Get current settings
   getSettings() {
     return this.settings || { ...DEFAULT_SETTINGS };
   }
 
-  // Check if user is admin (from ENV)
   isAdmin(userId) {
     const adminNumber = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER;
     if (!adminNumber) return false;
@@ -259,7 +246,6 @@ class SocialMediaDownloader {
     return adminNumber === userNumber || adminNumber.includes(userNumber);
   }
 
-  // Detect platform from URL
   detectPlatform(url) {
     for (const [platform, config] of Object.entries(PLATFORMS)) {
       for (const pattern of config.patterns) {
@@ -272,13 +258,11 @@ class SocialMediaDownloader {
     return null;
   }
 
-  // Check if platform is enabled
   isPlatformEnabled(platformKey) {
     const settings = this.getSettings();
     return settings.enabledPlatforms?.includes(platformKey) ?? true;
   }
 
-  // Get user usage data from MongoDB
   async getUserUsage(userId) {
     try {
       return await safeOperation(async (db, collection) => {
@@ -297,7 +281,6 @@ class SocialMediaDownloader {
           await collection.insertOne(usage);
         }
         
-        // Reset if cooldown expired
         if (now > usage.resetTime) {
           await collection.updateOne(
             { userId },
@@ -320,7 +303,6 @@ class SocialMediaDownloader {
     }
   }
 
-  // Check rate limits
   async checkRateLimit(userId) {
     const settings = this.getSettings();
     if (settings.premiumEnabled) return true;
@@ -336,7 +318,6 @@ class SocialMediaDownloader {
     return true;
   }
 
-  // Increment usage counter in MongoDB
   async incrementUsage(userId, platform, url) {
     try {
       return await safeOperation(async (db, collection) => {
@@ -360,7 +341,6 @@ class SocialMediaDownloader {
     }
   }
 
-  // Download with platform-specific API
   async downloadWithPlatformAPI(url, platformKey) {
     try {
       const apiConfig = PLATFORM_APIS[platformKey];
@@ -382,12 +362,10 @@ class SocialMediaDownloader {
 
       console.log(chalk.green(`✅ ${platformKey} API response received`));
 
-      // Check if API returned error
       if (response.data.status === false) {
         throw new Error(response.data.message || 'API returned error status');
       }
 
-      // Extract data using platform-specific extractor
       const extractedData = apiConfig.extractData(response);
       
       return {
@@ -397,7 +375,6 @@ class SocialMediaDownloader {
     } catch (error) {
       console.error(chalk.red(`${platformKey} API error:`), error.message);
       
-      // Log more details for debugging
       if (error.response) {
         console.error(chalk.red('Response status:'), error.response.status);
         console.error(chalk.red('Response data:'), JSON.stringify(error.response.data, null, 2));
@@ -407,12 +384,10 @@ class SocialMediaDownloader {
     }
   }
 
-  // Main download function
   async download(url, userId, isGroup) {
     const downloadId = `${userId}_${Date.now()}`;
     const settings = this.getSettings();
     
-    // Check if groups/private are allowed
     if (isGroup && !settings.allowGroups) {
       return { error: '⚠️ Group downloads are currently disabled by admin.' };
     }
@@ -420,7 +395,6 @@ class SocialMediaDownloader {
       return { error: '⚠️ Private downloads are currently disabled by admin.' };
     }
 
-    // Prevent duplicate downloads
     if (this.activeDownloads.has(userId)) {
       return { error: 'You already have a download in progress. Please wait.' };
     }
@@ -428,7 +402,6 @@ class SocialMediaDownloader {
     try {
       this.activeDownloads.set(userId, downloadId);
 
-      // Detect platform
       const detection = this.detectPlatform(url);
       if (!detection) {
         return { error: 'Unsupported URL. Please provide a valid social media link.' };
@@ -436,12 +409,10 @@ class SocialMediaDownloader {
 
       const { platform, config } = detection;
 
-      // Check if platform is enabled
       if (!this.isPlatformEnabled(config.key)) {
         return { error: `${config.name} downloads are currently disabled by admin.` };
       }
 
-      // Check rate limits (free tier)
       const rateLimitCheck = await this.checkRateLimit(userId);
       if (rateLimitCheck.limited) {
         return { 
@@ -453,7 +424,6 @@ class SocialMediaDownloader {
         };
       }
 
-      // Check balance for premium mode
       if (settings.premiumEnabled) {
         const balance = await PluginHelpers.getBalance(userId);
         if (balance.wallet < settings.downloadCost) {
@@ -467,7 +437,6 @@ class SocialMediaDownloader {
         }
       }
 
-      // Attempt download with platform-specific API
       let result;
       
       try {
@@ -486,15 +455,12 @@ class SocialMediaDownloader {
         };
       }
 
-      // Charge user if premium mode
       if (settings.premiumEnabled) {
         await PluginHelpers.removeMoney(userId, settings.downloadCost, `${config.name} download`);
       } else {
-        // Increment usage counter
         await this.incrementUsage(userId, config.name, url);
       }
 
-      // Log download to stats
       await this.logDownload(userId, config.name, settings.premiumEnabled);
 
       return {
@@ -512,7 +478,6 @@ class SocialMediaDownloader {
     }
   }
 
-  // Log download statistics
   async logDownload(userId, platform, isPremium) {
     try {
       await safeOperation(async (db, collection) => {
@@ -534,7 +499,6 @@ class SocialMediaDownloader {
     }
   }
 
-  // Get remaining downloads for user
   async getRemainingDownloads(userId) {
     const settings = this.getSettings();
     if (settings.premiumEnabled) return 'Unlimited (Premium)';
@@ -543,11 +507,9 @@ class SocialMediaDownloader {
     return Math.max(0, settings.rateLimitFree - usage.count);
   }
 
-  // Get comprehensive statistics
   async getStats() {
     const now = Date.now();
     
-    // Return cached stats if available and fresh
     if (this.statsCache && (now - this.statsCacheTime < this.statsCacheDuration)) {
       return this.statsCache;
     }
@@ -590,7 +552,6 @@ class SocialMediaDownloader {
         lastUpdated: new Date()
       };
 
-      // Cache the results
       this.statsCache = result;
       this.statsCacheTime = now;
 
@@ -605,7 +566,6 @@ class SocialMediaDownloader {
     }
   }
 
-  // Get user's download history
   async getUserHistory(userId, limit = 10) {
     try {
       return await safeOperation(async (db, collection) => {
@@ -619,423 +579,370 @@ class SocialMediaDownloader {
   }
 }
 
-// Create singleton instance
+// --- Create Singleton Instance (Copied from original) ---
 const downloader = new SocialMediaDownloader();
 
-// Main plugin handler
-export default async function socialMediaDownloader(m, sock, config, bot) {
+// --- Command Handlers (Copied from original, modified to accept downloader instance) ---
+
+async function handleDlSettings(reply, downloaderInstance, config, sender, settingArgs) {
+  const settings = downloaderInstance.getSettings();
+
+  if (settingArgs.length === 0) {
+    const adminNum = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBERS || 'Not configured';
+    await reply(
+      `*⚙️ Downloader Settings*\n\n` +
+      `*Admin Number:* ${adminNum}\n\n` +
+      `*Premium Mode:* ${settings.premiumEnabled ? '✅ Enabled' : '❌ Disabled'}\n` +
+      `*Download Cost:* ₦${settings.downloadCost}\n` +
+      `*Free Limit:* ${settings.rateLimitFree} per day\n` +
+      `*Cooldown:* ${settings.rateLimitCooldown / (60 * 60 * 1000)}h\n\n` +
+      `*Enabled Platforms:*\n${settings.enabledPlatforms.map(p => `• ${p}`).join('\n')}\n\n` +
+      `*Allow Groups:* ${settings.allowGroups ? '✅' : '❌'}\n` +
+      `*Allow Private:* ${settings.allowPrivate ? '✅' : '❌'}\n\n` +
+      `*Last Updated:* ${new Date(settings.updatedAt).toLocaleString()}\n` +
+      `*Updated By:* ${settings.updatedBy}\n\n` +
+      `*Commands:*\n` +
+      `${config.PREFIX}dlsettings premium on/off\n` +
+      `${config.PREFIX}dlsettings cost <amount>\n` +
+      `${config.PREFIX}dlsettings limit <number>\n` +
+      `${config.PREFIX}dlsettings platform <name> on/off\n` +
+      `${config.PREFIX}dlsettings groups on/off\n` +
+      `${config.PREFIX}dlsettings private on/off`
+    );
+    return;
+  }
+
+  const action = settingArgs[0];
+  const value = settingArgs[1];
+  const updates = {};
+
   try {
-    // Initialize if not already done
-    if (!downloader.settings) {
-      await downloader.initialize();
+    switch (action) {
+      case 'premium':
+        if (value === 'on' || value === 'off') {
+          updates.premiumEnabled = value === 'on';
+          await downloaderInstance.saveSettings(updates, sender);
+          await reply(`✅ Premium mode ${value === 'on' ? 'enabled' : 'disabled'}`);
+        } else {
+          await reply('❌ Usage: .dlsettings premium on/off');
+        }
+        break;
+      case 'cost':
+        const cost = parseInt(value);
+        if (!isNaN(cost) && cost >= 0) {
+          updates.downloadCost = cost;
+          await downloaderInstance.saveSettings(updates, sender);
+          await reply(`✅ Download cost set to ₦${cost}`);
+        } else {
+          await reply('❌ Invalid cost. Usage: .dlsettings cost <number>');
+        }
+        break;
+      case 'limit':
+        const limit = parseInt(value);
+        if (!isNaN(limit) && limit > 0) {
+          updates.rateLimitFree = limit;
+          await downloaderInstance.saveSettings(updates, sender);
+          await reply(`✅ Free download limit set to ${limit} per day`);
+        } else {
+          await reply('❌ Invalid limit. Usage: .dlsettings limit <number>');
+        }
+        break;
+      case 'platform':
+        const platform = value?.toLowerCase();
+        const state = settingArgs[2];
+        if (platform && (state === 'on' || state === 'off')) {
+          const settings = downloaderInstance.getSettings();
+          const platforms = [...settings.enabledPlatforms] || [];
+          
+          if (state === 'on' && !platforms.includes(platform)) {
+            platforms.push(platform);
+          } else if (state === 'off') {
+            const index = platforms.indexOf(platform);
+            if (index > -1) platforms.splice(index, 1);
+          }
+          
+          updates.enabledPlatforms = platforms;
+          await downloaderInstance.saveSettings(updates, sender);
+          await reply(`✅ ${platform} ${state === 'on' ? 'enabled' : 'disabled'}`);
+        } else {
+          await reply('❌ Usage: .dlsettings platform <facebook|tiktok|twitter|instagram|spotify> on/off');
+        }
+        break;
+      case 'groups':
+        if (value === 'on' || value === 'off') {
+          updates.allowGroups = value === 'on';
+          await downloaderInstance.saveSettings(updates, sender);
+          await reply(`✅ Group downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
+        } else {
+          await reply('❌ Usage: .dlsettings groups on/off');
+        }
+        break;
+      case 'private':
+        if (value === 'on' || value === 'off') {
+          updates.allowPrivate = value === 'on';
+          await downloaderInstance.saveSettings(updates, sender);
+          await reply(`✅ Private downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
+        } else {
+          await reply('❌ Usage: .dlsettings private on/off');
+        }
+        break;
+      default:
+        await reply(`❌ Unknown setting: ${action}\n\nUse ${config.PREFIX}dlsettings to see available commands`);
     }
+  } catch (error) {
+     console.error(chalk.red('Error updating setting:'), error.message);
+     await reply(`❌ Error updating setting: ${error.message}`);
+  }
+}
 
-    // Skip if no body or doesn't start with prefix
-    if (!m.body || !m.body.startsWith(config.PREFIX)) return;
-
-    // Extract message details matching your bot's structure
-    const messageBody = m.body.slice(config.PREFIX.length).trim();
-    const args = messageBody.split(' ');
-    const command = args[0].toLowerCase();
-    const sender = m.key.participant || m.key.remoteJid;
-    const from = m.key.remoteJid;
-    const isGroup = from.endsWith('@g.us');
+async function handleDownload(reply, downloaderInstance, config, sock, m, sender, isGroup, bot, url) {
+  if (!url) {
+    const remaining = await downloaderInstance.getRemainingDownloads(sender);
+    const settings = downloaderInstance.getSettings();
     
-    if (!sender) {
-      console.log(chalk.yellow('⚠️ No sender found in message'));
-      return;
+    let replyText = `*📥 Social Media Downloader*\n\n`;
+    replyText += `*Supported Platforms:*\n`;
+    replyText += `${settings.enabledPlatforms.map(p => {
+      const plat = Object.values(PLATFORMS).find(pl => pl.key === p);
+      return plat ? `${plat.icon} ${plat.name}` : '';
+    }).filter(Boolean).join('\n')}\n\n`;
+    replyText += `*Your Status:*\n`;
+    if (settings.premiumEnabled) {
+      replyText += `💎 Premium: ₦${settings.downloadCost} per download\n\n`;
+    } else {
+      replyText += `🆓 Free: ${remaining}/${settings.rateLimitFree} remaining today\n\n`;
+    }
+    replyText += `*Usage:* ${config.PREFIX}dl <url>\n`;
+    replyText += `*Example:* ${config.PREFIX}dl https://tiktok.com/@user/video/123`;
+    
+    await reply(replyText);
+    return;
+  }
+
+  await sock.sendMessage(m.from, { react: { text: '⏳', key: m.key } });
+  const result = await downloaderInstance.download(url, sender, isGroup);
+  await sock.sendMessage(m.from, { react: { text: '', key: m.key } }); // Remove reaction
+
+  if (result.error) {
+    await sock.sendMessage(m.from, { react: { text: '❌', key: m.key } });
+    await reply(result.error);
+    return;
+  }
+
+  if (result.success) {
+    const settings = downloaderInstance.getSettings();
+    const remaining = await downloaderInstance.getRemainingDownloads(sender);
+    
+    let caption = `${result.icon} *${result.platform} Download*\n\n`;
+    
+    if (result.artist) {
+      caption += `🎤 *Artist:* ${result.artist}\n`;
+    }
+    if (result.title && result.title !== 'media') {
+      caption += `📝 *Title:* ${result.title}\n`;
+    }
+    if (result.album) {
+      caption += `💿 *Album:* ${result.album}\n`;
+    }
+    if (result.author) {
+      caption += `👤 *Creator:* ${result.author}\n`;
     }
     
-    const isAdmin = downloader.isAdmin(sender);
-    
-    // Reply helper
-    const reply = async (text) => {
-      await sock.sendMessage(from, { text }, { quoted: m });
-    };
+    if (settings.premiumEnabled) {
+      caption += `💳 Charged: ₦${settings.downloadCost}\n`;
+    } else {
+      caption += `🆓 Remaining: ${remaining}/${settings.rateLimitFree}\n`;
+    }
+    caption += `\n⚡ Powered by ${bot?.name || 'Groq'}`;
 
-    // Admin Settings Command: .dlsettings
-    if (command === 'dlsettings') {
-      if (!isAdmin) {
-        await reply('⛔ *Access Denied*\n\nThis command is only available to administrators.');
-        return;
-      }
-
-      const settingArgs = args.slice(1);
+    try {
+      const isAudio = result.platform === 'Spotify';
+      const isImage = result.type === 'image';
       
-      if (settingArgs.length === 0) {
-        // Show current settings
-        const settings = downloader.getSettings();
-        const adminNum = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBERS || 'Not configured';
+      if (isAudio) {
+        await sock.sendMessage(m.from, {
+          audio: { url: result.url },
+          mimetype: 'audio/mpeg',
+          ptt: false,
+          fileName: `${result.title}.mp3`
+        }, { quoted: m });
         
-        await reply(
-          `*⚙️ Downloader Settings*\n\n` +
-          `*Admin Number:* ${adminNum}\n\n` +
-          `*Premium Mode:* ${settings.premiumEnabled ? '✅ Enabled' : '❌ Disabled'}\n` +
-          `*Download Cost:* ₦${settings.downloadCost}\n` +
-          `*Free Limit:* ${settings.rateLimitFree} per day\n` +
-          `*Cooldown:* ${settings.rateLimitCooldown / (60 * 60 * 1000)}h\n\n` +
-          `*Enabled Platforms:*\n${settings.enabledPlatforms.map(p => `• ${p}`).join('\n')}\n\n` +
-          `*Allow Groups:* ${settings.allowGroups ? '✅' : '❌'}\n` +
-          `*Allow Private:* ${settings.allowPrivate ? '✅' : '❌'}\n\n` +
-          `*Last Updated:* ${new Date(settings.updatedAt).toLocaleString()}\n` +
-          `*Updated By:* ${settings.updatedBy}\n\n` +
-          `*Commands:*\n` +
-          `${config.PREFIX}dlsettings premium on/off\n` +
-          `${config.PREFIX}dlsettings cost <amount>\n` +
-          `${config.PREFIX}dlsettings limit <number>\n` +
-          `${config.PREFIX}dlsettings platform <name> on/off\n` +
-          `${config.PREFIX}dlsettings groups on/off\n` +
-          `${config.PREFIX}dlsettings private on/off`
-        );
-        return;
+        await sock.sendMessage(m.from, { text: caption }, { quoted: m });
+      } else if (isImage) {
+        await sock.sendMessage(m.from, {
+          image: { url: result.url },
+          caption: caption
+        }, { quoted: m });
+      } else {
+        await sock.sendMessage(m.from, {
+          video: { url: result.url },
+          caption: caption,
+          mimetype: 'video/mp4'
+        }, { quoted: m });
       }
 
-      const action = settingArgs[0];
-      const value = settingArgs[1];
-      const updates = {};
-
-      switch (action) {
-        case 'premium':
-          if (value === 'on' || value === 'off') {
-            updates.premiumEnabled = value === 'on';
-            await downloader.saveSettings(updates, sender);
-            await reply(`✅ Premium mode ${value === 'on' ? 'enabled' : 'disabled'}`);
-          } else {
-            await reply('❌ Usage: .dlsettings premium on/off');
-          }
-          break;
-
-        case 'cost':
-          const cost = parseInt(value);
-          if (!isNaN(cost) && cost >= 0) {
-            updates.downloadCost = cost;
-            await downloader.saveSettings(updates, sender);
-            await reply(`✅ Download cost set to ₦${cost}`);
-          } else {
-            await reply('❌ Invalid cost. Usage: .dlsettings cost <number>');
-          }
-          break;
-
-        case 'limit':
-          const limit = parseInt(value);
-          if (!isNaN(limit) && limit > 0) {
-            updates.rateLimitFree = limit;
-            await downloader.saveSettings(updates, sender);
-            await reply(`✅ Free download limit set to ${limit} per day`);
-          } else {
-            await reply('❌ Invalid limit. Usage: .dlsettings limit <number>');
-          }
-          break;
-
-        case 'platform':
-          const platform = value?.toLowerCase();
-          const state = settingArgs[2];
-          if (platform && (state === 'on' || state === 'off')) {
-            const settings = downloader.getSettings();
-            const platforms = [...settings.enabledPlatforms] || [];
-            
-            if (state === 'on' && !platforms.includes(platform)) {
-              platforms.push(platform);
-            } else if (state === 'off') {
-              const index = platforms.indexOf(platform);
-              if (index > -1) platforms.splice(index, 1);
-            }
-            
-            updates.enabledPlatforms = platforms;
-            await downloader.saveSettings(updates, sender);
-            await reply(`✅ ${platform} ${state === 'on' ? 'enabled' : 'disabled'}`);
-          } else {
-            await reply('❌ Usage: .dlsettings platform <facebook|tiktok|twitter|instagram|spotify> on/off');
-          }
-          break;
-
-        case 'groups':
-          if (value === 'on' || value === 'off') {
-            updates.allowGroups = value === 'on';
-            await downloader.saveSettings(updates, sender);
-            await reply(`✅ Group downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
-          } else {
-            await reply('❌ Usage: .dlsettings groups on/off');
-          }
-          break;
-
-        case 'private':
-          if (value === 'on' || value === 'off') {
-            updates.allowPrivate = value === 'on';
-            await downloader.saveSettings(updates, sender);
-            await reply(`✅ Private downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
-          } else {
-            await reply('❌ Usage: .dlsettings private on/off');
-          }
-          break;
-
-        default:
-          await reply(`❌ Unknown setting: ${action}\n\nUse ${config.PREFIX}dlsettings to see available commands`);
-      }
-      return;
-    }
-
-    // Download Command: .dl <url> or .download <url>
-    if (command === 'dl' || command === 'download') {
-      // Get URL from remaining args
-      const url = args.slice(1).join(' ').trim();
-
-      if (!url) {
-        const remaining = await downloader.getRemainingDownloads(sender);
-        const settings = downloader.getSettings();
-        
-        let replyText = `*📥 Social Media Downloader*\n\n`;
-        replyText += `*Supported Platforms:*\n`;
-        replyText += `${settings.enabledPlatforms.map(p => {
-          const plat = Object.values(PLATFORMS).find(pl => pl.key === p);
-          return plat ? `${plat.icon} ${plat.name}` : '';
-        }).filter(Boolean).join('\n')}\n\n`;
-        replyText += `*Your Status:*\n`;
-        if (settings.premiumEnabled) {
-          replyText += `💎 Premium: ₦${settings.downloadCost} per download\n\n`;
-        } else {
-          replyText += `🆓 Free: ${remaining}/${settings.rateLimitFree} remaining today\n\n`;
-        }
-        replyText += `*Usage:* ${config.PREFIX}dl <url>\n`;
-        replyText += `*Example:* ${config.PREFIX}dl https://tiktok.com/@user/video/123`;
-        
-        await reply(replyText);
-        return;
-      }
-
-      // React with hourglass emoji to show processing
-      await sock.sendMessage(from, {
-        react: { text: '⏳', key: m.key }
+      await sock.sendMessage(m.from, {
+        react: { text: '✅', key: m.key }
       });
-
-      // Attempt download
-      const result = await downloader.download(url, sender, isGroup);
-
-      // Remove hourglass reaction
-      await sock.sendMessage(from, {
-        react: { text: '', key: m.key }
+    } catch (sendError) {
+      console.error(chalk.red('Error sending media:'), sendError.message);
+      
+      await sock.sendMessage(m.from, {
+        react: { text: '❌', key: m.key }
       });
-
-      if (result.error) {
-        // React with error emoji and send error message
-        await sock.sendMessage(from, {
-          react: { text: '❌', key: m.key }
-        });
-        await reply(result.error);
-        return;
-      }
-
-      if (result.success) {
-        const settings = downloader.getSettings();
-        const remaining = await downloader.getRemainingDownloads(sender);
-        
-        let caption = `${result.icon} *${result.platform} Download*\n\n`;
-        
-        // Add title/artist info
-        if (result.artist) {
-          caption += `🎤 *Artist:* ${result.artist}\n`;
-        }
-        if (result.title && result.title !== 'media') {
-          caption += `📝 *Title:* ${result.title}\n`;
-        }
-        if (result.album) {
-          caption += `💿 *Album:* ${result.album}\n`;
-        }
-        if (result.author) {
-          caption += `👤 *Creator:* ${result.author}\n`;
-        }
-        
-        // Add cost/remaining info
-        if (settings.premiumEnabled) {
-          caption += `💳 Charged: ₦${settings.downloadCost}\n`;
-        } else {
-          caption += `🆓 Remaining: ${remaining}/${settings.rateLimitFree}\n`;
-        }
-        caption += `\n⚡ Powered by ${bot?.name || 'Groq'}`;
-
-        try {
-          // Determine media type based on platform
-          const isAudio = result.platform === 'Spotify';
-          const isImage = result.type === 'image';
-          
-          if (isAudio) {
-            // Send audio for Spotify
-            await sock.sendMessage(from, {
-              audio: { url: result.url },
-              mimetype: 'audio/mpeg',
-              ptt: false,
-              fileName: `${result.title}.mp3`
-            }, { quoted: m });
-            
-            // Send caption separately
-            await sock.sendMessage(from, { text: caption }, { quoted: m });
-          } else if (isImage) {
-            // Send image for Instagram
-            await sock.sendMessage(from, {
-              image: { url: result.url },
-              caption: caption
-            }, { quoted: m });
-          } else {
-            // Send video for other platforms
-            await sock.sendMessage(from, {
-              video: { url: result.url },
-              caption: caption,
-              mimetype: 'video/mp4'
-            }, { quoted: m });
-          }
-
-         // React with success emoji
-          await sock.sendMessage(from, {
-            react: { text: '✅', key: m.key }
-          });
-        } catch (sendError) {
-          console.error(chalk.red('Error sending media:'), sendError.message);
-          
-          // React with error emoji
-          await sock.sendMessage(from, {
-            react: { text: '❌', key: m.key }
-          });
-          
-          // Send error message with direct link
-          await reply(
-            `❌ *Send Failed*\n\nThe media was downloaded but couldn't be sent. This might be due to:\n• File size too large\n• Network issues\n• WhatsApp restrictions\n\nDirect link: ${result.url}`
-          );
-        }
-      }
-      return;
-    }
-
-    // Statistics Command
-    if (command === 'dlstats') {
-      if (!isAdmin) {
-        await reply('⛔ *Access Denied*\n\nThis command is only available to administrators.');
-        return;
-      }
-
-      const stats = await downloader.getStats();
       
       await reply(
-        `*📊 Downloader Statistics*\n\n` +
-        `*Total Downloads:* ${stats.totalDownloads || 0}\n` +
-        `*Free Downloads:* ${stats.freeDownloads || 0}\n` +
-        `*Premium Downloads:* ${stats.premiumDownloads || 0}\n` +
-        `*Active Downloads:* ${stats.activeDownloads}\n\n` +
-        `*Users:*\n` +
-        `• Total: ${stats.totalUsers || 0}\n` +
-        `• Active (7d): ${stats.activeUsers || 0}\n\n` +
-        `*Platforms:*\n` +
-        `${Object.entries(stats.platforms || {}).map(([p, count]) => `• ${p}: ${count}`).join('\n') || 'No data'}\n\n` +
-        `*Settings:*\n` +
-        `• Mode: ${stats.settings?.premiumEnabled ? '💎 Premium' : '🆓 Free'}\n` +
-        `• Cost: ₦${stats.settings?.downloadCost || 0}\n` +
-        `• Daily Limit: ${stats.settings?.rateLimitFree || 0}\n\n` +
-        `*Last Updated:* ${new Date(stats.lastUpdated).toLocaleString()}`
+        `❌ *Send Failed*\n\nThe media was downloaded but couldn't be sent. This might be due to:\n• File size too large\n• Network issues\n• WhatsApp restrictions\n\nDirect link: ${result.url}`
       );
-      return;
-    }
-
-    // User History Command
-    if (command === 'dlhistory') {
-      const history = await downloader.getUserHistory(sender, 10);
-      
-      if (history.length === 0) {
-        await reply(`📜 *Your Download History*\n\nNo downloads yet!`);
-        return;
-      }
-
-      const historyText = history.map((item, i) => 
-        `${i + 1}. ${item.platform}\n   ${new Date(item.timestamp).toLocaleString()}`
-      ).join('\n\n');
-
-      await reply(`📜 *Your Download History*\n\n${historyText}\n\n_Showing last ${history.length} downloads_`);
-      return;
-    }
-
-  } catch (error) {
-    console.error(chalk.red('Social media downloader plugin error:'), error.message);
-    console.error(chalk.red('Stack:'), error.stack);
-    
-    // Try to send error message to user
-    try {
-      await sock.sendMessage(m.key.remoteJid, {
-        text: `❌ *Plugin Error*\n\nAn unexpected error occurred. Please try again or contact admin.\n\n_Error: ${error.message}_`
-      }, { quoted: m });
-    } catch (replyError) {
-      console.error(chalk.red('Failed to send error message:'), replyError.message);
     }
   }
 }
 
-// Plugin info
-export const info = {
+async function handleDlStats(reply, downloaderInstance) {
+  const stats = await downloaderInstance.getStats();
+  
+  await reply(
+    `*📊 Downloader Statistics*\n\n` +
+    `*Total Downloads:* ${stats.totalDownloads || 0}\n` +
+    `*Free Downloads:* ${stats.freeDownloads || 0}\n` +
+    `*Premium Downloads:* ${stats.premiumDownloads || 0}\n` +
+    `*Active Downloads:* ${stats.activeDownloads}\n\n` +
+    `*Users:*\n` +
+    `• Total: ${stats.totalUsers || 0}\n` +
+    `• Active (7d): ${stats.activeUsers || 0}\n\n` +
+    `*Platforms:*\n` +
+    `${Object.entries(stats.platforms || {}).map(([p, count]) => `• ${p}: ${count}`).join('\n') || 'No data'}\n\n` +
+    `*Settings:*\n` +
+    `• Mode: ${stats.settings?.premiumEnabled ? '💎 Premium' : '🆓 Free'}\n` +
+    `• Cost: ₦${stats.settings?.downloadCost || 0}\n` +
+    `• Daily Limit: ${stats.settings?.rateLimitFree || 0}\n\n` +
+    `*Last Updated:* ${new Date(stats.lastUpdated).toLocaleString()}`
+  );
+}
+
+async function handleDlHistory(reply, downloaderInstance, sender) {
+  const history = await downloaderInstance.getUserHistory(sender, 10);
+  
+  if (history.length === 0) {
+    await reply(`📜 *Your Download History*\n\nNo downloads yet!`);
+    return;
+  }
+
+  const historyText = history.map((item, i) => 
+    `${i + 1}. ${item.platform}\n   ${new Date(item.timestamp).toLocaleString()}`
+  ).join('\n\n');
+
+  await reply(`📜 *Your Download History*\n\n${historyText}\n\n_Showing last ${history.length} downloads_`);
+}
+
+// ===================================
+// ===== V3 PLUGIN EXPORT OBJECT =====
+// ===================================
+
+export default {
+  // Metadata from original 'info' object
   name: 'Social Media Downloader',
   version: '3.0.0',
   author: 'Alex Macksyn',
   description: 'Download videos/audio from social media with platform-specific APIs',
   category: 'media',
-  commands: [
-    {
-      command: '.dl <url>',
-      alias: ['.download'],
-      description: 'Download media from supported platforms',
-      usage: '.dl https://tiktok.com/@user/video/123'
-    },
-    {
-      command: '.dlsettings',
-      description: 'Manage downloader settings (admin only)',
-      usage: '.dlsettings [option] [value]'
-    },
-    {
-      command: '.dlstats',
-      description: 'View statistics (admin only)',
-      usage: '.dlstats'
-    },
-    {
-      command: '.dlhistory',
-      description: 'View your download history',
-      usage: '.dlhistory'
+  
+  // Commands from original 'info' object
+  commands: ['dl', 'download', 'dlsettings', 'dlstats', 'dlhistory'],
+  aliases: [], // Original 'info' object didn't have aliases array
+
+  /**
+   * (Optional) V3 init function.
+   * Called by PluginManager when loading the plugin.
+   */
+  async init(context) {
+    const { logger } = context;
+    await downloader.initialize();
+    
+    const settings = downloader.getSettings();
+    logger.info('✅ Social Media Downloader V3 initialized');
+    logger.info(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`);
+    logger.info(`Supported: TikTok, Instagram, Facebook, Twitter, Spotify`);
+  },
+
+  /**
+   * V3 Main run function.
+   * Called by PluginManager for every matching command.
+   */
+  async run(context) {
+    const { msg: m, sock, config, bot, logger, helpers, command, args, text } = context;
+
+    try {
+      // Ensure initialization (safe fallback if init failed)
+      if (!downloader.settings) {
+        await downloader.initialize();
+      }
+
+      // V3 context already provides sender, from, isGroup
+      const sender = m.sender;
+      const from = m.from;
+      const isGroup = m.isGroup;
+      
+      if (!sender) {
+        logger.warn('⚠️ No sender found in message (from V3 context)');
+        return;
+      }
+      
+      const isAdmin = downloader.isAdmin(sender);
+      
+      // Reply helper using context
+      const reply = async (text) => {
+        // Use m.reply helper if available, otherwise fallback
+        if (typeof m.reply === 'function') {
+            await m.reply(text);
+        } else {
+            await sock.sendMessage(from, { text }, { quoted: m });
+        }
+      };
+
+      // --- Command Routing ---
+
+      // Admin Settings Command: .dlsettings
+      if (command === 'dlsettings') {
+        if (!isAdmin) {
+          await reply('⛔ *Access Denied*\n\nThis command is only available to administrators.');
+          return;
+        }
+        await handleDlSettings(reply, downloader, config, sender, args); // args from context
+        return;
+      }
+
+      // Download Command: .dl <url> or .download <url>
+      if (command === 'dl' || command === 'download') {
+        const url = text; // 'text' from context is the full string after the command
+        await handleDownload(reply, downloader, config, sock, m, sender, isGroup, bot, url);
+        return;
+      }
+
+      // Statistics Command: .dlstats
+      if (command === 'dlstats') {
+        if (!isAdmin) {
+          await reply('⛔ *Access Denied*\n\nThis command is only available to administrators.');
+          return;
+        }
+        await handleDlStats(reply, downloader);
+        return;
+      }
+
+      // User History Command: .dlhistory
+      if (command === 'dlhistory') {
+        await handleDlHistory(reply, downloader, sender);
+        return;
+      }
+
+    } catch (error) {
+      logger.error(error, `❌ ${this.name} plugin error`);
+      try {
+        const reply = (msg) => sock.sendMessage(m.from, { text: msg }, { quoted: m });
+        await reply(`❌ *Plugin Error*\n\nAn unexpected error occurred in the downloader. Please try again or contact admin.\n\n_Error: ${error.message}_`);
+      } catch (replyError) {
+        logger.error(replyError, 'Failed to send error message');
+      }
     }
-  ],
-  features: [
-    'Multi-platform support (Facebook, TikTok, Twitter, Instagram, Spotify)',
-    'Platform-specific API routing',
-    'Admin settings via commands',
-    'MongoDB persistence',
-    'Premium mode with economy integration',
-    'Rate limiting with daily reset',
-    'Download history tracking',
-    'Comprehensive statistics',
-    'Audio support for Spotify',
-    'Image support for Instagram',
-    'Automatic media type detection'
-  ],
-  changelog: {
-    '3.0.0': [
-      'Removed Cobalt API completely',
-      'Added platform-specific APIs (TikTok, Instagram, Facebook, Spotify)',
-      'Automatic API routing based on detected platform',
-      'Added Spotify music download support',
-      'Improved media type detection (video/audio/image)',
-      'Enhanced error handling per platform',
-      'Better metadata extraction (artist, album, author)',
-      'Optimized response parsing for each API'
-    ]
   }
 };
-
-// Initialize function
-export async function initialize(config) {
-  await downloader.initialize();
-  
-  const settings = downloader.getSettings();
-  console.log(chalk.green('✅ Social Media Downloader v3.0 initialized'));
-  console.log(chalk.cyan(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`));
-  console.log(chalk.cyan(`Admin: ${process.env.OWNER_NUMBER || process.env.ADMIN_NUMBERS || '12026411790542'}`));
-  console.log(chalk.cyan(`Supported: TikTok, Instagram, Facebook, Twitter, Spotify`));
-  
-  if (settings.premiumEnabled) {
-    console.log(chalk.cyan(`Cost: ₦${settings.downloadCost} per download`));
-  } else {
-    console.log(chalk.cyan(`Free limit: ${settings.rateLimitFree} downloads per day`));
-  }
-}
