@@ -6,7 +6,7 @@ import {
   DisconnectReason
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
-import chalk from 'chalk';
+import logger from '../utils/logger.js';
 
 // Constants for new retry logic
 const MAX_RETRIES = 8;
@@ -42,7 +42,7 @@ export class SocketManager extends EventEmitter {
    */
   async connect() {
     if (this.isConnecting) {
-      console.log(chalk.yellow('🔄 Connection attempt already in progress.'));
+      logger.warn('🔄 Connection attempt already in progress.');
       return;
     }
     
@@ -54,7 +54,7 @@ export class SocketManager extends EventEmitter {
       const { state, saveCreds } = await this.sessionManager.getAuthState();
       const { version } = await fetchLatestBaileysVersion();
 
-      console.log(chalk.blue(`📱 Using WhatsApp Web version: ${version.join('.')}`));
+      logger.safeLog('info', `📱 Using WhatsApp Web version: ${version.join('.')}`);
 
       this.socket = makeWASocket({
         version,
@@ -96,7 +96,7 @@ export class SocketManager extends EventEmitter {
       this.isConnecting = false;
       this.status = 'error';
       this.emit('statusChange', 'error', { error: error.message });
-      console.error(chalk.red('❌ Failed to initiate connection:'), error.message);
+      logger.safeError(error, '❌ Failed to initiate connection:');
     } finally {
         // This is set to false here, but connection listener will manage state
         // from this point forward (e.g. 'open', 'close')
@@ -115,7 +115,7 @@ export class SocketManager extends EventEmitter {
       try {
         await saveCreds();
       } catch (error) {
-        console.error(chalk.red('❌ Failed to save credentials:'), error.message);
+        logger.safeError(error, '❌ Failed to save credentials:');
       }
     });
 
@@ -164,22 +164,22 @@ export class SocketManager extends EventEmitter {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        console.log(chalk.yellow('📱 QR Code Generated - Scan with WhatsApp'));
-        console.log(chalk.blue('💡 QR codes expire in 60 seconds. Please scan quickly!'));
+        logger.safeLog('info', '📱 QR Code Generated - Scan with WhatsApp');
+        logger.safeLog('info', '💡 QR codes expire in 60 seconds. Please scan quickly!');
         this.status = 'qr_ready';
         this.emit('statusChange', 'qr_ready');
       }
 
       if (connection === 'connecting') {
-        console.log(chalk.yellow(`🔄 Connecting to WhatsApp... (Attempt ${this.retryCount + 1}/${MAX_RETRIES})`));
+        logger.safeLog('info', `🔄 Connecting to WhatsApp... (Attempt ${this.retryCount + 1}/${MAX_RETRIES})`);
         this.status = 'connecting';
         this.emit('statusChange', 'connecting', { attempt: this.retryCount + 1, max: MAX_RETRIES });
       }
 
       if (connection === 'open') {
-        console.log(chalk.green('✅ Successfully connected to WhatsApp!'));
-        console.log(chalk.cyan(`📱 Connected as: ${this.socket.user?.name || 'Unknown'}`));
-        console.log(chalk.cyan(`📞 Phone: ${this.socket.user?.id?.split(':')[0] || 'Unknown'}`));
+        logger.safeLog('info', '✅ Successfully connected to WhatsApp!');
+        logger.safeLog('info', `📱 Connected as: ${this.socket.user?.name || 'Unknown'}`);
+        logger.safeLog('info', `📞 Phone: ${this.socket.user?.id?.split(':')[0] || 'Unknown'}`);
         
         this.status = 'connected';
         this.retryCount = 0; // Reset retry count on successful connection
@@ -193,9 +193,9 @@ export class SocketManager extends EventEmitter {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const reason = lastDisconnect?.error?.message || 'Unknown';
 
-        console.log(chalk.red(`❌ Connection closed`));
-        console.log(chalk.yellow(`📝 Status Code: ${statusCode || 'undefined'}`));
-        console.log(chalk.yellow(`📝 Reason: ${reason}`));
+        logger.safeError(error, `❌ Connection closed`);
+        logger.warn(`📝 Status Code: ${statusCode || 'undefined'}`);
+        logger.warn(`📝 Reason: ${reason}`);
 
         let shouldReconnect = true;
         let cleanSessionFirst = false;
@@ -203,7 +203,7 @@ export class SocketManager extends EventEmitter {
         // Handle specific disconnection reasons
         switch (statusCode) {
           case DisconnectReason.loggedOut:
-            console.log(chalk.red('🚪 Logged out - Session invalid. Manual re-scan required.'));
+            logger.safeError(error, '🚪 Logged out - Session invalid. Manual re-scan required.');
             shouldReconnect = false; // Do not attempt to reconnect
             this.status = 'error';
             this.emit('statusChange', 'error', { error: 'Logged out', requiresScan: true });
@@ -211,27 +211,27 @@ export class SocketManager extends EventEmitter {
             break;
             
           case DisconnectReason.connectionReplaced:
-            console.log(chalk.red('🔄 Connection replaced - Another instance detected. Stopping.'));
+            logger.safeError(error, '🔄 Connection replaced - Another instance detected. Stopping.');
             shouldReconnect = false; // Do not attempt to reconnect
             this.status = 'error';
             this.emit('statusChange', 'error', { error: 'Connection replaced' });
             break;
             
           case DisconnectReason.badSession:
-            console.log(chalk.red('🚫 Bad session file. Cleaning session and retrying...'));
+            logger.safeError(error, '🚫 Bad session file. Cleaning session and retrying...');
             cleanSessionFirst = true;
             break;
 
           case DisconnectReason.restartRequired:
-            console.log(chalk.yellow('🔄 Server requires a restart. Retrying...'));
+            logger.warn('🔄 Server requires a restart. Retrying...');
             break;
 
           case DisconnectReason.timedOut:
-            console.log(chalk.red('⏰ Connection timed out. Retrying...'));
+            logger.safeError(error, '⏰ Connection timed out. Retrying...');
             break;
             
           default:
-            console.log(chalk.yellow(`❓ Unknown disconnection reason (${statusCode}). Retrying...`));
+            logger.warn(`❓ Unknown disconnection reason (${statusCode}). Retrying...`);
             break;
         }
 
@@ -240,21 +240,21 @@ export class SocketManager extends EventEmitter {
           this.retryCount++;
           
           if (cleanSessionFirst) {
-            console.log(chalk.blue('🧹 Cleaning session files...'));
+            logger.safeLog('info', '🧹 Cleaning session files...');
             this.sessionManager.cleanSession(); // Asynchronously clean session
           }
 
           const delay = this.getReconnectDelay();
-          console.log(chalk.blue(`🔄 Reconnecting in ${delay / 1000} seconds... (${this.retryCount}/${MAX_RETRIES})`));
+          logger.safeLog('info', `🔄 Reconnecting in ${delay / 1000} seconds... (${this.retryCount}/${MAX_RETRIES})`);
 
           setTimeout(() => {
             this.connect().catch(error => {
-              console.error(chalk.red('❌ Reconnection failed:'), error.message);
+              logger.safeError(error, '❌ Reconnection failed:'), error.message;
             });
           }, delay);
 
         } else if (this.retryCount >= MAX_RETRIES) {
-          console.log(chalk.red(`💀 Maximum reconnection attempts (${MAX_RETRIES}) reached. Stopping.`));
+          logger.safeError(error, `💀 Maximum reconnection attempts (${MAX_RETRIES}) reached. Stopping.`);
           this.status = 'error';
           this.emit('statusChange', 'error', { error: 'Max retries reached' });
         }
@@ -271,12 +271,12 @@ export class SocketManager extends EventEmitter {
         this.socket.end();
         await new Promise(resolve => setTimeout(resolve, 1000));
       } catch (error) {
-        console.warn(chalk.yellow('⚠️ Socket disconnect warning:'), error.message);
+        logger.warn('⚠️ Socket disconnect warning:'), error.message;
       }
     }
     this.status = 'disconnected';
     this.socket = null;
-    console.log(chalk.blue('🔌 Socket disconnected.'));
+    logger.safeLog('info', '🔌 Socket disconnected.');
   }
 
   getSocket() { 

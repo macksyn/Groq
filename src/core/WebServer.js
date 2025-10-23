@@ -1,9 +1,9 @@
 // src/core/WebServer.js - Full monitoring and management server
 import express from 'express';
 import http from 'http';
-import chalk from 'chalk';
 import helmet from 'helmet'; // For security headers
 import rateLimit from 'express-rate-limit'; // For rate limiting
+import logger from '../utils/logger.js';
 
 export class WebServer {
   constructor(config, bot) {
@@ -19,7 +19,7 @@ export class WebServer {
 
     return new Promise((resolve, reject) => {
       if (this.isListening) {
-        console.log(chalk.yellow('🌐 Web server is already running.'));
+        logger.warn('🌐 Web server is already running.');
         return resolve();
       }
 
@@ -43,13 +43,13 @@ export class WebServer {
       this.setupRoutes();
 
       this.server.listen(PORT, () => {
-        console.log(chalk.green(`✅ Web server started on http://localhost:${PORT}`));
+        logger.safeLog('info', `✅ Web server started on http://localhost:${PORT}`);
         this.isListening = true;
         resolve();
       });
 
       this.server.on('error', (error) => {
-        console.error(chalk.red('❌ Web server failed to start:'), error.message);
+        logger.safeError(error, '❌ Web server failed to start:'), error.message;
         this.isListening = false;
         reject(error);
       });
@@ -164,12 +164,12 @@ export class WebServer {
   async stop() {
     return new Promise((resolve) => {
       if (!this.isListening || !this.server) {
-        console.log(chalk.yellow('🌐 Web server is not running.'));
+        logger.warn('🌐 Web server is not running.');
         return resolve();
       }
 
       this.server.close(() => {
-        console.log(chalk.green('✅ Web server stopped.'));
+        logger.safeLog('info', '✅ Web server stopped.');
         this.isListening = false;
         resolve();
       });

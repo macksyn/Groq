@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import logger from './logger.js';
 
 export function validateConfig() {
   const config = {
@@ -34,11 +34,11 @@ export function validateConfig() {
   }
   
   if (errors.length > 0) {
-    console.error(chalk.red('❌ Configuration errors:'));
-    errors.forEach(error => console.error(chalk.red(`  • ${error}`)));
+    logger.safeError(error, '❌ Configuration errors:');
+    errors.forEach(error => logger.safeError(error, `  • ${error}`));
     process.exit(1);
   }
   
-  console.log(chalk.green('✅ Configuration validated'));
+  logger.safeLog('info', '✅ Configuration validated');
   return config;
 }

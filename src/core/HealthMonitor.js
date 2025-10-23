@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import logger from '../utils/logger.js';
 
 export class HealthMonitor {
   constructor(bot, config) {
@@ -11,7 +11,7 @@ export class HealthMonitor {
   async start() {
     if (this.isMonitoring) return;
     
-    console.log(chalk.blue('🏥 Starting health monitoring...'));
+    logger.info('Starting health manager...');
     this.isMonitoring = true;
 
     // Memory monitoring every 20 minutes
@@ -34,7 +34,7 @@ export class HealthMonitor {
       this.intervals.add(dbInterval);
     }
 
-    console.log(chalk.green('✅ Health monitoring started'));
+    logger.safeLog('info', '✅ Health monitoring started');
   }
 
   async stop() {
@@ -45,7 +45,7 @@ export class HealthMonitor {
     }
     this.intervals.clear();
     
-    console.log(chalk.green('✅ Health monitoring stopped'));
+    logger.safeLog('info', '✅ Health monitoring stopped');
   }
 
   monitorMemory() {
@@ -53,17 +53,17 @@ export class HealthMonitor {
     const memUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
     const rssUsedMB = Math.round(memUsage.rss / 1024 / 1024);
     
-    console.log(chalk.cyan(`💾 Memory: ${memUsedMB}MB heap, ${rssUsedMB}MB RSS`));
+    logger.safeLog('info', `💾 Memory: ${memUsedMB}MB heap, ${rssUsedMB}MB RSS`);
     
     if (memUsedMB > 400) {
-      console.log(chalk.yellow(`⚠️ High memory usage: ${memUsedMB}MB`));
+      logger.warn(`⚠️ High memory usage: ${memUsedMB}MB`);
       
       if (global.gc) {
-        console.log(chalk.blue('🗑️ Running garbage collection...'));
+        logger.safeLog('info', '🗑️ Running garbage collection...');
         global.gc();
         
         const newMemUsage = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
-        console.log(chalk.green(`✅ Memory after GC: ${newMemUsage}MB (freed ${memUsedMB - newMemUsage}MB)`));
+        logger.safeLog('info', `✅ Memory after GC: ${newMemUsage}MB (freed ${memUsedMB - newMemUsage}MB)`);
       }
       
       // Send alert if very high
@@ -75,10 +75,10 @@ export class HealthMonitor {
 
   monitorConnection() {
     const status = this.bot.getStatus();
-    console.log(chalk.cyan(`📡 Connection Status: ${status}`));
+    logger.safeLog('info', `📡 Connection Status: ${status}`);
 
     if (status !== 'running' && status !== 'connected') {
-      console.log(chalk.yellow('⚠️ Connection issue detected'));
+      logger.warn('⚠️ Connection issue detected');
     }
   }
 
@@ -93,16 +93,16 @@ export class HealthMonitor {
         const connections = health.connections || { current: 0, available: 0 };
         const usage = connections.available > 0 ? Math.round((connections.current / connections.available) * 100) : 0;
         
-        console.log(chalk.cyan(`🗄️ Database: ${health.pingTime}ms ping, ${connections.current}/${connections.available} connections (${usage}%)`));
+        logger.safeLog('info', `🗄️ Database: ${health.pingTime}ms ping, ${connections.current}/${connections.available} connections (${usage}%)`);
         
         if (usage > 70) {
-          console.log(chalk.yellow(`⚠️ High database connection usage: ${usage}%`));
+          logger.warn(`⚠️ High database connection usage: ${usage}%`);
         }
       } else {
-        console.log(chalk.red('🚨 Database health issue:', health.error));
+        logger.safeError(error, '🚨 Database health issue: ${health.error}' || 'Unknown health check failure (health.error was undefined)');
       }
     } catch (error) {
-      console.log(chalk.red('❌ Database monitoring error:', error.message));
+      logger.safeError(error, '❌ Database monitoring error:', error.message);
     }
   }
 
@@ -123,7 +123,7 @@ export class HealthMonitor {
       });
       
     } catch (error) {
-      console.warn('Failed to send memory alert:', error.message);
+      logger.warn('Failed to send memory alert:', error.message);
     }
   }
 }

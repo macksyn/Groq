@@ -1,75 +1,84 @@
-// src/utils/logger.js
+// src/utils/logger.js - FIXED VERSION
 import pino from 'pino';
-import pretty from 'pino-pretty'; // We need to import the stream builder
 import chalk from 'chalk';
-import dayjs from 'dayjs';
 
-// Define log level from environment, default to 'info'
 const logLevel = process.env.LOG_LEVEL || 'info';
+const isProduction = process.env.NODE_ENV === 'production';
 
 let logger;
 
-if (process.env.NODE_ENV === 'production') {
-  // --- PRODUCTION LOGGER ---
-  // This is correct. It uses the high-performance async transport
-  // and writes standard JSON to stdout.
+if (isProduction) {
+  // Production: Simple JSON logging to stdout
+  logger = pino({
+    level: logLevel,
+    formatters: {
+      level: (label) => ({ level: label })
+    }
+  });
+} else {
+  // Development: Use pino-pretty transport (FIXED)
   logger = pino({
     level: logLevel,
     transport: {
-      target: 'pino/file',
-      options: { destination: 1 }, // 1 = stdout
-    },
+      target: 'pino-pretty',
+      options: {
+        colorize: true,
+        translateTime: 'HH:MM:ss',
+        ignore: 'pid,hostname',
+        singleLine: false,
+        messageFormat: '{msg}',
+        customColors: 'info:green,warn:yellow,error:red',
+        customLevels: 'fatal:60,error:50,warn:40,info:30,debug:20,trace:10'
+      }
+    }
   });
-
-} else {
-  // --- DEVELOPMENT LOGGER (THE FIX) ---
-  // We create the pino-pretty stream *first* and pass it directly
-  // to the pino constructor. This forces synchronous logging
-  // and avoids the worker thread DataCloneError.
-
-  // Define chalk colors for log levels
-  const prettyColors = {
-    default: chalk.white,
-    fatal: chalk.red.bold,
-    error: chalk.red,
-    warn: chalk.yellow,
-    info: chalk.green,
-    debug: chalk.blue,
-    trace: chalk.gray,
-  };
-
-  const prettyLevel = (label) => {
-    const color = prettyColors[label] || prettyColors.default;
-    return color(label.toUpperCase());
-  };
-
-  const prettyTime = (timestamp) => {
-    return chalk.gray(`[${dayjs(timestamp).format('HH:mm:ss')}]`);
-  };
-  
-  // 1. Create the pretty-printing stream
-  const prettyStream = pretty({
-    colorize: false, // We are doing custom coloring
-    translateTime: false, // We are doing custom time
-    ignore: 'pid,hostname', // Don't show process ID or hostname
-    customPrettifiers: {
-      level: prettyLevel,
-      time: prettyTime,
-    },
-    messageFormat: (log, messageKey) => {
-      const msg = log[messageKey];
-      // Use the 'info' color (green) for standard messages
-      return prettyColors.info(msg);
-    },
-  });
-
-  // 2. Pass the stream directly to pino
-  // This forces it to run synchronously in the main thread.
-  logger = pino({ level: logLevel }, prettyStream);
 }
 
-// Also export chalk for any specific styling needed
+// Helper function to safely log errors
+logger.safeError = (error, message) => {
+  if (error instanceof Error) {
+    logger.error({
+      msg: message || error.message,
+      error: error.message,
+      stack: error.stack?.split('\n').slice(0, 3).join('\n')
+    });
+  } else {
+    logger.error({ msg: message, error: String(error) });
+  }
+};
+
+// Helper function to safely log objects
+logger.safeLog = (level, message, data) => {
+  try {
+    if (data && typeof data === 'object') {
+      // Only log serializable properties
+      const safeData = {};
+      for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined && value !== null) {
+          if (typeof value === 'function') continue;
+          if (value instanceof Buffer) {
+            safeData[key] = `<Buffer ${value.length} bytes>`;
+          } else {
+            try {
+              JSON.stringify(value);
+              safeData[key] = value;
+            } catch {
+              safeData[key] = String(value);
+            }
+          }
+        }
+      }
+      logger[level]({ msg: message, ...safeData });
+    } else {
+      logger[level](message);
+    }
+  } catch (error) {
+    console.error('Logger error:', error.message);
+    console.log(level.toUpperCase(), ':', message);
+  }
+};
+
+// Add chalk for manual coloring if needed
 logger.chalk = chalk;
 
-// Export the centralized logger
 export default logger;

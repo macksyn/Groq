@@ -139,7 +139,17 @@ export class WhatsAppBot extends EventEmitter {
       this.mongoManager
     );
     this.socketManager.on('message', async (data) => {
-      await MessageHandler(data.messageUpdate, data.socket, logger, this.config, this);
+      try {
+        await MessageHandler(data.messageUpdate, data.socket, logger, this.config, this);
+      } catch (err) {
+        // Avoid repeating large libsignal stacks; handle Bad MAC gracefully
+        const msg = err && err.message ? err.message : String(err);
+        if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt')) {
+          logger.warn('⚠️ Dropped message from %s due to decryption failure: %s', data.messageUpdate?.key?.remoteJid || 'unknown', msg);
+        } else {
+          logger.error(err, '❌ Message handler error:');
+        }
+      }
     });
     this.socketManager.on('call', async (data) => {
       await CallHandler(data.callUpdate, data.socket, this.config, logger);

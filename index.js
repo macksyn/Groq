@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 import 'dotenv/config';
-import chalk from 'chalk';
+import logger from './src/utils/logger.js';
 import { WhatsAppBot } from './src/core/WhatsAppBot.js';
 import { validateConfig } from './src/utils/config.js';
 import { gracefulShutdown } from './src/utils/gracefulShutdown.js';
 
-console.log(chalk.cyan(`
+logger.info(`
 ╭─────────────────────────────────────╮
 │       🤖 ${process.env.BOT_NAME || 'Groq AI'}       │
 │         Starting v2.0...            │
 ╰─────────────────────────────────────╯
-`));
+`);
 
 async function main() {
   try {
@@ -19,19 +19,19 @@ async function main() {
     await bot.start();
     gracefulShutdown(bot);
   } catch (error) {
-    console.error(chalk.red('💥 Startup failed:'), error.message);
+    logger.error(error, '💥 Startup failed:');
     process.exit(1);
   }
 }
 
 // Global error handlers
 process.on('uncaughtException', (error) => {
-  console.error(chalk.red('💥 Uncaught Exception:'), error.message);
+  logger.error(error, '💥 Uncaught Exception:');
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason) => {
-  console.error(chalk.red('❌ Unhandled Rejection:'), reason);
+  logger.error(error, '❌ Unhandled Rejection:');
   process.exit(1);
 });
 
