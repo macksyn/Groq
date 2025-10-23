@@ -27,12 +27,19 @@ module.exports = {
       // Environment
       env_production: {
         NODE_ENV: 'production',
-        PORT: 3000
+        PORT: 3000,
+        TZ: 'Africa/Lagos'
       },
       env_development: {
         NODE_ENV: 'development',
         PORT: 3000,
+        TZ: 'Africa/Lagos',
         watch: true
+      },
+      
+      // Force timezone for all environments
+      env: {
+        TZ: 'Africa/Lagos'
       },
       
       // Health monitoring for PM2

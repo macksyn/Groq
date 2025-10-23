@@ -99,7 +99,8 @@ export class HealthMonitor {
           logger.warn(`⚠️ High database connection usage: ${usage}%`);
         }
       } else {
-        logger.safeError(error, '🚨 Database health issue: ${health.error}' || 'Unknown health check failure (health.error was undefined)');
+        // Line 102 (Corrected)
+      logger.safeError(health.error, `🚨 Database health issue: ${health.error || 'Unknown health check failure'}`);
       }
     } catch (error) {
       logger.safeError(error, '❌ Database monitoring error:', error.message);
