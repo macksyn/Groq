@@ -193,7 +193,7 @@ export class SocketManager extends EventEmitter {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const reason = lastDisconnect?.error?.message || 'Unknown';
 
-        logger.safeError(lastDisconnec?.error, `❌ Connection closed`);
+        logger.safeError(lastDisconnect?.error, `❌ Connection closed`);
         logger.warn(`📝 Status Code: ${statusCode || 'undefined'}`);
         logger.warn(`📝 Reason: ${reason}`);
 
