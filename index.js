@@ -19,14 +19,14 @@ async function main() {
     await bot.start();
     gracefulShutdown(bot);
   } catch (error) {
-    logger.error(error, '💥 Startup failed:');
+    logger.error(reason, '💥 Startup failed:');
     process.exit(1);
   }
 }
 
 // Global error handlers
 process.on('uncaughtException', (error) => {
-  logger.error(error, '💥 Uncaught Exception:');
+  logger.error(reason, '💥 Uncaught Exception:');
   process.exit(1);
 });
 
