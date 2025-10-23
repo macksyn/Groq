@@ -203,7 +203,7 @@ export class SocketManager extends EventEmitter {
         // Handle specific disconnection reasons
         switch (statusCode) {
           case DisconnectReason.loggedOut:
-            logger.safeError(error, '🚪 Logged out - Session invalid. Manual re-scan required.');
+            logger.safeError(lastDisconnect?.error, '🚪 Logged out - Session invalid. Manual re-scan required.');
             shouldReconnect = false; // Do not attempt to reconnect
             this.status = 'error';
             this.emit('statusChange', 'error', { error: 'Logged out', requiresScan: true });
@@ -211,7 +211,7 @@ export class SocketManager extends EventEmitter {
             break;
             
           case DisconnectReason.connectionReplaced:
-            logger.safeError(error, '🔄 Connection replaced - Another instance detected. Stopping.');
+            logger.safeError(lastDisconnect?.error, '🔄 Connection replaced - Another instance detected. Stopping.');
             shouldReconnect = false; // Do not attempt to reconnect
             this.status = 'error';
             this.emit('statusChange', 'error', { error: 'Connection replaced' });
@@ -227,7 +227,7 @@ export class SocketManager extends EventEmitter {
             break;
 
           case DisconnectReason.timedOut:
-            logger.safeError(error, '⏰ Connection timed out. Retrying...');
+            logger.safeError(lastDisconnect?.error, '⏰ Connection timed out. Retrying...');
             break;
             
           default:
