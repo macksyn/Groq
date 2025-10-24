@@ -258,7 +258,7 @@ ${this.config.REJECT_CALL ? '✅' : '❌'} Call Rejection
     const memUsage = process.memoryUsage();
     return {
       status: this.status,
-      uptime: this.getUGptime(),
+      uptime: this.getUptime(),
       memory: {
         heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
         heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
