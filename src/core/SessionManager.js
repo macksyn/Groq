@@ -2,7 +2,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { useMultiFileAuthState, BufferJSON } from '@whiskeysockets/baileys';
+import { useSingleFileAuthState, BufferJSON } from '@whiskeysockets/baileys';
 import { File } from 'megajs';
 import logger from '../utils/logger.js';
 
@@ -78,7 +78,7 @@ export class SessionManager {
 
   async getAuthState() {
     let creds;
-    const { state, saveCreds: saveCredsMulti } = await useMultiFileAuthState(this.sessionDir);
+    const { state, saveCreds: saveCredsMulti } = await useSingleFileAuthState(this.sessionDir);
 
     if (await this.sessionExists()) {
       try {
