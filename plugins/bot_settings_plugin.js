@@ -284,6 +284,32 @@ async function unbanUser(phone) {
   }
 }
 
+/**
+ * Formats uptime in seconds into a human-readable string (Days, Hours, Minutes, Seconds).
+ * @param {number} seconds - The total uptime in seconds.
+ * @returns {string} Formatted uptime string.
+ */
+function formatUptime(seconds) {
+  if (typeof seconds !== 'number' || seconds < 0) {
+    return 'N/A';
+  }
+
+  seconds = Math.floor(seconds); // Ensure we have an integer
+
+  const d = Math.floor(seconds / (3600 * 24));
+  const h = Math.floor(seconds % (3600 * 24) / 3600);
+  const m = Math.floor(seconds % 3600 / 60);
+  const s = Math.floor(seconds % 60);
+
+  let uptimeString = '';
+  if (d > 0) uptimeString += `${Days}d `;
+  if (h > 0) uptimeString += `${Hours}h `;
+  if (m > 0) uptimeString += `${Minutes}m `;
+  if (s > 0 || uptimeString === '') uptimeString += `${s}s`; // Show seconds if uptime is less than a minute or as the last unit
+
+  return uptimeString.trim();
+}
+
 
 // ==================== COMMAND HANDLER IMPLEMENTATIONS (Unchanged from original logic) ====================
 
@@ -840,7 +866,25 @@ async function handleStats(m, sock, bot, config, logger) {
     await m.react('📊');
 
     // Safely get bot stats, provide defaults if bot instance is missing methods
-    const stats = bot && typeof bot.getStats === 'function' ? bot.getStats() : {};
+    let stats = {}; // Default empty stats object
+    let botStatus = '❓ Unknown';
+    let botUptimeMs = process.uptime() * 1000; // Default to process uptime
+
+    // Safely try to get stats from the bot instance
+    if (bot && typeof bot.getStats === 'function') {
+      try {
+          stats = await bot.getStats(); // Call the getStats method
+          botStatus = stats.status || botStatus; // Use status from stats if available
+          botUptimeMs = typeof stats.uptime === 'number' ? stats.uptime : botUptimeMs; // Use bot uptime if available
+      } catch (getStatsError) {
+          logger.error(getStatsError, '⚠️ Error calling bot.getStats()');
+          // Proceed with default/process stats, maybe add an indicator
+          botStatus = '⚠️ Stats Error';
+      }
+    } else {
+        logger.warn('⚠️ bot.getStats() function not found. Using default stats.');
+        botStatus = '⚠️ Partial'; // Indicate that stats are incomplete
+    }
     const dbHealth = bot && bot.getDatabase() && typeof bot.getDatabase().healthCheck === 'function'
                      ? await bot.getDatabase().healthCheck()
                      : { healthy: false, pingTime: 'N/A', stats: {}, error: 'DB Check Unavailable' };
@@ -855,13 +899,9 @@ async function handleStats(m, sock, bot, config, logger) {
     const cpuModel = cpus[0]?.model || 'Unknown';
     const cpuCores = cpus.length;
 
-    // Uptime (ensure stats.uptime is a number)
-    const uptimeMs = typeof stats.uptime === 'number' ? stats.uptime : process.uptime() * 1000;
-    const uptimeSeconds = uptimeMs / 1000;
-    const days = Math.floor(uptimeSeconds / 86400);
-    const hours = Math.floor((uptimeSeconds % 86400) / 3600);
-    const minutes = Math.floor((uptimeSeconds % 3600) / 60);
-
+    // --- Use the new botUptimeMs and formatUptime ---
+    const uptimeFormatted = formatUptime(botUptimeMs / 1000); // Use the potentially more accurate bot uptime
+    
     // Format Memory Safely
      const formatBytes = (bytes) => {
         if (typeof bytes !== 'number' || bytes < 0) return 'N/A';
@@ -872,24 +912,25 @@ async function handleStats(m, sock, bot, config, logger) {
      };
 
 
+    // --- Construct the message using safely accessed stats ---
     const message = `📊 *SYSTEM STATISTICS*
 
 ╭─────────────────────╮
 │   🤖 *BOT STATUS* │
 ╰─────────────────────╯
 
-• Status: ${stats.status === 'connected' ? '✅ Online' : stats.status ? `⚠️ ${stats.status}` : '❓ Unknown'}
-• Uptime: ${days}d ${hours}h ${minutes}m
-• Mode: ${(config.MODE || 'public').toUpperCase()}
+• Status: ${botStatus === 'connected' ? '✅ Online' : `⚠️ ${botStatus}`}
+• Uptime: ${uptimeFormatted} 
+• Mode: ${(config.MODE || stats.features?.mode || 'public').toUpperCase()}
 • Prefix: ${config.PREFIX}
 
 ╭─────────────────────╮
 │   💾 *MEMORY USAGE* │
 ╰─────────────────────╯
 
-• Heap Used: ${formatBytes(stats.memory?.heapUsed)}
-• Heap Total: ${formatBytes(stats.memory?.heapTotal)}
-• RSS: ${formatBytes(stats.memory?.rss)}
+• Heap Used: ${formatBytes(stats.memory?.heapUsed ?? process.memoryUsage().heapUsed)}
+• Heap Total: ${formatBytes(stats.memory?.heapTotal ?? process.memoryUsage().heapTotal)}
+• RSS: ${formatBytes(stats.memory?.rss ?? process.memoryUsage().rss)}
 • System Used: ${formatBytes(usedMem)} / ${formatBytes(totalMem)} (${memPercent}%)
 
 ╭─────────────────────╮
@@ -908,17 +949,15 @@ async function handleStats(m, sock, bot, config, logger) {
 
 • Status: ${dbHealth.healthy ? '✅ Connected' : '❌ Offline'}
 • Ping: ${dbHealth.pingTime ?? 'N/A'} ms
-• Collections: ${dbHealth.stats?.collections || 'N/A'}
-• Documents: ${dbHealth.stats?.documents || 'N/A'}
-• Data Size: ${dbHealth.stats?.dataSize || 'N/A'} MB
+${dbHealth.healthy ? `• Collections: ${dbHealth.stats?.collections || 'N/A'}\n• Documents: ${dbHealth.stats?.documents || 'N/A'}\n• Data Size: ${formatBytes(dbHealth.stats?.dataSize * 1024 * 1024) || 'N/A'}` : `• Error: ${dbHealth.error || 'Unknown'}`}
 
 ╭─────────────────────╮
 │   🔌 *PLUGINS* │
 ╰─────────────────────╯
 
-• Total: ${stats.plugins?.total || 'N/A'}
-• Enabled: ${stats.plugins?.enabled || 'N/A'}
-• Disabled: ${stats.plugins?.disabled || 'N/A'}
+• Total: ${stats.plugins?.total ?? 'N/A'}
+• Enabled: ${stats.plugins?.enabled ?? 'N/A'}
+• Disabled: ${stats.plugins?.disabled ?? 'N/A'}
 
 ╭─────────────────────╮
 │   ⚡ *FEATURES* │
@@ -940,7 +979,8 @@ ${(stats.features?.autoBio ?? config.AUTO_BIO === 'true') ? '✅' : '❌'} Auto 
   } catch (error) {
     logger.error('Stats command failed:', error.message);
     await m.react('❌');
-    await m.reply('❌ Failed to fetch system statistics.');
+    // Provide a more informative error message
+    await m.reply(`❌ Failed to fetch some system statistics.\n\n_Error: ${error.message}_`);
   }
 }
 
@@ -983,7 +1023,7 @@ async function handlePing(m, sock, db, logger) { // Ensure db is passed correctl
 • Message: ${msgLatency} ms
 • Database Ping: ${dbPing}
 • DB Status: ${dbStatus}
-• Process Uptime: ${process.uptime().toFixed(2)} s
+• Process Uptime: ${formatUptime(process.uptime())}
 • Memory (Heap): ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB
 
 ⏰ ${moment().format('HH:mm:ss')}`;
