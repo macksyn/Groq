@@ -203,7 +203,7 @@ export class SocketManager extends EventEmitter {
         // Handle specific disconnection reasons
         switch (statusCode) {
           case DisconnectReason.loggedOut:
-            logger.safeError(error, '🚪 Logged out - Session invalid. Manual re-scan required.');
+            logger.safeError(lastDisconnect?.error, '🚪 Logged out - Session invalid. Manual re-scan required.');
             shouldReconnect = false; // Do not attempt to reconnect
             this.status = 'error';
             this.emit('statusChange', 'error', { error: 'Logged out', requiresScan: true });
@@ -218,7 +218,7 @@ export class SocketManager extends EventEmitter {
             break;
             
           case DisconnectReason.badSession:
-            logger.safeError(error, '🚫 Bad session file. Cleaning session and retrying...');
+            logger.safeError(lastDisconnect?.error, '🚫 Bad session file. Cleaning session and retrying...');
             cleanSessionFirst = true;
             break;
 
@@ -227,7 +227,7 @@ export class SocketManager extends EventEmitter {
             break;
 
           case DisconnectReason.timedOut:
-            logger.safeError(error, '⏰ Connection timed out. Retrying...');
+            logger.safeError(lastDisconnect?.terror, '⏰ Connection timed out. Retrying...');
             break;
             
           default:
@@ -254,7 +254,7 @@ export class SocketManager extends EventEmitter {
           }, delay);
 
         } else if (this.retryCount >= MAX_RETRIES) {
-          logger.safeError(error, `💀 Maximum reconnection attempts (${MAX_RETRIES}) reached. Stopping.`);
+          logger.safeError(lastDisconnect?.error, `💀 Maximum reconnection attempts (${MAX_RETRIES}) reached. Stopping.`);
           this.status = 'error';
           this.emit('statusChange', 'error', { error: 'Max retries reached' });
         }
