@@ -1,174 +1,296 @@
-/**
- * @fileoverview Manages the Baileys WebSocket connection,
- * handling connection updates, QR code generation, and error recovery.
- */
-
-import makeWASocket, {
-  DisconnectReason,
-  Browsers,
-  isJidGroup,
+// src/core/SocketManager.js - Focused connection management with exponential backoff
+import { EventEmitter } from 'events';
+import {
+  makeWASocket,
+  fetchLatestBaileysVersion,
+  DisconnectReason
 } from '@whiskeysockets/baileys';
-import { pino } from 'pino';
-import config from '../utils/config.js';
+import pino from 'pino';
 import logger from '../utils/logger.js';
-import { handleMessage } from '../../handlers/messageHandler.js';
-import { handleGroupUpdate } from '../../handlers/groupHandler.js';
-import { handleCall } from '../../handlers/callHandler.js';
 
-class SocketManager {
-  /**
-   * @param {WhatsAppBot} bot The main bot instance.
-   * @param {SessionManager} sessionManager The session manager instance.
-   */
-  constructor(bot, sessionManager) {
-    this.bot = bot;
+// Constants for new retry logic
+const MAX_RETRIES = 8;
+const BASE_RETRY_DELAY_MS = 1000;
+const MAX_RETRY_DELAY_MS = 30000; // 30 seconds
+
+export class SocketManager extends EventEmitter {
+  constructor(sessionManager, pluginManager, mongoManager) {
+    super();
+    // Clean dependency injection
     this.sessionManager = sessionManager;
-    this.sock = null;
-    this.pinoLogger = pino({ level: config.LOG_LEVEL || 'silent' }); // Use pino for Baileys
+    this.pluginManager = pluginManager; // Available for future use (e.g., emitting events to plugins)
+    this.mongoManager = mongoManager; // Available for future use
+
+    this.socket = null;
+    this.retryCount = 0;
+    this.isConnecting = false;
+    this.status = 'disconnected';
   }
 
   /**
-   * Initializes and returns a new Baileys socket instance.
-   * @returns {import('@whiskeysockets/baileys').WASocket}
+   * Calculates the exponential backoff delay.
+   * @returns {number} The delay in milliseconds.
    */
-  createSocket() {
-    const { state, saveCreds } = this.sessionManager.authState;
+  getReconnectDelay() {
+    const delay = BASE_RETRY_DELAY_MS * Math.pow(2, this.retryCount);
+    // Return the calculated delay, capped at the maximum
+    return Math.min(delay, MAX_RETRY_DELAY_MS);
+  }
+
+  /**
+   * Initiates the connection to WhatsApp.
+   */
+  async connect() {
+    if (this.isConnecting) {
+      logger.warn('🔄 Connection attempt already in progress.');
+      return;
+    }
     
-    const socket = makeWASocket({
-      version: this.bot.waVersion,
-      logger: this.pinoLogger,
-      printQRInTerminal: config.PRINT_QR_IN_TERMINAL,
-      browser: Browsers.macOS('Desktop'),
-      auth: state,
-      getMessage: async (key) => {
-        // Implement message store logic if needed
-        return { conversation: 'hello' };
-      },
-      // ... other config
-    });
+    try {
+      this.isConnecting = true;
+      this.status = 'connecting';
+      this.emit('statusChange', 'connecting', { attempt: this.retryCount + 1, max: MAX_RETRIES });
 
-    this.attachEventListeners(socket, saveCreds);
-    return socket;
-  }
+      const { state, saveCreds } = await this.sessionManager.getAuthState();
+      const { version } = await fetchLatestBaileysVersion();
 
-  /**
-   * Attaches all necessary event listeners to the socket.
-   * @param {import('@whiskeysockets/baileys').WASocket} socket The socket instance.
-   * @param {() => Promise<void>} saveCreds Function to save credentials.
-   */
-  attachEventListeners(socket, saveCreds) {
-    // Creds have updated, save them
-    socket.ev.on('creds.update', saveCreds);
+      logger.safeLog('info', `📱 Using WhatsApp Web version: ${version.join('.')}`);
 
-    // Connection has updated
-    socket.ev.on('connection.update', this.handleConnectionUpdate.bind(this));
+      this.socket = makeWASocket({
+        version,
+        logger: pino({ level: 'silent' }),
+        // Use sessionManager to check if a session ID is present
+        printQRInTerminal: !this.sessionManager.sessionId,
+        browser: [this.sessionManager.config?.BOT_NAME || 'Groq', 'Chrome', '4.0.0'],
+        auth: state,
+        
+        // Connection optimizations from old file
+        markOnlineOnConnect: true,
+        syncFullHistory: false,
+        generateHighQualityLinkPreview: false,
+        connectTimeoutMs: 45000,
+        defaultQueryTimeoutMs: 45000,
+        keepAliveIntervalMs: 30000,
+        retryRequestDelayMs: 500,
+        maxMsgRetryCount: 2,
+        
+        // Event and history handling
+        emitOwnEvents: true,
+        shouldSyncHistoryMessage: () => false,
+        shouldIgnoreJid: jid => jid === 'status@broadcast',
+        
+        mobile: false,
+        fireInitQueries: true,
+      });
 
-    // Received a new message
-    socket.ev.on('messages.upsert', (m) => {
-      if (config.ENABLE_MESSAGE_HANDLER) {
-        handleMessage(socket, m, this.bot);
-      }
-    });
+      // Add message retry cache (from your existing code)
+      this.socket.msgRetryCache = new Map();
 
-    // Group participants update
-    socket.ev.on('group-participants.update', (update) => {
-      if (config.ENABLE_GROUP_HANDLER) {
-        handleGroupUpdate(socket, update, this.bot);
-      }
-    });
-
-    // Incoming call
-    socket.ev.on('call', (call) => {
-      if (config.ENABLE_CALL_HANDLER) {
-        handleCall(socket, call[0], this.bot);
-      }
-    });
-
-    // ... other event listeners
-  }
-
-  /**
-   * Handles the 'connection.update' event from Baileys.
-   * @param {import('@whiskeysockets/baileys').ConnectionState} update The connection update object.
-   */
-  async handleConnectionUpdate(update) {
-    const { connection, lastDisconnect, qr } = update;
-    this.bot.lastConnectionUpdate = Date.now();
-
-    if (qr) {
-      this.bot.qr = qr;
-      this.bot.emit('qr', qr);
-      logger.info('📱 QR Code Generated - Scan with WhatsApp');
-      logger.info('💡 QR codes expire in 60 seconds. Please scan quickly!');
-    }
-
-    if (connection === 'close') {
-      this.bot.qr = null; // Clear QR on close
-      // @ts-ignore
-      const statusCode = lastDisconnect?.error?.output?.statusCode ?? lastDisconnect?.error?.status;
-      const reason = lastDisconnect?.error?.message || 'Unknown reason';
+      // Setup event handlers that delegate to other managers/emit events
+      this.setupEventHandlers(saveCreds);
       
-      logger.error(`❌ Connection closed`, { error: reason, stack: lastDisconnect?.error?.stack });
-      logger.warn(`📝 Status Code: ${statusCode || 'N/A'}`);
-      logger.warn(`📝 Reason: ${reason}`);
+      // Setup the listener for connection state changes
+      this.setupConnectionListener();
 
-      const shouldReconnect = this.bot.shouldReconnect();
-
-      if (!shouldReconnect) {
-        logger.error('🚫 Max reconnect attempts reached. Bot will not restart.');
-        this.bot.emit('fatal');
-        return;
-      }
-
-      // --- MODIFIED LOGIC ---
-      // Check for unrecoverable errors first
-      if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403) {
-        logger.error('🚫 Unrecoverable error (Logged Out or Banned). Cleaning session and stopping.');
-        await this.sessionManager.clearSession();
-        this.bot.stop(true); // Pass true to indicate a fatal stop
-      } 
-      // Handle bad session file, but don't clear immediately
-      else if (statusCode === DisconnectReason.badSession) {
-        logger.error('🚫 Bad session file. Cleaning session and retrying...');
-        await this.sessionManager.clearSession();
-        this.bot.reconnect();
-      }
-      // For Stream Errors (500) or other temporary issues, just reconnect.
-      else if (statusCode === DisconnectReason.streamEror || statusCode === 500) {
-        logger.warn(`⚠️ Stream error (500) detected. Attempting a simple reconnect without clearing session.`);
-        this.bot.reconnect();
-      }
-      // --- END OF MODIFIED LOGIC ---
-      else if (statusCode === DisconnectReason.connectionClosed) {
-        logger.warn('Connection closed. Attempting reconnect.');
-        this.bot.reconnect();
-      } else if (statusCode === DisconnectReason.connectionLost) {
-        logger.warn('Connection lost. Attempting reconnect.');
-        this.bot.reconnect();
-      } else if (statusCode === DisconnectReason.timedOut || statusCode === 408) {
-        logger.error('⏰ Connection timed out. Retrying...', { error: reason, stack: lastDisconnect?.error?.stack });
-        this.bot.reconnect();
-      } else {
-        logger.error(`Unhandled connection close. Status: ${statusCode || 'N/A'}. Reconnecting...`);
-        this.bot.reconnect();
-      }
-    } else if (connection === 'open') {
-      logger.info('✅ WhatsApp connection established.');
-      this.bot.qr = null; // Clear QR on successful connection
-      this.bot.emit('open');
-      this.bot.resetReconnectAttempts(); // Reset counter on success
+    } catch (error) {
+      this.isConnecting = false;
+      this.status = 'error';
+      this.emit('statusChange', 'error', { error: error.message });
+      logger.safeError(error, '❌ Failed to initiate connection:');
+    } finally {
+        // This is set to false here, but connection listener will manage state
+        // from this point forward (e.g. 'open', 'close')
+        this.isConnecting = false; 
     }
   }
 
   /**
-   * Closes the socket connection.
+   * Sets up listeners for socket events (messages, calls, etc.)
+   * and delegates them by emitting them for other managers to handle.
+   * @param {Function} saveCreds - The function to save credentials.
    */
-  close() {
-    if (this.sock) {
-      this.sock.logout();
-      this.sock = null;
+  setupEventHandlers(saveCreds) {
+    // Save credentials (delegated to sessionManager)
+    this.socket.ev.on('creds.update', async () => {
+      try {
+        await saveCreds();
+      } catch (error) {
+        logger.safeError(error, '❌ Failed to save credentials:');
+      }
+    });
+
+    // Forward core events for handlers to process
+    this.socket.ev.on('messages.upsert', (messageUpdate) => {
+      this.emit('message', { socket: this.socket, messageUpdate });
+      
+      // Keep retry cache logic from old file
+      if (messageUpdate.messages) {
+        for (const msg of messageUpdate.messages) {
+          if (msg.key?.id) {
+            this.socket.msgRetryCache?.set(msg.key.id, msg);
+          }
+        }
+        
+        // Clean cache periodically
+        setTimeout(() => {
+          if (this.socket.msgRetryCache?.size > 1000) {
+            const entries = Array.from(this.socket.msgRetryCache.entries());
+            const toDelete = entries.slice(0, 500);
+            toDelete.forEach(([key]) => this.socket.msgRetryCache.delete(key));
+          }
+        }, 30000);
+      }
+    });
+
+    this.socket.ev.on('call', (callUpdate) => {
+      this.emit('call', { socket: this.socket, callUpdate });
+    });
+
+    this.socket.ev.on('groups.update', (groupUpdate) => {
+      this.emit('groupUpdate', { socket: this.socket, groupUpdate });
+    });
+
+    this.socket.ev.on('group-participants.update', (event) => {
+      this.emit('groupParticipants', { socket: this.socket, event });
+    });
+  }
+
+  /**
+   * Sets up the primary listener for connection status changes
+   * and implements the exponential backoff retry logic.
+   */
+  setupConnectionListener() {
+    this.socket.ev.on('connection.update', (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        logger.safeLog('info', '📱 QR Code Generated - Scan with WhatsApp');
+        logger.safeLog('info', '💡 QR codes expire in 60 seconds. Please scan quickly!');
+        this.status = 'qr_ready';
+        this.emit('statusChange', 'qr_ready');
+      }
+
+      if (connection === 'connecting') {
+        logger.safeLog('info', `🔄 Connecting to WhatsApp... (Attempt ${this.retryCount + 1}/${MAX_RETRIES})`);
+        this.status = 'connecting';
+        this.emit('statusChange', 'connecting', { attempt: this.retryCount + 1, max: MAX_RETRIES });
+      }
+
+      if (connection === 'open') {
+        logger.safeLog('info', '✅ Successfully connected to WhatsApp!');
+        logger.safeLog('info', `📱 Connected as: ${this.socket.user?.name || 'Unknown'}`);
+        logger.safeLog('info', `📞 Phone: ${this.socket.user?.id?.split(':')[0] || 'Unknown'}`);
+        
+        this.status = 'connected';
+        this.retryCount = 0; // Reset retry count on successful connection
+        this.emit('statusChange', 'connected');
+      }
+
+      if (connection === 'close') {
+        this.status = 'disconnected';
+        this.emit('statusChange', 'disconnected');
+
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const reason = lastDisconnect?.error?.message || 'Unknown';
+
+        logger.safeError(error, `❌ Connection closed`);
+        logger.warn(`📝 Status Code: ${statusCode || 'undefined'}`);
+        logger.warn(`📝 Reason: ${reason}`);
+
+        let shouldReconnect = true;
+        let cleanSessionFirst = false;
+
+        // Handle specific disconnection reasons
+        switch (statusCode) {
+          case DisconnectReason.loggedOut:
+            logger.safeError(error, '🚪 Logged out - Session invalid. Manual re-scan required.');
+            shouldReconnect = false; // Do not attempt to reconnect
+            this.status = 'error';
+            this.emit('statusChange', 'error', { error: 'Logged out', requiresScan: true });
+            cleanSessionFirst = true;
+            break;
+            
+          case DisconnectReason.connectionReplaced:
+            logger.safeError(error, '🔄 Connection replaced - Another instance detected. Stopping.');
+            shouldReconnect = false; // Do not attempt to reconnect
+            this.status = 'error';
+            this.emit('statusChange', 'error', { error: 'Connection replaced' });
+            break;
+            
+          case DisconnectReason.badSession:
+            logger.safeError(error, '🚫 Bad session file. Cleaning session and retrying...');
+            cleanSessionFirst = true;
+            break;
+
+          case DisconnectReason.restartRequired:
+            logger.warn('🔄 Server requires a restart. Retrying...');
+            break;
+
+          case DisconnectReason.timedOut:
+            logger.safeError(error, '⏰ Connection timed out. Retrying...');
+            break;
+            
+          default:
+            logger.warn(`❓ Unknown disconnection reason (${statusCode}). Retrying...`);
+            break;
+        }
+
+        // Handle reconnection logic
+        if (shouldReconnect && this.retryCount < MAX_RETRIES) {
+          this.retryCount++;
+          
+          if (cleanSessionFirst) {
+            logger.safeLog('info', '🧹 Cleaning session files...');
+            this.sessionManager.cleanSession(); // Asynchronously clean session
+          }
+
+          const delay = this.getReconnectDelay();
+          logger.safeLog('info', `🔄 Reconnecting in ${delay / 1000} seconds... (${this.retryCount}/${MAX_RETRIES})`);
+
+          setTimeout(() => {
+            this.connect().catch(error => {
+              logger.safeError(error, '❌ Reconnection failed:'), error.message;
+            });
+          }, delay);
+
+        } else if (this.retryCount >= MAX_RETRIES) {
+          logger.safeError(error, `💀 Maximum reconnection attempts (${MAX_RETRIES}) reached. Stopping.`);
+          this.status = 'error';
+          this.emit('statusChange', 'error', { error: 'Max retries reached' });
+        }
+      }
+    });
+  }
+
+  /**
+   * Gracefully disconnects the socket.
+   */
+  async disconnect() {
+    if (this.socket) {
+      try {
+        this.socket.end();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {
+        logger.warn('⚠️ Socket disconnect warning:'), error.message;
+      }
     }
+    this.status = 'disconnected';
+    this.socket = null;
+    logger.safeLog('info', '🔌 Socket disconnected.');
+  }
+
+  getSocket() { 
+    return this.socket; 
+  }
+  
+  /**
+   * Checks if the bot is fully connected and ready.
+   * @returns {boolean}
+   */
+  isReady() {
+    return this.socket && 
+           this.socket.user?.id && 
+           this.socket.ws?.readyState === 1 && // 1 = WebSocket.OPEN
+           this.status === 'connected';
   }
 }
-
-export default SocketManager;
