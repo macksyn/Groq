@@ -96,17 +96,25 @@ export class WhatsAppBot extends EventEmitter {
   }
 
   async initializeDatabase() {
-    if (!this.config.MONGODB_URI) {
-      logger.warn('⚠️ No MongoDB URI - skipping database');
-      return;
-    }
-    try {
-      logger.info('🗄️ Initializing database...');
-      await this.mongoManager.connect();
-    } catch (error) {
-      logger.warn(error, '⚠️ Database failed, continuing without it');
-    }
+  if (!this.config.MONGODB_URI) {
+    logger.warn('⚠️ No MongoDB URI - running without database');
+    return;
   }
+  
+  try {
+    logger.info('🗄️ Initializing database...');
+    const db = await this.mongoManager.connect();
+    
+    if (db) {
+      logger.info('✅ Database connected successfully');
+    } else {
+      logger.warn('⚠️ Database connection failed - bot will continue without DB');
+    }
+  } catch (error) {
+    logger.warn('⚠️ Database initialization failed - bot will continue without DB');
+    // Don't throw - let bot run without DB
+  }
+}
 
   async initializeSessionManager() {
     logger.info('📁 Initializing session management...');
