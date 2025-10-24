@@ -289,27 +289,17 @@ async function unbanUser(phone) {
  * @param {number} seconds - The total uptime in seconds.
  * @returns {string} Formatted uptime string.
  */
-function formatUptime(seconds) {
-  if (typeof seconds !== 'number' || seconds < 0) {
-    return 'N/A';
-  }
-
-  seconds = Math.floor(seconds); // Ensure we have an integer
-
-  const d = Math.floor(seconds / (3600 * 24));
-  const h = Math.floor(seconds % (3600 * 24) / 3600);
-  const m = Math.floor(seconds % 3600 / 60);
-  const s = Math.floor(seconds % 60);
-
-  let uptimeString = '';
-  if (d > 0) uptimeString += `${Days}d `;
-  if (h > 0) uptimeString += `${Hours}h `;
-  if (m > 0) uptimeString += `${Minutes}m `;
-  if (s > 0 || uptimeString === '') uptimeString += `${s}s`; // Show seconds if uptime is less than a minute or as the last unit
-
-  return uptimeString.trim();
+function formatUptime(ms) {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  
+  if (days > 0) return `${days}d ${hours % 24}h ${minutes % 60}m`;
+  if (hours > 0) return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+  return `${seconds}s`;
 }
-
 
 // ==================== COMMAND HANDLER IMPLEMENTATIONS (Unchanged from original logic) ====================
 
