@@ -211,7 +211,7 @@ export class SocketManager extends EventEmitter {
             break;
             
           case DisconnectReason.connectionReplaced:
-            logger.safeError(error, '🔄 Connection replaced - Another instance detected. Stopping.');
+            logger.safeError(lastDisconnect?.error, '🔄 Connection replaced - Another instance detected. Stopping.');
             shouldReconnect = false; // Do not attempt to reconnect
             this.status = 'error';
             this.emit('statusChange', 'error', { error: 'Connection replaced' });
