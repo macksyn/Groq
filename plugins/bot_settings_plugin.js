@@ -910,7 +910,7 @@ async function handleStats(m, sock, bot, config, logger) {
 ╰─────────────────────╯
 
 • Status: ${botStatus === 'connected' ? '✅ Online' : `⚠️ ${botStatus}`}
-• Uptime: ${uptimeFormatted} 
+• Uptime: ${formatUptime(process.uptime())}
 • Mode: ${(config.MODE || stats.features?.mode || 'public').toUpperCase()}
 • Prefix: ${config.PREFIX}
 
@@ -1015,8 +1015,9 @@ async function handlePing(m, sock, db, logger) { // Ensure db is passed correctl
 • DB Status: ${dbStatus}
 • Process Uptime: ${formatUptime(process.uptime())}
 • Memory (Heap): ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB
+• ${latency < 100 ? '🟢 Excellent' : latency < 300 ? '🟡 Good' : '🔴 Poor'} connection quality`;
 
-⏰ ${moment().format('HH:mm:ss')}`;
+⏰ *Server Time:* ${moment().tz(config.TIMEZONE || 'UTC').format('DD/MM/YYYY HH:mm:ss Z')}`;
 
 
     // Use edit message if supported by your bot framework, otherwise reply
