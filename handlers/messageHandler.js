@@ -2,6 +2,7 @@
 import { serializeMessage } from '../lib/serializer.js';
 import { PermissionHelpers, RateLimitHelpers, OwnerHelpers } from '../lib/helpers.js';
 import PluginManager from '../lib/pluginManager.js';
+import { isUserBanned } from '../plugins/bot_settings_plugin.js'; 
 import logger from '../src/utils/logger.js'; // Import the logger
 
 // Auto reaction emojis
@@ -56,6 +57,14 @@ export default async function MessageHandler(messageUpdate, sock, loggerArg, con
     
     if (!isPublic && !isOwner && !isAdmin) {
       return; // Private mode
+    }
+
+     if (m.sender) {
+        const userPhone = m.sender.split('@')[0];
+        if (await isUserBanned(userPhone)) {
+            logger.info(`🚫 Ignoring message from banned user: ${userPhone}`);
+            return; // Stop processing the message
+        }
     }
 
     // --- Rate Limiting (using the new V2 helper) ---
