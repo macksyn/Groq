@@ -26,7 +26,7 @@ async function main() {
 
 // Global error handlers
 process.on('uncaughtException', (error) => {
-  logger.error(reason, '💥 Uncaught Exception:');
+  logger.error(error, '💥 Uncaught Exception:');
   process.exit(1);
 });
 
