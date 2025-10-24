@@ -267,13 +267,13 @@ ${this.config.REJECT_CALL ? '✅' : '❌'} Call Rejection
       plugins: this.pluginManager.getPluginStats(),
       database: this.mongoManager.getStats ? this.mongoManager.getStats() : {},
       lastConnection: new Date(this.lastSuccessfulConnection).toISOString(),
-      features: {
-        autoRead: this.config.AUTO_READ,
-        autoReact: this.config.AUTO_REACT,
-        welcome: this.config.WELCOME,
-        antilink: this.config.ANTILINK,
-        rejectCall: this.config.REJECT_CALL,
-        autoBio: this.config.AUTO_BIO
+     features: {
+        AUTO_READ: this.config.AUTO_READ,
+        AUTO_REACT: this.config.AUTO_REACT,
+        WELCOME: this.config.WELCOME,
+        ANTILINK: this.config.ANTILINK,
+        REJECT_CALL: this.config.REJECT_CALL,
+        AUTO_BIO: this.config.AUTO_BIO
       }
     };
   }
