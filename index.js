@@ -19,7 +19,7 @@ async function main() {
     await bot.start();
     gracefulShutdown(bot);
   } catch (error) {
-    logger.error(reason, '💥 Startup failed:');
+    logger.error(error, '💥 Startup failed:');
     process.exit(1);
   }
 }
