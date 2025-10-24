@@ -20,7 +20,7 @@ export default {
   // Commands this plugin handles
   commands: ['settings', 'mode', 'plugins', 'admins', 'stats', 'ping', 'restart', 'shutdown', 'ban', 'unban', 'antilink'],
   aliases: ['set', 'config', 'control'],
-  ownerOnly: true, // Note: The original logic allows admins too, but follows V3 convention
+  ownerOnly: false, // Note: The original logic allows admins too, but follows V3 convention
 
   // Main plugin handler
   async run(context) {
