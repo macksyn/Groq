@@ -78,7 +78,7 @@ export class SessionManager {
 
   async getAuthState() {
     let creds;
-    const { state, saveCreds: saveCredsMulti } = await useLocalStorageAuthState(this.sessionDir);
+    const { state, saveCreds: saveCredsMulti } = await useLocalStorageAuthState(path.join(this.sessionDir,'creds.json'));
 
     if (await this.sessionExists()) {
       try {
