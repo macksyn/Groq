@@ -2,7 +2,7 @@
 import moment from 'moment-timezone';
 
 // Plugin metadata
-export const info = {
+const info = {
   name: 'Dynamic Menu System',
   version: '2.0.0',
   author: 'Alex Macksyn',
@@ -29,7 +29,7 @@ const CATEGORY_INFO = {
 };
 
 // Main plugin function
-export default async function menuPlugin(context) {
+async function menuPlugin(context) {
   const { msg: m, args, text, command, sock, config, bot, logger } = context;
 
   // Get all loaded plugins from PluginManager
@@ -558,3 +558,9 @@ function formatUptime(milliseconds) {
     return `${seconds}s`;
   }
 }
+
+// Add this new block at the end of the file
+export default {
+  info: info,
+  execute: menuPlugin
+};
