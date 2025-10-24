@@ -6,6 +6,7 @@ import moment from 'moment-timezone';
 // Settings collection name
 const SETTINGS_COLLECTION = 'bot_settings';
 const ADMINS_COLLECTION = 'bot_admins';
+const BANNED_USERS_COLLECTION = 'bot_banned_users';
 
 // ===== V3 PLUGIN EXPORT =====
 export default {
@@ -16,7 +17,7 @@ export default {
   category: 'owner',
 
   // Commands this plugin handles
-  commands: ['settings', 'mode', 'plugins', 'admins', 'stats', 'ping', 'restart', 'shutdown'],
+  commands: ['settings', 'mode', 'plugins', 'admins', 'stats', 'ping', 'restart', 'shutdown', 'ban', 'unban'],
   aliases: ['set', 'config', 'control'],
   ownerOnly: true, // Note: The original logic allows admins too, but follows V3 convention
 
@@ -75,6 +76,14 @@ export default {
 
       case 'shutdown':
         await handleShutdown(m, sock, bot, logger, isOwner);
+        break;
+
+      case 'ban':
+        await handleBanUser(context, isOwner);
+        break;
+      
+      case 'unban':
+        await handleUnbanUser(context, isOwner);
         break;
 
       default:
@@ -202,6 +211,79 @@ async function removeAdmin(phone) {
   }
 }
 
+// Gets all banned users from the database.
+async function getBannedUsers() {
+  try {
+    return await PluginHelpers.safeDBOperation(async (db) => {
+      const collection = db.collection(BANNED_USERS_COLLECTION);
+      return await collection.find({}).toArray();
+    });
+  } catch (error) {
+    console.error('Failed to get banned users:', error.message);
+    return [];
+  }
+}
+
+// Checks if a user is banned.
+export async function isUserBanned(phone) {
+  try {
+    return await PluginHelpers.safeDBOperation(async (db) => {
+      const collection = db.collection(BANNED_USERS_COLLECTION);
+      const bannedUser = await collection.findOne({ phone: phone });
+      return !!bannedUser; // True if user is found, false otherwise
+    });
+  } catch (error) {
+    console.error('Failed to check ban status:', error.message);
+    return false; // Fail-safe: assume not banned if DB check fails
+  }
+}
+
+// Bans a user, storing their info in the database.
+async function banUser(phone, reason, bannedBy) {
+  try {
+    return await PluginHelpers.safeDBOperation(async (db) => {
+      const collection = db.collection(BANNED_USERS_COLLECTION);
+      
+      const existing = await collection.findOne({ phone });
+      if (existing) {
+        return { success: false, message: 'User is already banned.' };
+      }
+
+      await collection.insertOne({
+        phone,
+        reason: reason || 'No reason provided.',
+        bannedBy: bannedBy.split('@')[0],
+        bannedAt: new Date(),
+      });
+
+      return { success: true, message: 'User banned successfully.' };
+    });
+  } catch (error) {
+    console.error('Failed to ban user:', error.message);
+    return { success: false, message: error.message };
+  }
+}
+
+// Unbans a user by removing them from the database.
+async function unbanUser(phone) {
+  try {
+    return await PluginHelpers.safeDBOperation(async (db) => {
+      const collection = db.collection(BANNED_USERS_COLLECTION);
+
+      const result = await collection.deleteOne({ phone });
+
+      if (result.deletedCount === 0) {
+        return { success: false, message: 'User is not banned.' };
+      }
+
+      return { success: true, message: 'User unbanned successfully.' };
+    });
+  } catch (error) {
+    console.error('Failed to unban user:', error.message);
+    return { success: false, message: error.message };
+  }
+}
+
 
 // ==================== COMMAND HANDLER IMPLEMENTATIONS (Unchanged from original logic) ====================
 
@@ -266,6 +348,7 @@ async function handleSettings(m, args, sock, config, bot, logger) {
 async function showMainMenu(m, sock, config) {
   const settings = await getBotSettings();
   const admins = await getAdmins();
+  const bannedCount = (await getBannedUsers()).length;
 
   // Use optional chaining and provide defaults
   const currentSettings = settings || {};
@@ -291,6 +374,7 @@ async function showMainMenu(m, sock, config) {
 • Auto Bio: ${autoBio ? '✅' : '❌'}
 
 👥 *Admins:* ${admins.length}
+🚫 *Banned:* ${bannedCount}
 📍 *Prefix:* ${config.PREFIX}
 
 ╭─────────────────────╮
@@ -313,6 +397,10 @@ async function showMainMenu(m, sock, config) {
 • ${config.PREFIX}admins add @user
 • ${config.PREFIX}admins remove @user
 
+*🚫 User Management (Owner Only):* (<!-- ADDED -->)
+• ${config.PREFIX}ban [@user | number] [reason]
+• ${config.PREFIX}unban [@user | number]
+
 *📊 System Monitoring:*
 • ${config.PREFIX}stats - Full system stats
 • ${config.PREFIX}ping - Check latency
@@ -330,6 +418,8 @@ ${config.PREFIX}settings autoread on
 ${config.PREFIX}mode private
 ${config.PREFIX}plugins disable fun.js
 ${config.PREFIX}admins add @2348089782988
+${config.PREFIX}ban @user spamming
+${config.PREFIX}unban 2348012345678
 ${config.PREFIX}stats
 \`\`\`
 
@@ -628,6 +718,121 @@ async function handleAdminManagement(m, args, sock, config, logger, isOwner) {
   return m.reply(`❌ Unknown action: *${action}*\n\nAvailable: list, add, remove`);
 }
 
+/**
+ * Handles the .ban command
+ */
+async function handleBanUser(context, isOwner) {
+  const { msg: m, args, text, sock, config, logger } = context;
+
+  if (!isOwner) {
+    return m.reply('🔒 Only the bot owner can ban users.');
+  }
+
+  let userToBanJid = '';
+  let reason = '';
+
+  // Case 1: Ban by quoting a message
+  if (m.quoted) {
+    userToBanJid = m.quoted.sender;
+    reason = text || 'No reason provided.';
+  } 
+  // Case 2: Ban by mentioning (@user)
+  else if (m.mentions && m.mentions.length > 0) {
+    userToBanJid = m.mentions[0];
+    // Reason is everything after the mention
+    const reasonArgs = args.slice(1);
+    reason = reasonArgs.join(' ') || 'No reason provided.';
+  }
+  // Case 3: Ban by number (e.g., .ban 23480...)
+  else if (args.length > 0) {
+    const potentialNumber = args[0].replace(/[^0-9]/g, ''); // Clean the number
+    if (potentialNumber.length > 9) { // Basic validation
+      userToBanJid = `${potentialNumber}@s.whatsapp.net`;
+      reason = args.slice(1).join(' ') || 'No reason provided.';
+    }
+  }
+
+  if (!userToBanJid) {
+    return m.reply('❌ *Invalid Usage*\n\nHow to ban:\n1. Reply to a user\'s message with `.ban [reason]`\n2. Mention a user with `.ban @user [reason]`\n3. Type the number `.ban 234... [reason]`');
+  }
+
+  const phone = userToBanJid.split('@')[0];
+
+  // Prevent banning owner or admins
+  if (phone === config.OWNER_NUMBER) {
+    return m.reply('❌ You cannot ban the bot owner.');
+  }
+  // You might want to add a check for other admins here
+  // const admins = await getAdmins();
+  // if (admins.some(admin => admin.phone === phone)) {
+  //   return m.reply('❌ You cannot ban another admin.');
+  // }
+
+  try {
+    const result = await banUser(phone, reason, m.sender);
+
+    if (result.success) {
+      await m.reply(`🚫 *User Banned*\n\n👤 @${phone}\n📝 Reason: ${reason}\n\nThis user will no longer receive responses from the bot.`, {
+        mentions: [userToBanJid]
+      });
+    } else {
+      return m.reply(`❌ Failed to ban user: ${result.message}`);
+    }
+  } catch (error) {
+    logger.error('Failed to ban user:', error.message);
+    return m.reply(`❌ An error occurred while banning the user.`);
+  }
+}
+
+/**
+ * Handles the .unban command
+ */
+async function handleUnbanUser(context, isOwner) {
+  const { msg: m, args, sock, logger } = context;
+
+  if (!isOwner) {
+    return m.reply('🔒 Only the bot owner can unban users.');
+  }
+
+  let userToUnbanJid = '';
+
+  // Case 1: Unban by quoting
+  if (m.quoted) {
+    userToUnbanJid = m.quoted.sender;
+  }
+  // Case 2: Unban by mentioning
+  else if (m.mentions && m.mentions.length > 0) {
+    userToUnbanJid = m.mentions[0];
+  }
+  // Case 3: Unban by number
+  else if (args.length > 0) {
+    const potentialNumber = args[0].replace(/[^0-9]/g, '');
+    if (potentialNumber.length > 9) {
+      userToUnbanJid = `${potentialNumber}@s.whatsapp.net`;
+    }
+  }
+
+  if (!userToUnbanJid) {
+    return m.reply('❌ *Invalid Usage*\n\nHow to unban:\n1. Reply to a user\'s message with `.unban`\n2. Mention a user with `.unban @user`\n3. Type the number `.unban 234...`');
+  }
+
+  const phone = userToUnbanJid.split('@')[0];
+
+  try {
+    const result = await unbanUser(phone);
+
+    if (result.success) {
+      await m.reply(`✅ *User Unbanned*\n\n👤 @${phone}\n\nThis user can now interact with the bot again.`, {
+        mentions: [userToUnbanJid]
+      });
+    } else {
+      return m.reply(`❌ Failed to unban user: ${result.message}`);
+    }
+  } catch (error) {
+    logger.error('Failed to unban user:', error.message);
+    return m.reply(`❌ An error occurred while unbanning the user.`);
+  }
+}
 
 // Handle system stats - Requires 'os' and 'moment' imports
 async function handleStats(m, sock, bot, config, logger) {
