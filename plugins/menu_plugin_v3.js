@@ -63,7 +63,7 @@ async function showMainMenu(m, pluginManager, config, bot, logger) {
 
     // Collect all plugins and their commands
     const allPlugins = await pluginManager.getAllPlugins();
-    const categorizedCommands = categorizePlug ins(allPlugins);
+    const categorizedCommands = categorizePlugins(allPlugins);
     
     // Get bot stats
     const stats = bot.getStats();
@@ -523,6 +523,7 @@ function searchCommands(plugins, query) {
           privateOnly: plugin.info?.privateOnly,
           cooldown: plugin.info?.cooldown
         });
+      }
     }
   }
 
