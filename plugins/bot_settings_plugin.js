@@ -7,6 +7,7 @@ import moment from 'moment-timezone';
 const SETTINGS_COLLECTION = 'bot_settings';
 const ADMINS_COLLECTION = 'bot_admins';
 const BANNED_USERS_COLLECTION = 'bot_banned_users';
+const GROUP_SETTINGS_COLLECTION = 'group_settings';
 
 // ===== V3 PLUGIN EXPORT =====
 export default {
@@ -17,7 +18,7 @@ export default {
   category: 'owner',
 
   // Commands this plugin handles
-  commands: ['settings', 'mode', 'plugins', 'admins', 'stats', 'ping', 'restart', 'shutdown', 'ban', 'unban'],
+  commands: ['settings', 'mode', 'plugins', 'admins', 'stats', 'ping', 'restart', 'shutdown', 'ban', 'unban', 'antilink'],
   aliases: ['set', 'config', 'control'],
   ownerOnly: true, // Note: The original logic allows admins too, but follows V3 convention
 
@@ -84,6 +85,10 @@ export default {
       
       case 'unban':
         await handleUnbanUser(context, isOwner);
+        break;
+
+      case 'antilink':
+        await handleAntilinkSetting(context);
         break;
 
       default:
@@ -284,6 +289,40 @@ async function unbanUser(phone) {
   }
 }
 
+// Gets group-specific settings
+async function getGroupSettings(groupId) {
+  try {
+    return await PluginHelpers.safeDBOperation(async (db) => {
+      const collection = db.collection(GROUP_SETTINGS_COLLECTION);
+      let settings = await collection.findOne({ _id: groupId });
+      if (!settings) {
+        settings = { _id: groupId, antilink: false }; // Default
+      }
+      return settings;
+    });
+  } catch (error) {
+    console.error('Failed to get group settings:', error.message);
+    return { antilink: false }; // Fail-safe
+  }
+}
+
+// Updates group-specific settings
+async function updateGroupSettings(groupId, updates) {
+  try {
+    return await PluginHelpers.safeDBOperation(async (db) => {
+      const collection = db.collection(GROUP_SETTINGS_COLLECTION);
+      return await collection.updateOne(
+        { _id: groupId },
+        { $set: { ...updates, updatedAt: new Date() } },
+        { upsert: true }
+      );
+    });
+  } catch (error) {
+    console.error('Failed to update group settings:', error.message);
+    return null;
+  }
+}
+
 /**
  * Formats uptime in seconds into a human-readable string (Days, Hours, Minutes, Seconds).
  * @param {number} seconds - The total uptime in seconds.
@@ -332,7 +371,6 @@ const configKeyMap = {
   autoRead: 'AUTO_READ',
   autoReact: 'AUTO_REACT',
   welcome: 'WELCOME',
-  antilink: 'ANTILINK',
   rejectCall: 'REJECT_CALL',
   autoBio: 'AUTO_BIO'
 };
@@ -403,7 +441,7 @@ async function showMainMenu(m, sock, config) {
 • Auto Read: ${autoRead ? '✅' : '❌'}
 • Auto React: ${autoReact ? '✅' : '❌'}
 • Welcome: ${welcome ? '✅' : '❌'}
-• Anti-Link: ${antilink ? '✅' : '❌'}
+• Anti-Link: (Per-Group) ${antilink ? '✅' : '❌'}
 • Reject Call: ${rejectCall ? '✅' : '❌'}
 • Auto Bio: ${autoBio ? '✅' : '❌'}
 
@@ -417,7 +455,8 @@ async function showMainMenu(m, sock, config) {
 
 *🔧 Settings Management:*
 • ${config.PREFIX}settings [option] [on/off]
-  Options: autoread, autoreact, welcome, antilink, rejectcall, autobio
+  Options: autoread, autoreact, welcome, rejectcall, autobio
+• ${config.PREFIX}antilink [on/off]
 • ${config.PREFIX}mode [public/private]
 
 *🔌 Plugin Control:*
@@ -455,6 +494,7 @@ ${config.PREFIX}admins add @2348089782988
 ${config.PREFIX}ban @user spamming
 ${config.PREFIX}unban 2348012345678
 ${config.PREFIX}stats
+${config.PREFIX}antilink on
 \`\`\`
 
 💾 Settings are saved to database and persist restarts.`;
@@ -957,7 +997,7 @@ async function handleStats(m, sock, bot, config, logger) {
 
 • Status: ${dbHealth.healthy ? '✅ Connected' : '❌ Offline'}
 • Ping: ${dbHealth.pingTime ?? 'N/A'} ms
-${dbHealth.healthy ? `• Collections: ${stats.database?.collections || 'N/A'}\n• Documents: ${stats.database?.documents || 'N/A'}\n• Data Size: ${formatBytes(stats.database?.dataSize) || 'N/A'}` : `• Error: ${dbHealth.error || 'Unknown'}`}
+${dbHealth.healthy ? `• Collections: ${dbHealth.stats?.collections || 'N/A'}\n• Documents: ${dbHealth.stats?.documents || 'N/A'}\n• Data Size: ${formatBytes(dbHealth.stats?.dataSize) || 'N/A'}` : `• Error: ${dbHealth.error || 'Unknown'}`}
 ╭─────────────────────╮
 │   🔌 *PLUGINS* │
 ╰─────────────────────╯
@@ -1125,5 +1165,59 @@ async function handleShutdown(m, sock, bot, logger, isOwner) {
     await m.reply('❌ Shutdown command failed: ' + error.message);
     // Try to react with error even if reply fails
     try { await m.react('❌'); } catch (reactError) {}
+  }
+}
+
+/**
+ * Handles the .antilink [on/off] command for groups.
+ */
+async function handleAntilinkSetting(context) {
+  const { msg: m, args, sock, config, logger, helpers } = context;
+  const { PermissionHelpers } = helpers;
+
+  if (!m.isGroup) {
+    return m.reply('❌ This command can only be used in groups.');
+  }
+  
+  // Check if user is a group admin
+  let isGroupAdmin = false;
+  try {
+      const groupMeta = await sock.groupMetadata(m.chat);
+      const participant = groupMeta.participants.find(p => p.id === m.sender);
+      isGroupAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
+  } catch (e) {
+      logger.error(e, 'Failed to check group admin status for antilink');
+      return m.reply('❌ Could not verify your admin status.');
+  }
+  
+  // Check if user is bot admin/owner
+  const isOwner = PermissionHelpers.isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net');
+  const admins = await getAdmins(); // This function is already in your plugin
+  const isAdmin = admins.some(admin => admin.phone === m.sender.replace('@s.whatsapp.net', ''));
+
+  if (!isOwner && !isAdmin && !isGroupAdmin) {
+      return m.reply('🔒 This command requires Bot Admin or Group Admin privileges.');
+  }
+
+  const value = args[0]?.toLowerCase();
+  const groupId = m.chat;
+  const settings = await getGroupSettings(groupId);
+
+  if (!['on', 'off'].includes(value)) {
+    return m.reply(`🛡️ *Anti-Link Status*\n\nCurrent status for this group: ${settings.antilink ? '✅ ENABLED' : '❌ DISABLED'}\n\nUsage: *.antilink [on/off]*`);
+  }
+
+  const newValue = (value === 'on');
+
+  if (settings.antilink === newValue) {
+     return m.reply(`💡 *No Change*\n\nAnti-Link for this group is already ${newValue ? '✅ Enabled' : '❌ Disabled'}.`);
+  }
+
+  const result = await updateGroupSettings(groupId, { antilink: newValue });
+
+  if (result && result.acknowledged) {
+    return m.reply(`✅ *Anti-Link Updated*\n\nAnti-Link for this group is now: *${newValue ? '✅ ENABLED' : '❌ DISABLED'}*`);
+  } else {
+    return m.reply('❌ Failed to update Anti-Link setting.');
   }
 }
