@@ -523,7 +523,6 @@ function searchCommands(plugins, query) {
           privateOnly: plugin.info?.privateOnly,
           cooldown: plugin.info?.cooldown
         });
-      }
     }
   }
 
