@@ -327,6 +327,16 @@ async function handleSettings(m, args, sock, config, bot, logger) {
     autobio: 'autoBio'
   };
 
+  // ADD THIS MAP for config keys (uppercase)
+const configKeyMap = {
+  autoRead: 'AUTO_READ',
+  autoReact: 'AUTO_REACT',
+  welcome: 'WELCOME',
+  antilink: 'ANTILINK',
+  rejectCall: 'REJECT_CALL',
+  autoBio: 'AUTO_BIO'
+};
+
   if (booleanSettingsMap[setting]) {
     if (!value || !['on', 'off', 'true', 'false'].includes(value)) {
       return m.reply(`❌ Invalid value. Use: *on/off* or *true/false*\n\nExample: *.settings ${setting} on*`);
@@ -342,13 +352,16 @@ async function handleSettings(m, args, sock, config, bot, logger) {
     const result = await updateBotSettings(update);
 
     if (result && result.acknowledged) {
-         // Update the live config if the bot instance allows it (optional, depends on your bot structure)
-         if (bot && typeof bot.updateConfig === 'function') {
-            bot.updateConfig({ [fieldName]: newValue });
-         } else if (config) {
-             // Directly modify the passed config object (less ideal but works if bot doesn't have update method)
-             config[fieldName] = newValue;
-         }
+         // Get the correct uppercase config key
+     const configKey = configKeyMap[fieldName];
+
+     // Update the live config if the bot instance allows it
+     if (bot && typeof bot.updateConfig === 'function') {
+        bot.updateConfig({ [configKey]: newValue });
+     } else if (config && configKey) {
+         // Directly modify the passed config object using the UPPECASE key
+         config[configKey] = newValue; // <--- FIXED
+     }
 
         return m.reply(`✅ *Setting Updated*\n\n📝 ${fieldName}: ${newValue ? '✅ Enabled' : '❌ Disabled'}\n\n💾 Settings saved to database.`);
     } else {
@@ -890,7 +903,7 @@ async function handleStats(m, sock, bot, config, logger) {
     const cpuCores = cpus.length;
 
     // --- Use the new botUptimeMs and formatUptime ---
-    const uptimeFormatted = formatUptime(botUptimeMs / 1000); // Use the potentially more accurate bot uptime
+    const uptimeFormatted = formatUptime(botUptimeMs); // Use the potentially more accurate bot uptime
     
     // Format Memory Safely
      const formatBytes = (bytes) => {
@@ -953,12 +966,12 @@ ${dbHealth.healthy ? `• Collections: ${dbHealth.stats?.collections || 'N/A'}\n
 │   ⚡ *FEATURES* │
 ╰─────────────────────╯
 
-${(stats.features?.autoRead ?? config.AUTO_READ === 'true') ? '✅' : '❌'} Auto Read
-${(stats.features?.autoReact ?? config.AUTO_REACT === 'true') ? '✅' : '❌'} Auto React
-${(stats.features?.welcome ?? config.WELCOME === 'true') ? '✅' : '❌'} Welcome Messages
-${(stats.features?.antilink ?? config.ANTILINK === 'true') ? '✅' : '❌'} Anti-Link
-${(stats.features?.rejectCall ?? config.REJECT_CALL === 'true') ? '✅' : '❌'} Call Rejection
-${(stats.features?.autoBio ?? config.AUTO_BIO === 'true') ? '✅' : '❌'} Auto Bio
+${(stats.features?.AUTO_READ ?? config.AUTO_READ === 'true') ? '✅' : '❌'} Auto Read
+${(stats.features?.AUTO_REACT ?? config.AUTO_REACT === 'true') ? '✅' : '❌'} Auto React
+${(stats.features?.WELCOME ?? config.WELCOME === 'true') ? '✅' : '❌'} Welcome Messages
+${(stats.features?.ANTILINK ?? config.ANTILINK === 'true') ? '✅' : '❌'} Anti-Link
+${(stats.features?.REJECT_CALL ?? config.REJECT_CALL === 'true') ? '✅' : '❌'} Call Rejection
+${(stats.features?.AUTO_BIO ?? config.AUTO_BIO === 'true') ? '✅' : '❌'} Auto Bio
 
 ⏰ ${moment().tz(config.TIMEZONE || 'UTC').format('DD/MM/YYYY HH:mm:ss Z')}`;
 
@@ -1013,7 +1026,7 @@ async function handlePing(m, sock, db, logger) { // Ensure db is passed correctl
 • Message: ${msgLatency} ms
 • Database Ping: ${dbPing}
 • DB Status: ${dbStatus}
-• Process Uptime: ${formatUptime(process.uptime())}
+• Process Uptime: ${formatUptime(process.uptime() * 1000)}
 • Memory (Heap): ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB
 
 ⏰ ${moment().format('HH:mm:ss')}`;
