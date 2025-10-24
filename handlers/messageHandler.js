@@ -2,7 +2,6 @@
 import { serializeMessage } from '../lib/serializer.js';
 import { PermissionHelpers, RateLimitHelpers, OwnerHelpers } from '../lib/helpers.js';
 import PluginManager from '../lib/pluginManager.js';
-import { isUserBanned } from '../plugins/bot_settings_plugin.js'; 
 import logger from '../src/utils/logger.js'; // Import the logger
 
 // Auto reaction emojis
