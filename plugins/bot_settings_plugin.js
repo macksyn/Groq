@@ -345,6 +345,11 @@ const configKeyMap = {
     const newValue = ['on', 'true'].includes(value);
     const fieldName = booleanSettingsMap[setting];
 
+    // ADDED: Check if already set
+    if (settings[fieldName] === newValue) {
+      return m.reply(`💡 *No Change*\n\n📝 ${fieldName} is already ${newValue ? '✅ Enabled' : '❌ Disabled'}.`);
+    }
+
     // Create update object dynamically
     const update = {};
     update[fieldName] = newValue;
@@ -952,8 +957,7 @@ async function handleStats(m, sock, bot, config, logger) {
 
 • Status: ${dbHealth.healthy ? '✅ Connected' : '❌ Offline'}
 • Ping: ${dbHealth.pingTime ?? 'N/A'} ms
-${dbHealth.healthy ? `• Collections: ${dbHealth.stats?.collections || 'N/A'}\n• Documents: ${dbHealth.stats?.documents || 'N/A'}\n• Data Size: ${formatBytes(dbHealth.stats?.dataSize * 1024 * 1024) || 'N/A'}` : `• Error: ${dbHealth.error || 'Unknown'}`}
-
+${dbHealth.healthy ? `• Collections: ${stats.database?.collections || 'N/A'}\n• Documents: ${stats.database?.documents || 'N/A'}\n• Data Size: ${formatBytes(stats.database?.dataSize) || 'N/A'}` : `• Error: ${dbHealth.error || 'Unknown'}`}
 ╭─────────────────────╮
 │   🔌 *PLUGINS* │
 ╰─────────────────────╯
@@ -966,12 +970,12 @@ ${dbHealth.healthy ? `• Collections: ${dbHealth.stats?.collections || 'N/A'}\n
 │   ⚡ *FEATURES* │
 ╰─────────────────────╯
 
-${(stats.features?.AUTO_READ ?? config.AUTO_READ === 'true') ? '✅' : '❌'} Auto Read
-${(stats.features?.AUTO_REACT ?? config.AUTO_REACT === 'true') ? '✅' : '❌'} Auto React
-${(stats.features?.WELCOME ?? config.WELCOME === 'true') ? '✅' : '❌'} Welcome Messages
-${(stats.features?.ANTILINK ?? config.ANTILINK === 'true') ? '✅' : '❌'} Anti-Link
-${(stats.features?.REJECT_CALL ?? config.REJECT_CALL === 'true') ? '✅' : '❌'} Call Rejection
-${(stats.features?.AUTO_BIO ?? config.AUTO_BIO === 'true') ? '✅' : '❌'} Auto Bio
+${(stats.features?.AUTO_READ ?? config.AUTO_READ) ? '✅' : '❌'} Auto Read
+${(stats.features?.AUTO_REACT ?? config.AUTO_REACT) ? '✅' : '❌'} Auto React
+${(stats.features?.WELCOME ?? config.WELCOME) ? '✅' : '❌'} Welcome Messages
+${(stats.features?.ANTILINK ?? config.ANTILINK) ? '✅' : '❌'} Anti-Link
+${(stats.features?.REJECT_CALL ?? config.REJECT_CALL) ? '✅' : '❌'} Call Rejection
+${(stats.features?.AUTO_BIO ?? config.AUTO_BIO) ? '✅' : '❌'} Auto Bio
 
 ⏰ ${moment().tz(config.TIMEZONE || 'UTC').format('DD/MM/YYYY HH:mm:ss Z')}`;
 
