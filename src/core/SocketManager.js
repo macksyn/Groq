@@ -249,12 +249,12 @@ export class SocketManager extends EventEmitter {
 
           setTimeout(() => {
             this.connect().catch(error => {
-              logger.safeError(error, '❌ Reconnection failed:'), error.message;
+              logger.safeError(lastDisconnect?.error, '❌ Reconnection failed:'), error.message;
             });
           }, delay);
 
         } else if (this.retryCount >= MAX_RETRIES) {
-          logger.safeError(error, `💀 Maximum reconnection attempts (${MAX_RETRIES}) reached. Stopping.`);
+          logger.safeError(lastDisconnect?.error, `💀 Maximum reconnection attempts (${MAX_RETRIES}) reached. Stopping.`);
           this.status = 'error';
           this.emit('statusChange', 'error', { error: 'Max retries reached' });
         }
