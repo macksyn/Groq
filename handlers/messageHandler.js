@@ -59,13 +59,6 @@ export default async function MessageHandler(messageUpdate, sock, loggerArg, con
       return; // Private mode
     }
 
-     if (m.sender) {
-        const userPhone = m.sender.split('@')[0];
-        if (await isUserBanned(userPhone)) {
-            logger.info(`🚫 Ignoring message from banned user: ${userPhone}`);
-            return; // Stop processing the message
-        }
-    }
 
     // --- Rate Limiting (using the new V2 helper) ---
     const senderId = m.sender || 'unknown';
