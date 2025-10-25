@@ -227,7 +227,7 @@ export class SocketManager extends EventEmitter {
             break;
 
           case DisconnectReason.timedOut:
-            logger.safeError(lastDisconnect?.terror, '⏰ Connection timed out. Retrying...');
+            logger.safeError(lastDisconnect?.error, '⏰ Connection timed out. Retrying...');
             break;
             
           default:

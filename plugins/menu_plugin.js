@@ -1,16 +1,5 @@
-// plugins/menu.js - Dynamic Auto-Menu Plugin (V3)
+// plugins/menu_plugin.js - Dynamic Auto-Menu Plugin (V3)
 import moment from 'moment-timezone';
-
-// Plugin metadata
-const info = {
-  name: 'Dynamic Menu System',
-  version: '2.0.0',
-  author: 'Alex Macksyn',
-  description: 'Automatically generates menu from all loaded plugins',
-  category: 'general',
-  commands: ['menu', 'help', 'list', 'cmds'],
-  aliases: ['commands', 'commandlist']
-};
 
 // Category icons and display names
 const CATEGORY_INFO = {
@@ -25,66 +14,94 @@ const CATEGORY_INFO = {
   download: { icon: '📥', name: 'Downloader' },
   economy: { icon: '💰', name: 'Economy' },
   search: { icon: '🔍', name: 'Search' },
-  info: { icon: 'ℹ️', name: 'Information' }
+  info: { icon: 'ℹ️', name: 'Information' },
+  social: { icon: '🎂', name: 'Social' },
+  tools: { icon: '🔨', name: 'Tools' },
+  moderation: { icon: '🛡️', name: 'Moderation' },
+  games: { icon: '🎯', name: 'Games' },
+  music: { icon: '🎵', name: 'Music' },
+  system: { icon: '⚡', name: 'System' }
 };
 
-// Main plugin function
-async function menuPlugin(context) {
-  const { msg: m, args, text, command, sock, config, bot, logger } = context;
+// ============================================================
+// V3 PLUGIN EXPORT (Required Structure)
+// ============================================================
 
-  // Get all loaded plugins from PluginManager
-  const pluginManager = bot.getPluginManager();
-  
-  if (!pluginManager) {
-    return m.reply('❌ Plugin manager not available');
+export default {
+  name: 'menu',
+  description: 'Automatically generates menu from all loaded plugins',
+  commands: ['menu', 'help', 'list', 'cmds'],
+  aliases: ['commands', 'commandlist'],
+  category: 'general',
+  usage: '[subcommand] [args]',
+  example: 'menu | menu search image | help ping',
+  version: '3.0.0',
+
+  async run({ msg, args, text, command, sock, config, bot, logger }) {
+    try {
+      const subCommand = args[0]?.toLowerCase();
+
+      // Get PluginManager from bot
+      const pluginManager = bot.pluginManager || bot.getPluginManager?.();
+      
+      if (!pluginManager) {
+        return await msg.reply('❌ Plugin manager not available');
+      }
+
+      // Route to specific handler
+      if (subCommand === 'search' || subCommand === 'find') {
+        return await handleSearch(msg, args.slice(1).join(' '), pluginManager, config);
+      }
+
+      if (subCommand && subCommand !== 'all') {
+        // Show detailed help for specific command or category
+        return await handleDetailedHelp(msg, subCommand, pluginManager, config);
+      }
+
+      // Show main menu
+      return await showMainMenu(msg, pluginManager, config, bot, logger);
+
+    } catch (error) {
+      logger.error(error, '❌ Menu plugin error');
+      await msg.react('❌');
+      await msg.reply('❌ An error occurred generating the menu. Please try again.');
+    }
   }
+};
 
-  const subCommand = args[0]?.toLowerCase();
+// ============================================================
+// MAIN MENU
+// ============================================================
 
-  // Route to specific handler
-  if (subCommand === 'search' || subCommand === 'find') {
-    return await handleSearch(m, args.slice(1).join(' '), pluginManager, config);
-  }
-
-  if (subCommand && subCommand !== 'all') {
-    // Show detailed help for specific command or category
-    return await handleDetailedHelp(m, subCommand, pluginManager, config);
-  }
-
-  // Show main menu
-  return await showMainMenu(m, pluginManager, config, bot, logger);
-}
-
-// ==================== MAIN MENU ====================
-
-async function showMainMenu(m, pluginManager, config, bot, logger) {
+async function showMainMenu(msg, pluginManager, config, bot, logger) {
   try {
-    await m.react('📖');
+    await msg.react('📖');
 
     // Collect all plugins and their commands
     const allPlugins = await pluginManager.getAllPlugins();
     const categorizedCommands = categorizePlugins(allPlugins);
     
     // Get bot stats
-    const stats = bot.getStats();
-    const uptime = formatUptime(stats.uptime);
+    const stats = pluginManager.getPluginStats();
+    const startTime = bot.startTime || Date.now();
+    const uptime = formatUptime(Date.now() - startTime);
     
     // Build menu header
     let menu = `╭━━━━━━━━━━━━━━━━━━━━╮
-┃   🤖 *${config.BOT_NAME}*   ┃
+┃   🤖 *${config.BOT_NAME || 'WhatsApp Bot'}*   ┃
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 👋 Hello! I'm your WhatsApp assistant.
 
 📊 *Bot Information:*
-• Status: ${stats.status === 'connected' ? '✅ Online' : '❌ Offline'}
+• Status: ✅ Online
 • Uptime: ${uptime}
 • Prefix: \`${config.PREFIX}\`
-• Mode: ${config.MODE.toUpperCase()}
-• Plugins: ${stats.plugins.enabled}/${stats.plugins.total}
+• Mode: ${(config.MODE || 'public').toUpperCase()}
+• Plugins: ${stats.enabled}/${stats.total}
 • Commands: ${getTotalCommands(allPlugins)}
 
-⏰ ${moment().tz(config.TIMEZONE).format('DD/MM/YYYY HH:mm:ss')}
+⏰ ${moment().tz(config.TIMEZONE || 'Africa/Lagos').format('DD/MM/YYYY HH:mm:ss')}
 
 ╭━━━━━━━━━━━━━━━━━━━━╮
 ┃   📋 *COMMAND MENU*    ┃
@@ -148,25 +165,27 @@ ${sortedCategories.map(cat => {
 
 • Owner: @${config.OWNER_NUMBER}
 • Powered by Baileys & Node.js
-• Made with ❤️ by ${config.OWNER_NAME}
+• Made with ❤️ by ${config.OWNER_NAME || 'Bot Developer'}
 
 _Type ${config.PREFIX}help for more information_`;
 
-    await m.reply(menu);
-    await m.react('✅');
+    await msg.reply(menu);
+    await msg.react('✅');
 
   } catch (error) {
-    logger.error('Menu generation failed:', error.message);
-    await m.react('❌');
-    await m.reply('❌ Failed to generate menu. Please try again.');
+    logger.error(error, 'Menu generation failed');
+    await msg.react('❌');
+    await msg.reply('❌ Failed to generate menu. Please try again.');
   }
 }
 
-// ==================== DETAILED HELP ====================
+// ============================================================
+// DETAILED HELP
+// ============================================================
 
-async function handleDetailedHelp(m, query, pluginManager, config) {
+async function handleDetailedHelp(msg, query, pluginManager, config) {
   try {
-    await m.react('🔍');
+    await msg.react('🔍');
 
     const allPlugins = await pluginManager.getAllPlugins();
     
@@ -174,29 +193,31 @@ async function handleDetailedHelp(m, query, pluginManager, config) {
     const categoryCommands = getCommandsByCategory(allPlugins, query);
     
     if (categoryCommands.length > 0) {
-      return await showCategoryMenu(m, query, categoryCommands, config);
+      return await showCategoryMenu(msg, query, categoryCommands, config);
     }
 
     // Search for specific command
     const commandInfo = findCommand(allPlugins, query);
     
     if (commandInfo) {
-      return await showCommandHelp(m, commandInfo, config);
+      return await showCommandHelp(msg, commandInfo, config);
     }
 
     // No match found
-    await m.react('❌');
-    return m.reply(`❌ *Not Found*\n\nNo command or category found for: *${query}*\n\n💡 Try:\n• \`${config.PREFIX}menu\` - View all categories\n• \`${config.PREFIX}menu search ${query}\` - Search commands`);
+    await msg.react('❌');
+    return msg.reply(`❌ *Not Found*\n\nNo command or category found for: *${query}*\n\n💡 Try:\n• \`${config.PREFIX}menu\` - View all categories\n• \`${config.PREFIX}menu search ${query}\` - Search commands`);
 
   } catch (error) {
-    await m.react('❌');
-    return m.reply('❌ Failed to retrieve command information.');
+    await msg.react('❌');
+    return msg.reply('❌ Failed to retrieve command information.');
   }
 }
 
-// ==================== CATEGORY VIEW ====================
+// ============================================================
+// CATEGORY VIEW
+// ============================================================
 
-async function showCategoryMenu(m, category, commands, config) {
+async function showCategoryMenu(msg, category, commands, config) {
   const categoryData = CATEGORY_INFO[category] || { icon: '📦', name: category };
   
   let menu = `╭━━━━━━━━━━━━━━━━━━━━╮
@@ -212,7 +233,7 @@ async function showCategoryMenu(m, category, commands, config) {
     const prefix = config.PREFIX;
     const cmdName = cmd.command || cmd.commands?.[0] || 'unknown';
     const description = cmd.description || 'No description';
-    const usage = cmd.usage || `${prefix}${cmdName}`;
+    const usage = cmd.usage || `${cmdName}`;
     
     menu += `\n*${i + 1}. ${prefix}${cmdName}*\n`;
     menu += `   📝 ${description}\n`;
@@ -222,7 +243,7 @@ async function showCategoryMenu(m, category, commands, config) {
       menu += `   🔗 Aliases: ${cmd.aliases.map(a => `\`${prefix}${a}\``).join(', ')}\n`;
     }
     
-    menu += `   💡 Usage: \`${usage}\`\n`;
+    menu += `   💡 Usage: \`${prefix}${usage}\`\n`;
     
     // Show restrictions
     const restrictions = [];
@@ -242,13 +263,15 @@ async function showCategoryMenu(m, category, commands, config) {
 • \`${config.PREFIX}menu\` - Back to main menu
 • \`${config.PREFIX}menu all\` - Show all commands`;
 
-  await m.reply(menu);
-  await m.react('✅');
+  await msg.reply(menu);
+  await msg.react('✅');
 }
 
-// ==================== COMMAND HELP ====================
+// ============================================================
+// COMMAND HELP
+// ============================================================
 
-async function showCommandHelp(m, commandInfo, config) {
+async function showCommandHelp(msg, commandInfo, config) {
   const prefix = config.PREFIX;
   const cmdName = commandInfo.command || commandInfo.commands?.[0] || 'unknown';
   
@@ -267,7 +290,7 @@ ${commandInfo.description || 'No description available'}
 
   // Usage
   if (commandInfo.usage) {
-    help += `💡 *Usage:*\n\`\`\`${commandInfo.usage}\`\`\`\n\n`;
+    help += `💡 *Usage:*\n\`\`\`${prefix}${commandInfo.usage}\`\`\`\n\n`;
   } else {
     help += `💡 *Usage:*\n\`\`\`${prefix}${cmdName}\`\`\`\n\n`;
   }
@@ -277,13 +300,9 @@ ${commandInfo.description || 'No description available'}
     help += `🔗 *Aliases:*\n${commandInfo.aliases.map(a => `• \`${prefix}${a}\``).join('\n')}\n\n`;
   }
 
-  // Examples
-  if (commandInfo.examples && commandInfo.examples.length > 0) {
-    help += `📌 *Examples:*\n`;
-    commandInfo.examples.forEach((example, index) => {
-      help += `${index + 1}. \`${prefix}${example}\`\n`;
-    });
-    help += `\n`;
+  // Example
+  if (commandInfo.example) {
+    help += `📌 *Example:*\n\`${prefix}${commandInfo.example}\`\n\n`;
   }
 
   // Restrictions
@@ -297,9 +316,15 @@ ${commandInfo.description || 'No description available'}
     help += `🔒 *Restrictions:*\n${restrictions.join('\n')}\n\n`;
   }
 
-  // Cooldown
-  if (commandInfo.cooldown) {
-    help += `⏰ *Cooldown:* ${commandInfo.cooldown} seconds\n\n`;
+  // Stats
+  if (commandInfo.stats) {
+    help += `📊 *Statistics:*\n`;
+    help += `• Executions: ${commandInfo.stats.executions || 0}\n`;
+    help += `• Crashes: ${commandInfo.stats.crashes || 0}\n`;
+    if (commandInfo.stats.lastUsed) {
+      help += `• Last Used: ${new Date(commandInfo.stats.lastUsed).toLocaleString()}\n`;
+    }
+    help += `\n`;
   }
 
   help += `╭━━━━━━━━━━━━━━━━━━━━╮
@@ -310,25 +335,27 @@ ${commandInfo.description || 'No description available'}
 • \`${prefix}menu\` - Back to main menu
 • Contact owner: @${config.OWNER_NUMBER}`;
 
-  await m.reply(help);
-  await m.react('✅');
+  await msg.reply(help);
+  await msg.react('✅');
 }
 
-// ==================== SEARCH FUNCTION ====================
+// ============================================================
+// SEARCH FUNCTION
+// ============================================================
 
-async function handleSearch(m, query, pluginManager, config) {
+async function handleSearch(msg, query, pluginManager, config) {
   if (!query || query.trim() === '') {
-    return m.reply(`❌ Please provide a search term\n\nExample: \`${config.PREFIX}menu search image\``);
+    return msg.reply(`❌ Please provide a search term\n\nExample: \`${config.PREFIX}menu search image\``);
   }
 
-  await m.react('🔍');
+  await msg.react('🔍');
 
   const allPlugins = await pluginManager.getAllPlugins();
   const searchResults = searchCommands(allPlugins, query);
 
   if (searchResults.length === 0) {
-    await m.react('❌');
-    return m.reply(`❌ *No Results*\n\nNo commands found matching: *${query}*\n\n💡 Try:\n• Different search terms\n• \`${config.PREFIX}menu\` - View all categories`);
+    await msg.react('❌');
+    return msg.reply(`❌ *No Results*\n\nNo commands found matching: *${query}*\n\n💡 Try:\n• Different search terms\n• \`${config.PREFIX}menu\` - View all categories`);
   }
 
   let message = `╭━━━━━━━━━━━━━━━━━━━━╮
@@ -362,11 +389,13 @@ Found: ${searchResults.length} command(s)
 
 Use \`${config.PREFIX}help <command>\` for detailed information about a specific command.`;
 
-  await m.reply(message);
-  await m.react('✅');
+  await msg.reply(message);
+  await msg.react('✅');
 }
 
-// ==================== HELPER FUNCTIONS ====================
+// ============================================================
+// HELPER FUNCTIONS
+// ============================================================
 
 // Categorize plugins by their category
 function categorizePlugins(plugins) {
@@ -387,17 +416,17 @@ function categorizePlugins(plugins) {
       categorized[category].push({
         command: cmd,
         commands: plugin.commands,
-        aliases: plugin.info?.aliases || [],
+        aliases: plugin.aliases || [],
         description: plugin.description,
-        usage: plugin.info?.usage,
-        examples: plugin.info?.examples,
+        usage: plugin.usage,
+        example: plugin.example,
         category: category,
         pluginName: plugin.name,
-        ownerOnly: plugin.info?.ownerOnly,
-        adminOnly: plugin.info?.adminOnly,
-        groupOnly: plugin.info?.groupOnly,
-        privateOnly: plugin.info?.privateOnly,
-        cooldown: plugin.info?.cooldown
+        ownerOnly: plugin.ownerOnly,
+        adminOnly: plugin.adminOnly,
+        groupOnly: plugin.groupOnly,
+        privateOnly: plugin.privateOnly,
+        stats: plugin.stats
       });
     }
   }
@@ -419,17 +448,17 @@ function getCommandsByCategory(plugins, category) {
       commands.push({
         command: cmd,
         commands: plugin.commands,
-        aliases: plugin.info?.aliases || [],
+        aliases: plugin.aliases || [],
         description: plugin.description,
-        usage: plugin.info?.usage,
-        examples: plugin.info?.examples,
+        usage: plugin.usage,
+        example: plugin.example,
         category: plugin.category,
         pluginName: plugin.name,
-        ownerOnly: plugin.info?.ownerOnly,
-        adminOnly: plugin.info?.adminOnly,
-        groupOnly: plugin.info?.groupOnly,
-        privateOnly: plugin.info?.privateOnly,
-        cooldown: plugin.info?.cooldown
+        ownerOnly: plugin.ownerOnly,
+        adminOnly: plugin.adminOnly,
+        groupOnly: plugin.groupOnly,
+        privateOnly: plugin.privateOnly,
+        stats: plugin.stats
       });
     }
   }
@@ -445,7 +474,7 @@ function findCommand(plugins, query) {
     if (!plugin.enabled) continue;
 
     const commands = plugin.commands || [];
-    const aliases = plugin.info?.aliases || [];
+    const aliases = plugin.aliases || [];
     
     // Check main commands
     if (commands.some(cmd => cmd.toLowerCase() === searchQuery)) {
@@ -454,15 +483,15 @@ function findCommand(plugins, query) {
         commands: commands,
         aliases: aliases,
         description: plugin.description,
-        usage: plugin.info?.usage,
-        examples: plugin.info?.examples,
+        usage: plugin.usage,
+        example: plugin.example,
         category: plugin.category || 'general',
         pluginName: plugin.name,
-        ownerOnly: plugin.info?.ownerOnly,
-        adminOnly: plugin.info?.adminOnly,
-        groupOnly: plugin.info?.groupOnly,
-        privateOnly: plugin.info?.privateOnly,
-        cooldown: plugin.info?.cooldown
+        ownerOnly: plugin.ownerOnly,
+        adminOnly: plugin.adminOnly,
+        groupOnly: plugin.groupOnly,
+        privateOnly: plugin.privateOnly,
+        stats: plugin.stats
       };
     }
 
@@ -473,15 +502,15 @@ function findCommand(plugins, query) {
         commands: commands,
         aliases: aliases,
         description: plugin.description,
-        usage: plugin.info?.usage,
-        examples: plugin.info?.examples,
+        usage: plugin.usage,
+        example: plugin.example,
         category: plugin.category || 'general',
         pluginName: plugin.name,
-        ownerOnly: plugin.info?.ownerOnly,
-        adminOnly: plugin.info?.adminOnly,
-        groupOnly: plugin.info?.groupOnly,
-        privateOnly: plugin.info?.privateOnly,
-        cooldown: plugin.info?.cooldown
+        ownerOnly: plugin.ownerOnly,
+        adminOnly: plugin.adminOnly,
+        groupOnly: plugin.groupOnly,
+        privateOnly: plugin.privateOnly,
+        stats: plugin.stats
       };
     }
   }
@@ -511,17 +540,17 @@ function searchCommands(plugins, query) {
         results.push({
           command: cmd,
           commands: commands,
-          aliases: plugin.info?.aliases || [],
+          aliases: plugin.aliases || [],
           description: description,
-          usage: plugin.info?.usage,
-          examples: plugin.info?.examples,
+          usage: plugin.usage,
+          example: plugin.example,
           category: plugin.category || 'general',
           pluginName: name,
-          ownerOnly: plugin.info?.ownerOnly,
-          adminOnly: plugin.info?.adminOnly,
-          groupOnly: plugin.info?.groupOnly,
-          privateOnly: plugin.info?.privateOnly,
-          cooldown: plugin.info?.cooldown
+          ownerOnly: plugin.ownerOnly,
+          adminOnly: plugin.adminOnly,
+          groupOnly: plugin.groupOnly,
+          privateOnly: plugin.privateOnly,
+          stats: plugin.stats
         });
       }
     }
@@ -558,9 +587,3 @@ function formatUptime(milliseconds) {
     return `${seconds}s`;
   }
 }
-
-// Add this new block at the end of the file
-export default {
-  info: info,
-  execute: menuPlugin
-};
