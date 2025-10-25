@@ -2,7 +2,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { useLocalStorageAuthState, BufferJSON } from '@whiskeysockets/baileys';
+import { useMultiFileAuthState, BufferJSON } from '@whiskeysockets/baileys';
 import { File } from 'megajs';
 import logger from '../utils/logger.js';
 
@@ -78,7 +78,7 @@ export class SessionManager {
 
   async getAuthState() {
     let creds;
-    const { state, saveCreds: saveCredsMulti } = await useLocalStorageAuthState(path.join(this.sessionDir,'creds.json'));
+    const { state, saveCreds: saveCredsMulti } = await useMultiFileAuthState(this.sessionDir);
 
     if (await this.sessionExists()) {
       try {
@@ -87,7 +87,7 @@ export class SessionManager {
         state.creds = creds; // Inject the loaded creds into the state
         logger.info('✅ Injected session from creds.json into auth state.');
       } catch (e) {
-        logger.warn(e, '⚠️ Could not parse creds.json. A new session will be created.');
+        logger.warn('⚠️ Could not parse creds.json. A new session will be created.');
       }
     }
 
@@ -99,7 +99,7 @@ export class SessionManager {
           JSON.stringify(state.creds, BufferJSON.replacer, 2)
         );
       } catch (e) {
-        logger.error(e, '❌ Failed to save session to creds.json');
+        logger.error(error, '❌ Failed to save session to creds.json');
       }
     };
 
