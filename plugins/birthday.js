@@ -671,28 +671,31 @@ async function handleUpcoming(context, args) {
     return;
   }
 
-  upcomingBirthdays.sort((a, b) => a.daysUntil - b.daysUntil);
-
-  let message = `📅 *UPCOMING BIRTHDAYS (Next ${days} days)* 📅\n\n`;
-  const mentions = [];
-
   upcomingBirthdays.forEach(upcoming => {
-    mentions.push(upcoming.userId);
+    // --- FIX START ---
+    // Add a check to ensure the userId is valid before adding to mentions
+    if (upcoming.userId && typeof upcoming.userId === 'string' && upcoming.userId.includes('@')) {
+      mentions.push(upcoming.userId);
 
-    if (upcoming.daysUntil === 0) {
-      message += `🎊 @${upcoming.userId.split('@')[0]} - TODAY! 🎊\n`;
-    } else if (upcoming.daysUntil === 1) {
-      message += `🎂 @${upcoming.userId.split('@')[0]} - Tomorrow\n`;
+      if (upcoming.daysUntil === 0) {
+        message += `🎊 @${upcoming.userId.split('@')[0]} - TODAY! 🎊\n`;
+      } else if (upcoming.daysUntil === 1) {
+        message += `🎂 @${upcoming.userId.split('@')[0]} - Tomorrow\n`;
+      } else {
+        message += `📌 @${upcoming.userId.split('@')[0]} - ${upcoming.daysUntil} days (${upcoming.birthday.monthName} ${upcoming.birthday.day})\n`;
+      }
+
+      if (upcoming.birthday.age !== undefined) {
+        const upcomingAge = upcoming.birthday.age + (upcoming.daysUntil === 0 ? 0 : 1);
+        message += `   🎈 ${upcoming.daysUntil === 0 ? 'Turned' : 'Turning'} ${upcomingAge}\n`;
+      }
+
+      message += '\n';
     } else {
-      message += `📌 @${upcoming.userId.split('@')[0]} - ${upcoming.daysUntil} days (${upcoming.birthday.monthName} ${upcoming.birthday.day})\n`;
+      // Log an error if we find a bad entry, so you can clean it up
+      context.logger.warn(`Invalid birthday entry skipped in 'upcoming': ${JSON.stringify(upcoming)}`);
     }
-
-    if (upcoming.birthday.age !== undefined) {
-      const upcomingAge = upcoming.birthday.age + (upcoming.daysUntil === 0 ? 0 : 1);
-      message += `   🎈 ${upcoming.daysUntil === 0 ? 'Turned' : 'Turning'} ${upcomingAge}\n`;
-    }
-
-    message += '\n';
+    // --- FIX END ---
   });
 
   await sock.sendMessage(m.chat, {
