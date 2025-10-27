@@ -942,7 +942,7 @@ function formatProgramReport(program) {
 
 // Handle schedule command
 async function handleScheduleCommand(context, args, senderId, groupId) {
-  const { m, config } = context;
+  const { msg: m, config } = context;
 
   if (!isAdmin(senderId, config)) {
     await m.reply('🚫 *Admin Only*\n\nOnly admins can manage the schedule.');
@@ -1018,7 +1018,7 @@ async function handleScheduleCommand(context, args, senderId, groupId) {
 
 // Handle add program
 async function handleAddProgram(context, input, groupId) {
-  const { m } = context;
+  const { msg: m } = context;
 
   const parts = input.split('|').map(p => p.trim());
 
