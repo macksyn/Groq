@@ -99,7 +99,7 @@ export default {
     const { PermissionHelpers } = helpers;
 
     const senderId = m.sender;
-    const groupId = m.chat;
+    const groupId = m.from;
 
     // Check if in group (redundant with groupOnly but kept for clarity)
     if (!groupId.endsWith('@g.us')) {
