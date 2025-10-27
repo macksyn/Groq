@@ -808,7 +808,7 @@ async function handleAll(context) {
     message += '\n';
   });
 
-  await sock.sendMessage(m.chat, {
+  await sock.sendMessage(m.from, {
     text: message,
     mentions: mentions
   });
