@@ -72,17 +72,38 @@ export default {
   aliases: v3Aliases,
 
   // ===== V3 Main Handler =====
-  async run(context) {
-    // Destructure the V3 context object
-    const { msg: m, args, text, command, sock, db, config, bot, logger, helpers } = context;
-    const { PermissionHelpers, TimeHelpers } = helpers; // Get helpers
+      async run(context) {
+      // Destructure the V3 context object
+      const { msg: m, args, text, command, sock, db, config, bot, logger, helpers } = context;
+      const { PermissionHelpers, TimeHelpers } = helpers; // Get helpers
 
-    try {
-      // Preserve original sender/from logic
-      const senderId = m.key.participant || m.key.remoteJid;
-      const from = m.key.remoteJid;
+      try {
+        // Preserve original sender/from logic
+        const senderId = m.key.participant || m.key.remoteJid;
+        const from = m.key.remoteJid; // 'from' is the chat JID (group or user)
 
-      if (!senderId || !from) return;
+        if (!senderId || !from) return;
+
+        // --- START GROUP CHECK ---
+        const allowedGroupId = config.ALLOWED_ECONOMY_GROUP_ID; // Get ID from config
+
+        if (!allowedGroupId) {
+            logger.error('Economy Plugin: ALLOWED_ECONOMY_GROUP_ID is not set in the configuration. Plugin will not run.');
+            // Optionally reply to the user, but logging might be better for config issues
+            // await sock.sendMessage(from, { text: 'Economy plugin is not configured correctly.' }, { quoted: m });
+            return; // Stop execution if config is missing
+        }
+
+        // Check if the message is from the allowed group
+        if (from !== allowedGroupId) {
+            // Send a message only if it's a group chat (to avoid spamming users in PM)
+            if (from.endsWith('@g.us')) {
+                await sock.sendMessage(from, { text: '💰 This command can only be used in the designated group.' }, { quoted: m });
+            }
+            return; // Stop execution if not in the allowed group
+        }
+        // --- END GROUP CHECK ---
+        
 
       // Run plugin startup logic
       await loadSettings();
@@ -1703,7 +1724,7 @@ async function handleProfile(context, args) {
     // Calculate rank based on wealth
     const ranks = [
       { name: 'Newbie', min: 0 },
-      { name: 'Worker', min: 10000 },
+      { name: 'Worker', min: 1000 },
       { name: 'Trader', min: 50000 },
       { name: 'Business Owner', min: 100000 },
       { name: 'Millionaire', min: 1000000 },

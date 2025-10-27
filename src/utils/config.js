@@ -20,6 +20,7 @@ export function validateConfig() {
     NODE_ENV: process.env.NODE_ENV || 'production',
     TIMEZONE: process.env.TIMEZONE || 'Africa/Lagos',
     MONGODB_URI: process.env.MONGODB_URI || '',
+    ALLOWED_ECONOMY_GROUP_ID: process.env.ALLOWED_ECONOMY_GROUP_ID || '',
     DATABASE_NAME: process.env.DATABASE_NAME || 'whatsapp_bot'
   };
 

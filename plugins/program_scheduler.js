@@ -1175,8 +1175,8 @@ async function handleSettingsCommand(context, args, groupId) {
     message += `🌅 Morning Reminder (8 AM): ${settings.morningReminder ? '✅' : '❌'}\n`;
     message += `🌙 Tomorrow Preview (10 PM): ${settings.tomorrowPreview ? '✅' : '❌'}\n`;
     message += `⏰ 2-Hour Reminder: ${settings.twoHourReminder ? '✅' : '❌'}\n`;
-    message += `🔴 Start Notification: ${settings.startNotification ? '✅' : '❌'}\n`;
-    message += `🟢 End Notification: ${settings.endNotification ? '✅' : '❌'}\n\n`;
+    message += `🟢 Start Notification: ${settings.startNotification ? '✅' : '❌'}\n`;
+    message += `🔴 End Notification: ${settings.endNotification ? '✅' : '❌'}\n\n`;
     message += `💡 Toggle: .schedule settings [type] on/off\n`;
     message += `Example: .schedule settings start off`;
 
