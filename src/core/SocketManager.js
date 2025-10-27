@@ -217,10 +217,20 @@ export class SocketManager extends EventEmitter {
             this.emit('statusChange', 'error', { error: 'Connection replaced' });
             break;
             
-          case DisconnectReason.badSession:
-            logger.safeError(lastDisconnect?.error, '🚫 Bad session file. Cleaning session and retrying...');
-            cleanSessionFirst = true;
-            break;
+// This is the NEW, FIXED code
+        case DisconnectReason.badSession:
+    // This is the new, smarter check
+           if (reason.includes('Stream Errored (ack)')) {
+           logger.warn('⚠️ Got a 500 (BadSession) error, but it was just a Stream Ack error. Treating as temporary.');
+        // We do NOT set cleanSessionFirst = true, so it will just reconnect
+        // using the same (good) session.
+    } else {
+        // It's a *real* bad session, so we clean it.
+        logger.safeError(lastDisconnect?.error, '🚫 Bad session file. Cleaning session and retrying...');
+        cleanSessionFirst = true;
+    }
+    break;
+
 
           case DisconnectReason.restartRequired:
             logger.warn('🔄 Server requires a restart. Retrying...');
