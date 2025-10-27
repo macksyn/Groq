@@ -603,7 +603,7 @@ async function handleToday(context) {
   const todaysBirthdays = await getTodaysBirthdays();
 
   if (todaysBirthdays.length === 0) {
-    await sock.sendMessage(m.chat, {
+      await sock.sendMessage(m.from, {
       text: `🎂 *No birthdays today*\n\n📅 Check upcoming birthdays with *${config.PREFIX}birthday upcoming*`
     });
     return;
@@ -665,7 +665,7 @@ async function handleUpcoming(context, args) {
   });
 
   if (upcomingBirthdays.length === 0) {
-    await sock.sendMessage(m.chat, {
+      await sock.sendMessage(m.from, {
       text: `📅 *No birthdays in the next ${days} days*\n\nTry checking a longer period or use *${config.PREFIX}birthday thismonth*`
     });
     return;
@@ -695,7 +695,7 @@ async function handleUpcoming(context, args) {
     message += '\n';
   });
 
-  await sock.sendMessage(m.chat, {
+  await sock.sendMessage(m.from, {
     text: message,
     mentions: mentions
   });
@@ -752,7 +752,7 @@ async function handleThisMonth(context) {
     message += '\n';
   });
 
-  await sock.sendMessage(m.chat, {
+  await sock.sendMessage(m.from, {
     text: message,
     mentions: mentions
   });
@@ -763,7 +763,7 @@ async function handleAll(context) {
   const { m, sock, config } = context;
 
   if (!isAuthorized(m.sender, config)) {
-    await sock.sendMessage(m.chat, {
+    await sock.sendMessage(m.from, {
       text: '🚫 Only admins can view all birthdays.'
     });
     return;
@@ -773,7 +773,7 @@ async function handleAll(context) {
   const birthdayEntries = Object.values(allBirthdays);
 
   if (birthdayEntries.length === 0) {
-    await sock.sendMessage(m.chat, {
+    await sock.sendMessage(m.from, {
       text: `🎂 *No birthdays recorded*\n\nBirthdays are automatically saved when members submit attendance forms with valid D.O.B information.`
     });
     return;
