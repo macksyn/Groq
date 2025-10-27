@@ -590,14 +590,14 @@ function getItemId(inputId) {
 
 // MODIFIED: Cryptocurrency system with price fluctuation properties
 let cryptoData = {
-  BTC: { name: "Bitcoin", price: 300, volatility: 0.95, trend: 0.001, history: [], lastChange: 'stable' },
-  ETH: { name: "Ethereum", price: 25, volatility: 0.6, trend: -0.002, history: [], lastChange: 'stable' },
-  SOL: { name: "Solana", price: 11, volatility: 0.80, trend: -0.005, history: [], lastChange: 'stable' },
-  SHIB: { name: "Shiba Inu", price: 0.06, volatility: 0.92, trend: 0.01, history: [], lastChange: 'stable' },
-  GROQ: { name: "Groq Coin", price: 4, volatility: 0.85, trend: -0.003, history: [], lastChange: 'stable' },
-  ADA: { name: "Cardano", price: 0.8, volatility: 0.07, trend: 0.002, history: [], lastChange: 'stable' },
-  DOT: { name: "Polkadot", price: 0.04, volatility: 0.08, trend: 0.001, history: [], lastChange: 'stable' },
-  MATIC: { name: "Polygon", price: 1.2, volatility: 0.89, trend: -0.001, history: [], lastChange: 'stable' }
+  BTC: { name: "Bitcoin", price: 3000, volatility: 0.95, trend: 0.001, history: [], lastChange: 'stable' },
+  ETH: { name: "Ethereum", price: 1200, volatility: 0.6, trend: -0.002, history: [], lastChange: 'stable' },
+  SOL: { name: "Solana", price: 490, volatility: 0.80, trend: -0.005, history: [], lastChange: 'stable' },
+  SHIB: { name: "Shiba Inu", price: 99, volatility: 0.92, trend: 0.01, history: [], lastChange: 'stable' },
+  GROQ: { name: "Groq Coin", price: 11, volatility: 0.85, trend: -0.003, history: [], lastChange: 'stable' },
+  ADA: { name: "Cardano", price: 1.1, volatility: 0.07, trend: 0.002, history: [], lastChange: 'stable' },
+  DOT: { name: "Polkadot", price: 14, volatility: 0.08, trend: 0.001, history: [], lastChange: 'stable' },
+  MATIC: { name: "Polygon", price: 12, volatility: 0.89, trend: -0.001, history: [], lastChange: 'stable' }
 };
 
 // Business system (UNCHANGED)
