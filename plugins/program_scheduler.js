@@ -1076,7 +1076,7 @@ async function handleAddProgram(context, input, groupId) {
 
 // Handle remove program
 async function handleRemoveProgram(context, identifier, groupId) {
-  const { m } = context;
+  const { msg: m } = context;
 
   if (!identifier) {
     await m.reply('⚠️ Specify program ID or name.\n\nExample: .schedule remove Food\'s Corner');
@@ -1096,7 +1096,7 @@ async function handleRemoveProgram(context, identifier, groupId) {
 
 // Handle toggle program
 async function handleToggleProgram(context, identifier, groupId) {
-  const { m } = context;
+  const { msg: m } = context;
 
   if (!identifier) {
     await m.reply('⚠️ Specify program ID or name.');
@@ -1117,7 +1117,7 @@ async function handleToggleProgram(context, identifier, groupId) {
 
 // Handle stats command
 async function handleStatsCommand(context, groupId) {
-  const { m } = context;
+  const { msg: m } = context;
 
   const scheduler = await getGroupScheduler(groupId);
 
@@ -1132,7 +1132,7 @@ async function handleStatsCommand(context, groupId) {
 
 // Handle report command
 async function handleReportCommand(context, identifier, groupId) {
-  const { m } = context;
+  const { msg: m } = context;
 
   if (!identifier) {
     await m.reply('⚠️ Specify program name or ID.\n\nExample: .schedule report Food\'s Corner');
@@ -1160,7 +1160,7 @@ async function handleReportCommand(context, identifier, groupId) {
 
 // Handle settings command
 async function handleSettingsCommand(context, args, groupId) {
-  const { m } = context;
+  const { msg: m } = context;
 
   const scheduler = await getGroupScheduler(groupId);
   if (!scheduler) {
@@ -1215,7 +1215,7 @@ async function handleSettingsCommand(context, args, groupId) {
 
 // Handle programs command
 async function handleProgramsCommand(context, groupId) {
-  const { m } = context;
+  const { msg: m } = context;
 
   const scheduler = await getGroupScheduler(groupId);
 
@@ -1230,7 +1230,7 @@ async function handleProgramsCommand(context, groupId) {
 
 // Handle today command
 async function handleTodayCommand(context, groupId) {
-  const { m } = context;
+  const { msg: m } = context;
 
   const scheduler = await getGroupScheduler(groupId);
 
@@ -1268,7 +1268,7 @@ async function handleTodayCommand(context, groupId) {
 
 // Handle attend command
 async function handleAttendCommand(context, args, userId, groupId) {
-  const { m } = context;
+  const { msg: m } = context;
 
   const programName = args.join(' ');
 
@@ -1292,7 +1292,7 @@ async function handleAttendCommand(context, args, userId, groupId) {
 
 // Handle can't make command
 async function handleCantMakeCommand(context, args, userId, groupId) {
-  const { m } = context;
+  const { msg: m } = context;
 
   const programName = args.join(' ');
 
@@ -1314,7 +1314,7 @@ async function handleCantMakeCommand(context, args, userId, groupId) {
 
 // Handle attendees command
 async function handleAttendeesCommand(context, args, groupId) {
-  const { m, sock } = context;
+  const { msg: m, sock } = context;
 
   const programName = args.join(' ');
 
