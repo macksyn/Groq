@@ -622,7 +622,7 @@ async function handleToday(context) {
 
   message += `\n🎊 *Let's wish them a happy birthday!* 🎊`;
 
-  await sock.sendMessage(m.chat, {
+  await sock.sendMessage(m.from, {
     text: message,
     mentions: mentions
   });
@@ -634,7 +634,7 @@ async function handleUpcoming(context, args) {
 
   const days = args.length > 0 ? parseInt(args[0]) : 7;
   if (isNaN(days) || days < 1 || days > 365) {
-    await sock.sendMessage(m.chat, {
+    await sock.sendMessage(m.from, {
       text: '⚠️ *Please provide a valid number of days (1-365)*'
     });
     return;
@@ -717,7 +717,7 @@ async function handleThisMonth(context) {
 
   if (thisMonthBirthdays.length === 0) {
     const monthName = moment.tz('Africa/Lagos').format('MMMM');
-    await sock.sendMessage(m.chat, {
+      await sock.sendMessage(m.from, {
       text: `📅 *No birthdays in ${monthName}*\n\nUse *${config.PREFIX}birthday all* to see all recorded birthdays`
     });
     return;
