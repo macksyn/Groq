@@ -719,6 +719,9 @@ export default {
   aliases: ['att', 'mystats'],
   ownerOnly: false,
 
+  // IMPORTANT: Enable non-command execution for auto-detection
+  executeOnAllMessages: true, // This tells PluginManager to run this plugin even without commands
+
   // Scheduled tasks for cleanup
   scheduledTasks: [
     {
@@ -781,15 +784,7 @@ export default {
     // Load settings on first run
     await loadSettings();
 
-    // Handle auto-detection for non-command messages
-    if (attendanceSettings.autoDetection && m.body && !m.body.startsWith(config.PREFIX)) {
-      if (await handleAutoAttendance(m, sock, config)) return;
-    }
-
-    // Ensure message starts with prefix for commands
-    if (!m.body || !m.body.startsWith(config.PREFIX)) return;
-
-    // Add sender to message object for compatibility
+    // Add sender and chat to message object for compatibility
     if (!m.sender) {
       m.sender = m.key.participant || m.key.remoteJid;
     }
@@ -797,7 +792,22 @@ export default {
       m.chat = m.key.remoteJid;
     }
 
-    // Route to appropriate handler
+    // Handle auto-detection for non-command messages (when no prefix)
+    if (!command || !m.body?.startsWith(config.PREFIX)) {
+      if (attendanceSettings.autoDetection && m.body) {
+        try {
+          const handled = await handleAutoAttendance(m, sock, config);
+          if (handled) {
+            logger.info(`✅ Auto-attendance processed for ${m.sender.split('@')[0]}`);
+          }
+        } catch (error) {
+          logger.error(error, '❌ Auto-attendance handler error');
+        }
+      }
+      return; // Don't process further if no command
+    }
+
+    // Route to appropriate command handler
     switch (command.toLowerCase()) {
       case 'attendance':
       case 'att':
