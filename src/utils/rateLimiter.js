@@ -23,23 +23,33 @@ logger.info(`✅ Rate limiter initialized (Max: ${MAX_REQUESTS} req / ${WINDOW_S
 export function isLimited(userId) {
   const data = limiterCache.get(userId);
 
-  if (!data) {
-    // Not in cache. This is their first request in this window.
-    // Set them in the cache with a count of 1.
-    // The key will auto-expire in 60 seconds (stdTTL).
-    limiterCache.set(userId, { count: 1 });
-    return false; // Not limited
+  export const isLimited = (key, type = 'default') => {
+  const now = Date.now();
+  const { limit, window } = config[type] || config.default;
+
+  if (!userRequests.has(key)) {
+    userRequests.set(key, []);
   }
 
-  // User is in the cache
-  if (data.count < MAX_REQUESTS) {
-    // User is under the limit. Increment and update.
-    data.count++;
-    limiterCache.set(userId, data); // 'set' refreshes the TTL
-    return false; // Not limited
+  const timestamps = userRequests.get(key);
+  
+  // Clear old timestamps
+  const recentTimestamps = timestamps.filter(ts => now - ts < window);
+  userRequests.set(key, recentTimestamps);
+
+  if (recentTimestamps.length >= limit) {
+    // User is limited
+    const timeLeft = Math.ceil((recentTimestamps[0] + window - now) / 1000);
+    logger.warn(`Rate limit hit for ${key} (Type: ${type}). Cooldown: ${timeLeft}s`);
+    
+    // <<< CHANGE HERE: Return an object with timeLeft, not just true
+    return { limited: true, timeLeft: timeLeft };
   }
 
-  // User is at or over the limit
-  logger.warn(`Rate limit exceeded for user: ${userId}`);
-  return true; // IS limited
+  // User is not limited, add new timestamp
+  recentTimestamps.push(now);
+  userRequests.set(key, recentTimestamps);
+
+  // <<< CHANGE HERE: Return a standard object, not just false
+  return { limited: false, timeLeft: 0 };
 }
