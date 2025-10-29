@@ -45,16 +45,6 @@ export default async function MessageHandler(messageUpdate, sock, loggerArg, con
       await sock.readMessages([m.key]);
     }
 
-    // Anti-link check
-    try {
-      const linkDeleted = await handleAntiLink(m, sock, config, logger);
-      if (linkDeleted) {
-        return;
-      }
-    } catch (e) {
-      logger.error(e, 'Error in anti-link handler');
-    }
-
     // Permission & Mode Checks
     const isOwner = PermissionHelpers.isOwner(m.sender || '', config.OWNER_NUMBER + '@s.whatsapp.net');
 
