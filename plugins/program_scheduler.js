@@ -16,8 +16,8 @@ const CONFIG = {
     morningReminder: true,
     tomorrowPreview: true,
     twoHourReminder: true,
-    startNotification: true,
-    endNotification: true
+    startNotification: false,
+    endNotification: false
   }
 };
 
