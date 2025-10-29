@@ -29,7 +29,7 @@ const LINK_REGEX = /(https?:\/\/[^\s]+)|(www\.[^\s]+)|((whatsapp\.com|wa\.me|t\.
 export default {
   name: 'Anti-Link Protection',
   version: '2.0.0',
-  author: 'Fresh Bot Framework',
+  author: 'Alex Macksyn',
   description: 'Enterprise-grade link protection system with persistent warnings, whitelist, and temporary permissions',
   category: 'moderation',
 
