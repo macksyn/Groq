@@ -23,7 +23,10 @@ export function validateConfig() {
     ALLOWED_ECONOMY_GROUP_ID: process.env.ALLOWED_ECONOMY_GROUP_ID || '',
     DATABASE_NAME: process.env.DATABASE_NAME || 'whatsapp_bot',
     ANTILINK_MAX_WARNINGS: parseInt(process.env.ANTILINK_MAX_WARNINGS) || 3,
-    ANTILINK_EXEMPT_ADMINS: process.env.ANTILINK_EXEMPT_ADMINS === 'true'
+    ANTILINK_EXEMPT_ADMINS: process.env.ANTILINK_EXEMPT_ADMINS === 'true',
+    ANTILINK_AUTO_DELETE: process.env.ANTILINK_AUTO_DELETE === 'true',
+    ANTILINK_TEMP_DURATION: parseInt(process.env.ANTILINK_TEMP_DURATION) || 5 * 60 * 1000 // 5 minutes
+    
   };
 
   const errors = [];
