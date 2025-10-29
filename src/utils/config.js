@@ -9,7 +9,7 @@ export function validateConfig() {
     ADMIN_NUMBERS: process.env.ADMIN_NUMBERS?.split(',').map(n => n.trim().replace(/[^\d]/g, '')) || [2348089782988],
     OWNER_NAME: process.env.OWNER_NAME || 'Alex Macksyn',
     MODE: (process.env.MODE || 'public').toLowerCase(),
-    AUTO_BIO: process.env.AUTO_BIO === 'true',
+    AUTO_BIO: process.env.AUTO_BIO === 'false',
     AUTO_READ: process.env.AUTO_READ === 'true',
     AUTO_REACT: process.env.AUTO_REACT === 'true',
     WELCOME: process.env.WELCOME === 'true',

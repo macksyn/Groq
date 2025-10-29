@@ -1,4 +1,4 @@
-// src/core/WhatsAppBot.js (Corrected V2)
+// src/core/WhatsAppBot.js (FIXED - Add plugin references)
 import { EventEmitter } from 'events';
 import moment from 'moment-timezone';
 import logger from '../utils/logger.js';
@@ -28,29 +28,28 @@ export class WhatsAppBot extends EventEmitter {
     this.lastSuccessfulConnection = Date.now();
   }
 
-  // --- THIS IS THE CORRECTED START FUNCTION ---
   async start() {
     try {
       logger.info('🚀 Starting Fresh WhatsApp Bot...');
-      
+
       // Step 1: Initialize database
       await this.initializeDatabase();
-      
+
       // Step 2: Initialize session management
       await this.initializeSessionManager();
-      
+
       // Step 3: Initialize plugins
       await this.initializePlugins();
-      
+
       // Step 4: Start web server
       await this.startWebServer();
-      
+
       // Step 5: Connect to WhatsApp
       await this.connectWhatsApp();
-      
+
       // Step 6: Start monitoring
       await this.startMonitoring();
-      
+
       this.status = 'running';
       logger.info('🎉 Bot started successfully!');
       this.emit('started');
@@ -66,7 +65,6 @@ export class WhatsAppBot extends EventEmitter {
       throw error;
     }
   }
-  // --- END CORRECTED START FUNCTION ---
 
   async restart() {
     try {
@@ -96,25 +94,24 @@ export class WhatsAppBot extends EventEmitter {
   }
 
   async initializeDatabase() {
-  if (!this.config.MONGODB_URI) {
-    logger.warn('⚠️ No MongoDB URI - running without database');
-    return;
-  }
-  
-  try {
-    logger.info('🗄️ Initializing database...');
-    const db = await this.mongoManager.connect();
-    
-    if (db) {
-      logger.info('✅ Database connected successfully');
-    } else {
-      logger.warn('⚠️ Database connection failed - bot will continue without DB');
+    if (!this.config.MONGODB_URI) {
+      logger.warn('⚠️ No MongoDB URI - running without database');
+      return;
     }
-  } catch (error) {
-    logger.warn('⚠️ Database initialization failed - bot will continue without DB');
-    // Don't throw - let bot run without DB
+
+    try {
+      logger.info('🗄️ Initializing database...');
+      const db = await this.mongoManager.connect();
+
+      if (db) {
+        logger.info('✅ Database connected successfully');
+      } else {
+        logger.warn('⚠️ Database connection failed - bot will continue without DB');
+      }
+    } catch (error) {
+      logger.warn('⚠️ Database initialization failed - bot will continue without DB');
+    }
   }
-}
 
   async initializeSessionManager() {
     logger.info('📁 Initializing session management...');
@@ -150,7 +147,6 @@ export class WhatsAppBot extends EventEmitter {
       try {
         await MessageHandler(data.messageUpdate, data.socket, logger, this.config, this);
       } catch (err) {
-        // Avoid repeating large libsignal stacks; handle Bad MAC gracefully
         const msg = err && err.message ? err.message : String(err);
         if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt')) {
           logger.warn('⚠️ Dropped message from %s due to decryption failure: %s', data.messageUpdate?.key?.remoteJid || 'unknown', msg);
@@ -206,7 +202,25 @@ export class WhatsAppBot extends EventEmitter {
     this.emit('statusChange', status);
     if (status === 'connected') {
       this.lastSuccessfulConnection = Date.now();
+
+      // ✅ CRITICAL FIX: Set plugin manager references after connection
+      this.setPluginReferences();
+
       this.sendStartupNotification();
+    }
+  }
+
+  // ✅ NEW METHOD: Set references for scheduled tasks
+  setPluginReferences() {
+    try {
+      const socket = this.socketManager?.getSocket();
+      if (socket && socket.user?.id) {
+        logger.info('🔗 Setting plugin manager references for scheduled tasks...');
+        this.pluginManager.setReferences(socket, this.config, this);
+        logger.info('✅ Plugin references set successfully');
+      }
+    } catch (error) {
+      logger.error(error, '❌ Failed to set plugin references');
     }
   }
 
@@ -234,6 +248,10 @@ export class WhatsAppBot extends EventEmitter {
   buildStartupMessage() {
     const pluginStats = this.pluginManager.getPluginStats();
     const dbStatus = this.mongoManager.isConnected ? '✅ Connected' : '❌ Offline';
+
+    // ✅ Add scheduled tasks info
+    const scheduledTasksInfo = this.pluginManager.getScheduledTasksInfo();
+
     return `🤖 *${this.config.BOT_NAME} Online!*
 
 📊 Status: ✅ Running
@@ -242,6 +260,7 @@ export class WhatsAppBot extends EventEmitter {
 ⏰ ${moment().tz(this.config.TIMEZONE).format('DD/MM/YYYY HH:mm:ss')}
 
 🔌 Plugins: ${pluginStats.enabled}/${pluginStats.total}
+⏰ Scheduled Tasks: ${scheduledTasksInfo.enabled}/${scheduledTasksInfo.total}
 🗄️ Database: ${dbStatus}
 
 🎮 *Active Features:*
@@ -261,7 +280,7 @@ ${this.config.REJECT_CALL ? '✅' : '❌'} Call Rejection
   getSocket() { return this.socketManager?.getSocket(); }
   getDatabase() { return this.mongoManager; }
   getPluginManager() { return this.pluginManager; }
-  
+
   getStats() {
     const memUsage = process.memoryUsage();
     return {
@@ -273,9 +292,10 @@ ${this.config.REJECT_CALL ? '✅' : '❌'} Call Rejection
         rss: Math.round(memUsage.rss / 1024 / 1024)
       },
       plugins: this.pluginManager.getPluginStats(),
+      scheduledTasks: this.pluginManager.getScheduledTasksInfo(),
       database: this.mongoManager.getStats ? this.mongoManager.getStats() : {},
       lastConnection: new Date(this.lastSuccessfulConnection).toISOString(),
-     features: {
+      features: {
         AUTO_READ: this.config.AUTO_READ,
         AUTO_REACT: this.config.AUTO_REACT,
         WELCOME: this.config.WELCOME,

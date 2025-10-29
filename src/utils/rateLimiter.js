@@ -2,7 +2,7 @@
 import NodeCache from 'node-cache';
 import logger from './logger.js';
 
-const MAX_REQUESTS = 10;
+const MAX_REQUESTS = 15;
 const WINDOW_SEC = 60;
 
 /**
