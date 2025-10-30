@@ -3,134 +3,69 @@ import axios from 'axios';
 import chalk from 'chalk';
 import { PluginHelpers, safeOperation } from '../lib/pluginIntegration.js';
 
-// --- Constants ---
 const SETTINGS_COLLECTION = 'movie_settings';
 const USAGE_COLLECTION = 'movie_usage';
-const MOVIE_API_BASE = 'https://movieapi.giftedtech.co.ke/api';
+const FAVORITES_COLLECTION = 'movie_favorites';
+const SEARCH_CACHE_COLLECTION = 'movie_search_cache';
+const USER_SESSIONS_COLLECTION = 'movie_user_sessions';
 
 const DEFAULT_SETTINGS = {
   premiumEnabled: false,
-  downloadCost: 50,
-  rateLimitFree: 10,
-  rateLimitCooldown: 24 * 60 * 60 * 1000, // 24 hours
-  maxSearchResults: 5, // Max results to show in search
+  downloadCost: 100,
+  searchCost: 10,
+  rateLimitFree: 5,
+  rateLimitCooldown: 24 * 60 * 60 * 1000,
+  allowedQualities: ['360p', '480p', '720p'],
+  defaultQuality: '720p',
+  maxSearchResults: 10,
   allowGroups: true,
   allowPrivate: true,
-  allowedGroups: [], // Specific group IDs that are allowed. Empty array means all are allowed.
+  enableCache: true,
+  cacheExpiry: 7 * 24 * 60 * 60 * 1000,
+  maxFileSize: 500,
+  allowTvShows: true,
+  allowMovies: true,
+  sessionTimeout: 30 * 60 * 1000,
   updatedAt: new Date(),
   updatedBy: 'system'
 };
 
-// --- Utility Helpers ---
-
-/**
- * Formats bytes into a human-readable string.
- * @param {number} bytes - The number of bytes.
- * @param {number} [decimals=2] - Number of decimal places.
- * @returns {string} - Formatted string (e.g., "1.23 MB").
- */
-function formatBytes(bytes, decimals = 2) {
-  if (!bytes || bytes === 0) return '0 Bytes';
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
-}
-
-/**
- * Extracts the year from a YYYY-MM-DD date string.
- * @param {string} dateString - The date string.
- * @returns {string} - The year or 'N/A'.
- */
-function getYearFromDate(dateString) {
-    if (!dateString) return 'N/A';
-    return dateString.split('-')[0] || 'N/A';
-}
-
-// --- Movie API Helpers ---
-
-/**
- * Searches for movies using the provided API.
- * @param {string} query - The movie title to search for.
- * @returns {Promise<object>} - The API search results.
- */
-async function searchMoviesAPI(query) {
-  try {
-    const response = await axios.get(
-      `${MOVIE_API_BASE}/search/${encodeURIComponent(query)}`
-    );
-    if (response.data?.success !== "true") {
-      throw new Error('API did not return a successful search');
-    }
-    return response.data;
-  } catch (error) {
-    console.error(chalk.red('[MovieAPI] Search Error:'), error.message);
-    throw new Error(`Failed to search for "${query}".`);
+const API_CONFIG = {
+  baseUrl: 'https://movieapi.giftedtech.co.ke/api',
+  timeout: 30000,
+  endpoints: {
+    search: '/search',
+    info: '/info',
+    sources: '/sources',
+    download: '/download'
   }
-}
+};
 
-/**
- * Gets detailed info for a specific movie ID.
- * @param {string} movieId - The movie's subject ID.
- * @returns {Promise<object>} - The API movie info.
- */
-async function getMovieInfoAPI(movieId) {
-  try {
-    const response = await axios.get(`${MOVIE_API_BASE}/info/${movieId}`);
-    if (response.data?.success !== "true") {
-      throw new Error('API did not return successful info');
-    }
-    return response.data;
-  } catch (error) {
-    console.error(chalk.red('[MovieAPI] Info Error:'), error.message);
-    throw new Error(`Failed to get info for ID "${movieId}".`);
-  }
-}
+const QUALITY_INFO = {
+  '360p': { label: '360p SD', icon: '📱', emoji: '1️⃣' },
+  '480p': { label: '480p HD', icon: '💻', emoji: '2️⃣' },
+  '720p': { label: '720p Full HD', icon: '📺', emoji: '3️⃣' }
+};
 
-/**
- * Gets download sources for a specific movie ID.
- * @param {string} movieId - The movie's subject ID.
- * @param {string} [season] - The season number (for TV shows).
- * @param {string} [episode] - The episode number (for TV shows).
- * @returns {Promise<object>} - The API download sources.
- */
-async function getDownloadSourcesAPI(movieId, season, episode) {
-  try {
-    let url = `${MOVIE_API_BASE}/sources/${movieId}`;
-    if (season && episode) {
-      url += `?season=${season}&episode=${episode}`;
-    }
-    
-    const response = await axios.get(url);
-    if (response.data?.success !== "true") {
-      throw new Error('API did not return successful sources');
-    }
-    return response.data;
-  } catch (error) {
-    console.error(chalk.red('[MovieAPI] Sources Error:'), error.message);
-    throw new Error(`Failed to get sources for ID "${movieId}".`);
-  }
-}
-
-// --- MovieDownloader Class (Modeled after SocialMediaDownloader) ---
 class MovieDownloader {
   constructor() {
     this.settings = null;
-    this.activeRequests = new Map();
+    this.activeDownloads = new Map();
+    this.activeSearches = new Map();
+    this.userSessions = new Map();
     this.statsCache = null;
     this.statsCacheTime = 0;
-    this.statsCacheDuration = 5 * 60 * 1000; // 5 minutes
-    this.userSearchResults = new Map(); // Stores last search results { userId: [movies] }
+    this.statsCacheDuration = 5 * 60 * 1000;
   }
 
   async initialize() {
     try {
       this.settings = await this.loadSettings();
-      console.log(chalk.green('✅ Movie settings loaded from database'));
+      await this.loadUserSessions();
+      console.log(chalk.green('✅ Movie downloader settings loaded from database'));
       return true;
     } catch (error) {
-      console.error(chalk.red('❌ Failed to load movie settings:'), error.message);
+      console.error(chalk.red('❌ Failed to load movie downloader settings:'), error.message);
       this.settings = { ...DEFAULT_SETTINGS };
       return false;
     }
@@ -144,7 +79,7 @@ class MovieDownloader {
         if (!settings) {
           settings = { _id: 'main_settings', ...DEFAULT_SETTINGS };
           await collection.insertOne(settings);
-          console.log(chalk.cyan('📝 Created default movie settings'));
+          console.log(chalk.cyan('📝 Created default movie downloader settings'));
         }
         
         return settings;
@@ -172,7 +107,7 @@ class MovieDownloader {
         
         this.settings = await this.loadSettings();
         
-        console.log(chalk.green('✅ Movie settings updated'));
+        console.log(chalk.green('✅ Movie downloader settings updated'));
         return result;
       }, SETTINGS_COLLECTION);
     } catch (error) {
@@ -193,20 +128,76 @@ class MovieDownloader {
     return adminNumber === userNumber || adminNumber.includes(userNumber);
   }
 
-  /**
-   * Checks if the plugin is allowed to run in a specific group.
-   * @param {string} groupId - The group's JID.
-   * @returns {boolean} - True if allowed, false otherwise.
-   */
-  isGroupAllowed(groupId) {
-    const settings = this.getSettings();
-    if (!settings.allowGroups) {
-      return false; // Master switch is off
+  async loadUserSessions() {
+    try {
+      const sessions = await safeOperation(async (db, collection) => {
+        const now = Date.now();
+        const validSessions = await collection.find({
+          expiresAt: { $gte: new Date(now) }
+        }).toArray();
+        
+        return validSessions;
+      }, USER_SESSIONS_COLLECTION);
+
+      if (sessions) {
+        sessions.forEach(session => {
+          this.userSessions.set(session.userId, session);
+        });
+        console.log(chalk.cyan(`📦 Loaded ${sessions.length} active user sessions`));
+      }
+    } catch (error) {
+      console.error(chalk.red('Error loading user sessions:'), error.message);
     }
-    if (settings.allowedGroups.length === 0) {
-      return true; // List is empty, so all groups are allowed
+  }
+
+  async saveUserSession(userId, searchResults) {
+    try {
+      const now = Date.now();
+      const session = {
+        userId,
+        searchResults: searchResults.slice(0, 20),
+        lastQuery: searchResults[0]?.query || '',
+        createdAt: new Date(),
+        expiresAt: new Date(now + this.getSettings().sessionTimeout)
+      };
+
+      this.userSessions.set(userId, session);
+
+      await safeOperation(async (db, collection) => {
+        await collection.updateOne(
+          { userId },
+          { $set: session },
+          { upsert: true }
+        );
+      }, USER_SESSIONS_COLLECTION);
+
+      console.log(chalk.cyan(`💾 Saved session for user: ${userId.split('@')[0]}`));
+    } catch (error) {
+      console.error(chalk.red('Error saving user session:'), error.message);
     }
-    return settings.allowedGroups.includes(groupId); // Check if this specific group is in the list
+  }
+
+  getUserSession(userId) {
+    const session = this.userSessions.get(userId);
+    if (!session) return null;
+
+    const now = Date.now();
+    if (new Date(session.expiresAt).getTime() < now) {
+      this.userSessions.delete(userId);
+      return null;
+    }
+
+    return session;
+  }
+
+  getMovieByNumber(userId, number) {
+    const session = this.getUserSession(userId);
+    if (!session || !session.searchResults) return null;
+
+    const index = parseInt(number) - 1;
+    if (index < 0 || index >= session.searchResults.length) return null;
+
+    return session.searchResults[index];
   }
 
   async getUserUsage(userId) {
@@ -219,9 +210,12 @@ class MovieDownloader {
           usage = {
             userId,
             count: 0,
+            searchCount: 0,
             resetTime: now + this.getSettings().rateLimitCooldown,
-            totalGets: 0,
-            lastGet: null,
+            totalDownloads: 0,
+            totalSearches: 0,
+            lastDownload: null,
+            lastSearch: null,
             createdAt: new Date()
           };
           await collection.insertOne(usage);
@@ -232,50 +226,82 @@ class MovieDownloader {
             { userId },
             { 
               $set: { 
-                count: 0, 
+                count: 0,
+                searchCount: 0,
                 resetTime: now + this.getSettings().rateLimitCooldown 
               } 
             }
           );
           usage.count = 0;
+          usage.searchCount = 0;
           usage.resetTime = now + this.getSettings().rateLimitCooldown;
         }
         
         return usage;
       }, USAGE_COLLECTION);
     } catch (error) {
-      console.error(chalk.red('Error getting movie usage:'), error.message);
-      return { count: 0, resetTime: Date.now() + this.getSettings().rateLimitCooldown };
+      console.error(chalk.red('Error getting user usage:'), error.message);
+      return { 
+        count: 0, 
+        searchCount: 0,
+        resetTime: Date.now() + this.getSettings().rateLimitCooldown 
+      };
     }
   }
 
-  async checkRateLimit(userId) {
+  async checkRateLimit(userId, type = 'download') {
     const settings = this.getSettings();
     if (settings.premiumEnabled) return true;
 
     const usage = await this.getUserUsage(userId);
     const now = Date.now();
+    const limitKey = type === 'search' ? 'searchCount' : 'count';
+    const currentCount = usage[limitKey] || 0;
 
-    if (usage.count >= settings.rateLimitFree) {
+    if (currentCount >= settings.rateLimitFree) {
       const hoursLeft = Math.ceil((usage.resetTime - now) / (60 * 60 * 1000));
-      return { limited: true, hoursLeft, current: usage.count, limit: settings.rateLimitFree };
+      return { 
+        limited: true, 
+        hoursLeft, 
+        current: currentCount, 
+        limit: settings.rateLimitFree,
+        type 
+      };
     }
 
     return true;
   }
 
-  async incrementUsage(userId, movieTitle, movieId) {
+  async incrementUsage(userId, type = 'download', movieData = {}) {
     try {
       return await safeOperation(async (db, collection) => {
+        const updateFields = {
+          lastDownload: new Date()
+        };
+
+        if (type === 'download') {
+          updateFields.totalDownloads = 1;
+          updateFields.count = 1;
+        } else if (type === 'search') {
+          updateFields.totalSearches = 1;
+          updateFields.searchCount = 1;
+          updateFields.lastSearch = new Date();
+        }
+
+        const historyItem = {
+          type,
+          timestamp: new Date(),
+          ...movieData
+        };
+
         await collection.updateOne(
           { userId },
           { 
-            $inc: { count: 1, totalGets: 1 },
-            $set: { lastGet: new Date() },
+            $inc: updateFields,
             $push: { 
               history: { 
-                $each: [{ title: movieTitle, id: movieId, timestamp: new Date() }],
-                $slice: -50 // Keep only last 50
+                $each: [historyItem],
+                $slice: -50
               }
             }
           },
@@ -283,229 +309,454 @@ class MovieDownloader {
         );
       }, USAGE_COLLECTION);
     } catch (error) {
-      console.error(chalk.red('Error incrementing movie usage:'), error.message);
+      console.error(chalk.red('Error incrementing usage:'), error.message);
     }
   }
 
-  async logMovieGet(userId, movieTitle, isPremium) {
+  async getRemainingDownloads(userId) {
+    const settings = this.getSettings();
+    if (settings.premiumEnabled) return 'Unlimited (Premium)';
+
+    const usage = await this.getUserUsage(userId);
+    return Math.max(0, settings.rateLimitFree - (usage.count || 0));
+  }
+
+  async searchMovies(query, userId) {
+    const searchId = `${userId}_${Date.now()}`;
+
+    if (this.activeSearches.has(userId)) {
+      return { error: 'You already have a search in progress. Please wait.' };
+    }
+
+    try {
+      this.activeSearches.set(userId, searchId);
+
+      if (this.getSettings().enableCache) {
+        const cached = await this.getSearchCache(query);
+        if (cached) {
+          console.log(chalk.cyan(`📦 Using cached search results for: ${query}`));
+          await this.saveUserSession(userId, cached.map(item => ({ ...item, query })));
+          return { success: true, results: cached, fromCache: true };
+        }
+      }
+
+      const rateLimitCheck = await this.checkRateLimit(userId, 'search');
+      if (rateLimitCheck.limited) {
+        return { 
+          error: `📊 *Search Limit Reached!*\n\nCurrent: ${rateLimitCheck.current}/${rateLimitCheck.limit}\nReset in: ${rateLimitCheck.hoursLeft} hours\n\n_Contact admin to upgrade to premium_`,
+          limited: true
+        };
+      }
+
+      console.log(chalk.cyan(`🔍 Searching for: ${query}`));
+      const response = await axios.get(
+        `${API_CONFIG.baseUrl}${API_CONFIG.endpoints.search}/${encodeURIComponent(query)}`,
+        {
+          timeout: API_CONFIG.timeout,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        }
+      );
+
+      if (response.data.status !== 200 || !response.data.success) {
+        throw new Error(response.data.message || 'Search failed');
+      }
+
+      const results = response.data.results?.items || [];
+      
+      if (results.length === 0) {
+        return { 
+          error: `❌ *No Results Found*\n\nNo movies or TV shows found for "${query}"\n\n_Try different keywords_` 
+        };
+      }
+
+      const limitedResults = results.slice(0, this.getSettings().maxSearchResults);
+
+      if (this.getSettings().enableCache) {
+        await this.saveSearchCache(query, limitedResults);
+      }
+
+      await this.saveUserSession(userId, limitedResults.map(item => ({ ...item, query })));
+
+      await this.incrementUsage(userId, 'search', { query, resultsCount: limitedResults.length });
+
+      console.log(chalk.green(`✅ Found ${limitedResults.length} results for: ${query}`));
+
+      return {
+        success: true,
+        results: limitedResults,
+        query,
+        total: results.length,
+        showing: limitedResults.length
+      };
+
+    } catch (error) {
+      console.error(chalk.red('Search error:'), error.message);
+      return { 
+        error: `❌ *Search Failed*\n\n${error.message}\n\n_Try again later or contact admin_` 
+      };
+    } finally {
+      this.activeSearches.delete(userId);
+    }
+  }
+
+  async getMovieInfo(movieId) {
+    try {
+      console.log(chalk.cyan(`ℹ️ Getting info for movie ID: ${movieId}`));
+      const response = await axios.get(
+        `${API_CONFIG.baseUrl}${API_CONFIG.endpoints.info}/${movieId}`,
+        {
+          timeout: API_CONFIG.timeout,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        }
+      );
+
+      if (response.data.status !== 200 || !response.data.success) {
+        throw new Error(response.data.message || 'Failed to get movie info');
+      }
+
+      const movieData = response.data.results?.subject;
+      if (!movieData) {
+        throw new Error('Invalid movie data received');
+      }
+
+      console.log(chalk.green(`✅ Got info for: ${movieData.title}`));
+      return { success: true, data: movieData };
+
+    } catch (error) {
+      console.error(chalk.red('Movie info error:'), error.message);
+      return { 
+        error: `❌ *Failed to Get Movie Info*\n\n${error.message}` 
+      };
+    }
+  }
+
+  async getDownloadSources(movieId, season = null, episode = null) {
+    try {
+      let url = `${API_CONFIG.baseUrl}${API_CONFIG.endpoints.sources}/${movieId}`;
+      
+      if (season && episode) {
+        url += `?season=${season}&episode=${episode}`;
+        console.log(chalk.cyan(`📺 Getting sources for S${season}E${episode}`));
+      } else {
+        console.log(chalk.cyan(`🎬 Getting sources for movie ID: ${movieId}`));
+      }
+
+      const response = await axios.get(url, {
+        timeout: API_CONFIG.timeout,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+
+      if (response.data.status !== 200 || !response.data.success) {
+        throw new Error(response.data.message || 'Failed to get download sources');
+      }
+
+      const sources = response.data.results;
+      if (!sources || sources.length === 0) {
+        throw new Error('No download sources available');
+      }
+
+      console.log(chalk.green(`✅ Found ${sources.length} download sources`));
+      return { success: true, sources };
+
+    } catch (error) {
+      console.error(chalk.red('Download sources error:'), error.message);
+      return { 
+        error: `❌ *Failed to Get Download Links*\n\n${error.message}` 
+      };
+    }
+  }
+
+  async downloadMovie(movieIdOrNumber, quality, userId, isGroup, season = null, episode = null) {
+    const downloadId = `${userId}_${Date.now()}`;
+    const settings = this.getSettings();
+
+    if (isGroup && !settings.allowGroups) {
+      return { error: '⚠️ Group downloads are currently disabled by admin.' };
+    }
+    if (!isGroup && !settings.allowPrivate) {
+      return { error: '⚠️ Private downloads are currently disabled by admin.' };
+    }
+
+    if (this.activeDownloads.has(userId)) {
+      return { error: 'You already have a download in progress. Please wait.' };
+    }
+
+    try {
+      this.activeDownloads.set(userId, downloadId);
+
+      let movieId = movieIdOrNumber;
+      let movieFromSession = null;
+
+      if (/^\d{1,2}$/.test(movieIdOrNumber)) {
+        movieFromSession = this.getMovieByNumber(userId, movieIdOrNumber);
+        if (!movieFromSession) {
+          return { 
+            error: `❌ *Invalid Selection*\n\nNumber ${movieIdOrNumber} not found in your recent search.\n\nPlease search first using:\n.movie search <query>` 
+          };
+        }
+        movieId = movieFromSession.subjectId;
+        console.log(chalk.cyan(`📌 Using movie #${movieIdOrNumber}: ${movieFromSession.title}`));
+      }
+
+      if (!settings.allowedQualities.includes(quality)) {
+        return { 
+          error: `❌ Quality "${quality}" is not allowed.\n\nAvailable: ${settings.allowedQualities.join(', ')}` 
+        };
+      }
+
+      const rateLimitCheck = await this.checkRateLimit(userId, 'download');
+      if (rateLimitCheck.limited) {
+        return { 
+          error: `📊 *Daily Download Limit Reached!*\n\nCurrent: ${rateLimitCheck.current}/${rateLimitCheck.limit}\nReset in: ${rateLimitCheck.hoursLeft} hours\n\n_Contact admin to upgrade to premium_`,
+          limited: true
+        };
+      }
+
+      if (settings.premiumEnabled) {
+        const balance = await PluginHelpers.getBalance(userId);
+        if (balance.wallet < settings.downloadCost) {
+          return { 
+            error: `💳 *Insufficient Balance!*\n\nRequired: ₦${settings.downloadCost}\nYour balance: ₦${balance.wallet}\n\n_Use economy commands to earn money_`,
+            insufficientBalance: true
+          };
+        }
+      }
+
+      const infoResult = await this.getMovieInfo(movieId);
+      if (infoResult.error) {
+        return infoResult;
+      }
+
+      const movieData = infoResult.data;
+      const isTvShow = movieData.subjectType === 8;
+
+      if (isTvShow && (!season || !episode)) {
+        return { 
+          error: `📺 *TV Show Detected*\n\nPlease specify season and episode.\n\nUsage: .movie dl ${movieIdOrNumber} ${quality} <season> <episode>\nExample: .movie dl ${movieIdOrNumber} 720p 1 1` 
+        };
+      }
+
+      if (isTvShow && !settings.allowTvShows) {
+        return { error: '⚠️ TV show downloads are currently disabled by admin.' };
+      }
+
+      if (!isTvShow && !settings.allowMovies) {
+        return { error: '⚠️ Movie downloads are currently disabled by admin.' };
+      }
+
+      const sourcesResult = await this.getDownloadSources(movieId, season, episode);
+      if (sourcesResult.error) {
+        return sourcesResult;
+      }
+
+      const source = sourcesResult.sources.find(s => s.quality === quality);
+      if (!source) {
+        const availableQualities = sourcesResult.sources.map(s => s.quality).join(', ');
+        return { 
+          error: `❌ Quality "${quality}" not available.\n\nAvailable: ${availableQualities}` 
+        };
+      }
+
+      const fileSizeMB = parseInt(source.size) / (1024 * 1024);
+      if (fileSizeMB > settings.maxFileSize) {
+        return { 
+          error: `❌ File too large (${fileSizeMB.toFixed(0)}MB)\n\nMax allowed: ${settings.maxFileSize}MB` 
+        };
+      }
+
+      if (settings.premiumEnabled) {
+        await PluginHelpers.removeMoney(userId, settings.downloadCost, 'Movie download');
+      } else {
+        await this.incrementUsage(userId, 'download', {
+          movieId,
+          title: movieData.title,
+          quality,
+          season,
+          episode
+        });
+      }
+
+      await this.logDownload(userId, movieData, quality, isTvShow);
+
+      return {
+        success: true,
+        downloadUrl: source.download_url,
+        movieData,
+        quality: source.quality,
+        size: source.size,
+        format: source.format,
+        isTvShow,
+        season,
+        episode
+      };
+
+    } catch (error) {
+      console.error(chalk.red('Download error:'), error.message);
+      return { error: `An unexpected error occurred: ${error.message}` };
+    } finally {
+      this.activeDownloads.delete(userId);
+    }
+  }
+
+  async getSearchCache(query) {
+    try {
+      return await safeOperation(async (db, collection) => {
+        const cached = await collection.findOne({ query: query.toLowerCase() });
+        
+        if (!cached) return null;
+
+        const now = Date.now();
+        const age = now - new Date(cached.timestamp).getTime();
+
+        if (age > this.getSettings().cacheExpiry) {
+          await collection.deleteOne({ query: query.toLowerCase() });
+          return null;
+        }
+
+        return cached.results;
+      }, SEARCH_CACHE_COLLECTION);
+    } catch (error) {
+      console.error(chalk.red('Error getting search cache:'), error.message);
+      return null;
+    }
+  }
+
+  async saveSearchCache(query, results) {
+    try {
+      return await safeOperation(async (db, collection) => {
+        await collection.updateOne(
+          { query: query.toLowerCase() },
+          { 
+            $set: { 
+              query: query.toLowerCase(),
+              results,
+              timestamp: new Date()
+            } 
+          },
+          { upsert: true }
+        );
+
+        console.log(chalk.cyan(`💾 Cached search results for: ${query}`));
+      }, SEARCH_CACHE_COLLECTION);
+    } catch (error) {
+      console.error(chalk.red('Error saving search cache:'), error.message);
+    }
+  }
+
+  async clearSearchCache() {
+    try {
+      return await safeOperation(async (db, collection) => {
+        const result = await collection.deleteMany({});
+        console.log(chalk.green(`🗑️ Cleared ${result.deletedCount} cached searches`));
+        return result.deletedCount;
+      }, SEARCH_CACHE_COLLECTION);
+    } catch (error) {
+      console.error(chalk.red('Error clearing cache:'), error.message);
+      return 0;
+    }
+  }
+
+  async addFavorite(userId, movieIdOrNumber) {
+    try {
+      let movieId = movieIdOrNumber;
+      let movieData;
+
+      if (/^\d{1,2}$/.test(movieIdOrNumber)) {
+        const movieFromSession = this.getMovieByNumber(userId, movieIdOrNumber);
+        if (!movieFromSession) {
+          return { error: `Number ${movieIdOrNumber} not found in recent search.` };
+        }
+        movieId = movieFromSession.subjectId;
+        movieData = movieFromSession;
+      } else {
+        const infoResult = await this.getMovieInfo(movieId);
+        if (infoResult.error) {
+          return { error: infoResult.error };
+        }
+        movieData = infoResult.data;
+      }
+
+      return await safeOperation(async (db, collection) => {
+        await collection.updateOne(
+          { userId },
+          {
+            $addToSet: {
+              favorites: {
+                movieId: movieData.subjectId || movieId,
+                title: movieData.title,
+                cover: movieData.cover?.url,
+                releaseDate: movieData.releaseDate,
+                subjectType: movieData.subjectType,
+                imdbRating: movieData.imdbRatingValue,
+                addedAt: new Date()
+              }
+            }
+          },
+          { upsert: true }
+        );
+
+        console.log(chalk.green(`⭐ Added favorite for ${userId}: ${movieData.title}`));
+        return { success: true, title: movieData.title };
+      }, FAVORITES_COLLECTION);
+    } catch (error) {
+      console.error(chalk.red('Error adding favorite:'), error.message);
+      return { error: 'Failed to add favorite' };
+    }
+  }
+
+  async removeFavorite(userId, movieId) {
+    try {
+      return await safeOperation(async (db, collection) => {
+        await collection.updateOne(
+          { userId },
+          { $pull: { favorites: { movieId } } }
+        );
+
+        console.log(chalk.green(`🗑️ Removed favorite for ${userId}: ${movieId}`));
+        return true;
+      }, FAVORITES_COLLECTION);
+    } catch (error) {
+      console.error(chalk.red('Error removing favorite:'), error.message);
+      return false;
+    }
+  }
+
+  async getFavorites(userId) {
+    try {
+      return await safeOperation(async (db, collection) => {
+        const doc = await collection.findOne({ userId });
+        return doc?.favorites || [];
+      }, FAVORITES_COLLECTION);
+    } catch (error) {
+      console.error(chalk.red('Error getting favorites:'), error.message);
+      return [];
+    }
+  }
+
+  async logDownload(userId, movieData, quality, isTvShow) {
     try {
       await safeOperation(async (db, collection) => {
         await collection.updateOne(
           { _id: 'stats' },
           { 
             $inc: { 
-              totalGets: 1,
-              [isPremium ? 'premiumGets' : 'freeGets']: 1
+              totalDownloads: 1,
+              [`qualities.${quality}`]: 1,
+              [isTvShow ? 'tvShowDownloads' : 'movieDownloads']: 1
             },
-            $set: { 
-                lastGet: new Date(),
-                lastMovie: movieTitle 
-            }
+            $set: { lastDownload: new Date() }
           },
           { upsert: true }
         );
       }, SETTINGS_COLLECTION);
-    } catch (error)
-      {
-      console.error(chalk.red('Error logging movie get:'), error.message);
-    }
-  }
-
-  async getRemainingGets(userId) {
-    const settings = this.getSettings();
-    if (settings.premiumEnabled) return 'Unlimited (Premium)';
-
-    const usage = await this.getUserUsage(userId);
-    return Math.max(0, settings.rateLimitFree - usage.count);
-  }
-
-  /**
-   * Searches for a movie and returns a formatted string.
-   * @param {string} query - The search query.
-   * @param {string} userId - The user's JID.
-   * @returns {Promise<object>} - { success: true, message: string } or { error: string }
-   */
-  async search(query, userId) {
-    const settings = this.getSettings();
-    try {
-      const data = await searchMoviesAPI(query);
-      const results = data.results?.items || [];
-      
-      if (results.length === 0) {
-        return { error: `Cound not find any movies matching "${query}".` };
-      }
-
-      const limitedResults = results.slice(0, settings.maxSearchResults);
-      
-      // Store results for .movieget command
-      this.userSearchResults.set(userId, limitedResults);
-      
-      let replyText = `*🎬 Search Results for "${query}"*\n\nFound ${results.length} results. Showing top ${limitedResults.length}:\n\n`;
-      
-      limitedResults.forEach((movie, index) => {
-        const year = getYearFromDate(movie.releaseDate);
-        const typeLabel = movie.subjectType === 1 ? '' : ' (TV Series)';
-        replyText += `*${index + 1}. ${movie.title}* (${year})${typeLabel}\n`;
-        replyText += `   ID: \`\`\`${movie.subjectId}\`\`\`\n`;
-      });
-      
-      replyText += `\nTo get download links, reply with:\n*.movieget <ID>*\n\n`;
-      replyText += `_For TV shows, this will list seasons. Then use:_\n`;
-      replyText += `_.movieget <ID> <season> <episode>_`;
-      
-      return { success: true, message: replyText };
-
     } catch (error) {
-      console.error(chalk.red('Movie search error:'), error.message);
-      return { error: `An error occurred during search: ${error.message}` };
-    }
-  }
-
-  /**
-   * Gets movie info and download links. This is the "chargeable" action.
-   * @param {string} movieId - The movie's subject ID.
-   * @param {string} userId - The user's JID.
-   * @param {boolean} isGroup - Whether the message is from a group.
-   * @param {string} groupId - The group's JID (if in a group).
-   * @param {string} [season] - The season number (for TV shows).
-   * @param {string} [episode] - The episode number (for TV shows).
-   * @returns {Promise<object>} - Success or error object.
-   */
-  async getLinks(movieId, userId, isGroup, groupId, season, episode) {
-    const requestId = `${userId}_${Date.now()}`;
-    const settings = this.getSettings();
-    
-    // Check permissions
-    if (isGroup && !settings.allowGroups) {
-      return { error: '⚠️ Movie commands are currently disabled in groups by admin.' };
-    }
-    if (isGroup && !this.isGroupAllowed(groupId)) {
-        return { error: '⚠️ Movie commands are not enabled for this specific group.' };
-    }
-    if (!isGroup && !settings.allowPrivate) {
-      return { error: '⚠️ Movie commands are currently disabled in private chat by admin.' };
-    }
-
-    if (this.activeRequests.has(userId)) {
-      return { error: 'You already have a request in progress. Please wait.' };
-    }
-
-    try {
-      this.activeRequests.set(userId, requestId);
-
-      // --- Get Movie Info First (cheap call) ---
-      let movieInfo;
-      try {
-        movieInfo = await getMovieInfoAPI(movieId);
-      } catch (error) {
-        return { error: `❌ *Failed to Get Info*\n\nCould not retrieve details for ID \`\`\`${movieId}\`\`\`.\n\n*Error:* ${error.message}` };
-      }
-
-      const movie = movieInfo.results?.subject;
-      if (!movie) {
-        return { error: `❌ No movie data found for ID \`\`\`${movieId}\`\`\`.` };
-      }
-
-      const movieTitle = movie.title || 'Unknown Movie';
-      const isTvShow = movie.subjectType !== 1;
-      const isDownloadAttempt = isTvShow ? (season && episode) : true;
-
-      // --- Case 1: TV Show, but no season/episode provided (Show Info) ---
-      if (isTvShow && !isDownloadAttempt) {
-        const seasons = movieInfo.results?.resource?.seasons || [];
-        const formattedSeasons = seasons.map(s => `• Season ${s.se} (${s.epNum || s.maxEp} episodes)`);
-        
-        return {
-          success: false, // Not a download success
-          isTvShowInfo: true,
-          title: movie.title,
-          plot: movie.description,
-          poster: movie.cover?.url,
-          year: getYearFromDate(movie.releaseDate),
-          rating: movie.imdbRatingValue,
-          seasons: formattedSeasons,
-          movieId: movie.subjectId
-        };
-      }
-
-      // --- Case 2: Movie Download or TV Episode Download ---
-      if (isDownloadAttempt) {
-        // Check rate limits
-        const rateLimitCheck = await this.checkRateLimit(userId);
-        if (rateLimitCheck.limited) {
-          return { 
-            error: `📊 *Daily Limit Reached!*\n\n` +
-                   `Current: ${rateLimitCheck.current}/${rateLimitCheck.limit}\n` +
-                   `Reset in: ${rateLimitCheck.hoursLeft} hours\n\n` +
-                   `_Contact admin to upgrade to premium_`,
-            limited: true
-          };
-        }
-
-        // Check economy balance if premium
-        if (settings.premiumEnabled) {
-          const balance = await PluginHelpers.getBalance(userId);
-          if (balance.wallet < settings.downloadCost) {
-            return { 
-              error: `💳 *Insufficient Balance!*\n\n` +
-                     `Required: ₦${settings.downloadCost}\n` +
-                     `Your balance: ₦${balance.wallet}\n\n` +
-                     `_Use economy commands to earn money_`,
-              insufficientBalance: true
-            };
-          }
-        }
-
-        // --- Get Download Sources (expensive call) ---
-        let downloadSources;
-        try {
-          downloadSources = await getDownloadSourcesAPI(movieId, season, episode);
-        } catch (error) {
-          console.error(chalk.red(`❌ Movie get failed for ID ${movieId}`), error.message);
-          return { 
-            error: `❌ *Failed to Get Links*\n\n` +
-                   `Could not retrieve download links.\n` +
-                   `• The ID/Season/Episode might be incorrect.\n` +
-                   `• The API may be temporarily unavailable.\n\n` +
-                   `*Error:* ${error.message}`
-          };
-        }
-        
-        // --- Charge User / Increment Usage ---
-        const chargeTitle = isTvShow ? `${movieTitle} S${season}E${episode}` : movieTitle;
-        if (settings.premiumEnabled) {
-          await PluginHelpers.removeMoney(userId, settings.downloadCost, `Movie get: ${chargeTitle}`);
-        } else {
-          await this.incrementUsage(userId, chargeTitle, movieId);
-        }
-        await this.logMovieGet(userId, chargeTitle, settings.premiumEnabled);
-
-        // --- Format and Return Success ---
-        const sources = (downloadSources.results || []).map(s => ({
-            quality: s.quality,
-            url: s.download_url,
-            size: s.size
-        }));
-
-        return {
-          success: true,
-          isTvShow: isTvShow,
-          title: movie.title,
-          year: getYearFromDate(movie.releaseDate),
-          rating: movie.imdbRatingValue,
-          poster: movie.cover?.url,
-          plot: movie.description,
-          sources: sources,
-          season: season,
-          episode: episode
-        };
-      }
-
-    } catch (error) {
-      console.error(chalk.red('Get links error:'), error.message);
-      return { error: `An unexpected error occurred: ${error.message}` };
-    } finally {
-      this.activeRequests.delete(userId);
+      console.error(chalk.red('Error logging download:'), error.message);
     }
   }
 
@@ -519,37 +770,56 @@ class MovieDownloader {
     try {
       const stats = await safeOperation(async (db, collection) => {
         const globalStats = await collection.findOne({ _id: 'stats' }) || {
-          totalGets: 0,
-          freeGets: 0,
-          premiumGets: 0,
-          lastMovie: 'None'
+          totalDownloads: 0,
+          movieDownloads: 0,
+          tvShowDownloads: 0,
+          qualities: {}
         };
+        
         return globalStats;
       }, SETTINGS_COLLECTION);
 
       const usageStats = await safeOperation(async (db, collection) => {
         const totalUsers = await collection.countDocuments();
         const activeUsers = await collection.countDocuments({ 
-          lastGet: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } 
+          lastDownload: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } 
         });
         
-        return { totalUsers, activeUsers };
+        const totalSearches = await collection.aggregate([
+          { $group: { _id: null, total: { $sum: '$totalSearches' } } }
+        ]).toArray();
+
+        return { 
+          totalUsers, 
+          activeUsers,
+          totalSearches: totalSearches[0]?.total || 0
+        };
       }, USAGE_COLLECTION);
+
+      const cacheStats = await safeOperation(async (db, collection) => {
+        const count = await collection.countDocuments();
+        return { cachedSearches: count };
+      }, SEARCH_CACHE_COLLECTION);
 
       const settings = this.getSettings();
 
       const result = {
         ...stats,
         ...usageStats,
-        activeRequests: this.activeRequests.size,
+        ...cacheStats,
+        activeDownloads: this.activeDownloads.size,
+        activeSearches: this.activeSearches.size,
+        activeSessions: this.userSessions.size,
         settings: {
           premiumEnabled: settings.premiumEnabled,
           downloadCost: settings.downloadCost,
+          searchCost: settings.searchCost,
           rateLimitFree: settings.rateLimitFree,
-          maxSearchResults: settings.maxSearchResults,
+          allowedQualities: settings.allowedQualities,
           allowGroups: settings.allowGroups,
           allowPrivate: settings.allowPrivate,
-          allowedGroupsCount: settings.allowedGroups.length
+          allowTvShows: settings.allowTvShows,
+          allowMovies: settings.allowMovies
         },
         lastUpdated: new Date()
       };
@@ -559,10 +829,11 @@ class MovieDownloader {
 
       return result;
     } catch (error) {
-      console.error(chalk.red('Error getting movie stats:'), error.message);
+      console.error(chalk.red('Error getting stats:'), error.message);
       return {
-        totalGets: 0,
-        activeRequests: this.activeRequests.size,
+        totalDownloads: 0,
+        activeDownloads: this.activeDownloads.size,
+        activeSearches: this.activeSearches.size,
         error: error.message
       };
     }
@@ -575,43 +846,45 @@ class MovieDownloader {
         return usage?.history?.slice(-limit).reverse() || [];
       }, USAGE_COLLECTION);
     } catch (error) {
-      console.error(chalk.red('Error getting movie history:'), error.message);
+      console.error(chalk.red('Error getting user history:'), error.message);
       return [];
     }
   }
 }
 
-// --- Create Singleton Instance ---
-const downloader = new MovieDownloader();
+const movieDownloader = new MovieDownloader();
 
-// --- Command Handlers (To be called from 'run') ---
-
-async function handleMovieSettings(reply, downloaderInstance, config, sender, args) {
-  const settings = downloaderInstance.getSettings();
+async function handleMovieSettings(reply, downloader, config, sender, args) {
+  const settings = downloader.getSettings();
 
   if (args.length === 0) {
     await reply(
       `*⚙️ Movie Downloader Settings*\n\n` +
       `*Premium Mode:* ${settings.premiumEnabled ? '✅ Enabled' : '❌ Disabled'}\n` +
       `*Download Cost:* ₦${settings.downloadCost}\n` +
+      `*Search Cost:* ₦${settings.searchCost}\n` +
       `*Free Limit:* ${settings.rateLimitFree} per day\n` +
       `*Cooldown:* ${settings.rateLimitCooldown / (60 * 60 * 1000)}h\n\n` +
-      `*Search Limit:* ${settings.maxSearchResults} results\n` +
-      `*Allow Groups:* ${settings.allowGroups ? '✅' : '❌'}\n` +
-      `*Allow Private:* ${settings.allowPrivate ? '✅' : '❌'}\n` +
-      `*Specific Groups:* ${settings.allowedGroups.length > 0 ? settings.allowedGroups.length + ' groups' : 'All'}\n\n` +
+      `*Allowed Qualities:*\n${settings.allowedQualities.map(q => `• ${q}`).join('\n')}\n` +
+      `*Default Quality:* ${settings.defaultQuality}\n` +
+      `*Max Search Results:* ${settings.maxSearchResults}\n` +
+      `*Max File Size:* ${settings.maxFileSize}MB\n\n` +
+      `*Features:*\n` +
+      `• Groups: ${settings.allowGroups ? '✅' : '❌'}\n` +
+      `• Private: ${settings.allowPrivate ? '✅' : '❌'}\n` +
+      `• Movies: ${settings.allowMovies ? '✅' : '❌'}\n` +
+      `• TV Shows: ${settings.allowTvShows ? '✅' : '❌'}\n` +
+      `• Cache: ${settings.enableCache ? '✅' : '❌'}\n\n` +
       `*Last Updated:* ${new Date(settings.updatedAt).toLocaleString()}\n` +
       `*Updated By:* ${settings.updatedBy}\n\n` +
       `*Commands:*\n` +
       `${config.PREFIX}moviesettings premium on/off\n` +
       `${config.PREFIX}moviesettings cost <amount>\n` +
       `${config.PREFIX}moviesettings limit <number>\n` +
-      `${config.PREFIX}moviesettings searchlimit <number>\n` +
+      `${config.PREFIX}moviesettings quality <360p|480p|720p> on/off\n` +
       `${config.PREFIX}moviesettings groups on/off\n` +
-      `${config.PREFIX}moviesettings private on/off\n` +
-      `${config.PREFIX}moviesettings addgroup <groupId>\n` +
-      `${config.PREFIX}moviesettings delgroup <groupId>\n` +
-      `${config.PREFIX}moviesettings listgroups`
+      `${config.PREFIX}moviesettings movies on/off\n` +
+      `${config.PREFIX}moviesettings tvshows on/off`
     );
     return;
   }
@@ -625,7 +898,7 @@ async function handleMovieSettings(reply, downloaderInstance, config, sender, ar
       case 'premium':
         if (value === 'on' || value === 'off') {
           updates.premiumEnabled = value === 'on';
-          await downloaderInstance.saveSettings(updates, sender);
+          await downloader.saveSettings(updates, sender);
           await reply(`✅ Premium mode ${value === 'on' ? 'enabled' : 'disabled'}`);
         } else {
           await reply('❌ Usage: .moviesettings premium on/off');
@@ -635,7 +908,7 @@ async function handleMovieSettings(reply, downloaderInstance, config, sender, ar
         const cost = parseInt(value);
         if (!isNaN(cost) && cost >= 0) {
           updates.downloadCost = cost;
-          await downloaderInstance.saveSettings(updates, sender);
+          await downloader.saveSettings(updates, sender);
           await reply(`✅ Download cost set to ₦${cost}`);
         } else {
           await reply('❌ Invalid cost. Usage: .moviesettings cost <number>');
@@ -645,27 +918,37 @@ async function handleMovieSettings(reply, downloaderInstance, config, sender, ar
         const limit = parseInt(value);
         if (!isNaN(limit) && limit > 0) {
           updates.rateLimitFree = limit;
-          await downloaderInstance.saveSettings(updates, sender);
-          await reply(`✅ Free get limit set to ${limit} per day`);
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Free download limit set to ${limit} per day`);
         } else {
           await reply('❌ Invalid limit. Usage: .moviesettings limit <number>');
         }
         break;
-      case 'searchlimit':
-        const searchLimit = parseInt(value);
-        if (!isNaN(searchLimit) && searchLimit > 0 && searchLimit <= 20) {
-          updates.maxSearchResults = searchLimit;
-          await downloaderInstance.saveSettings(updates, sender);
-          await reply(`✅ Max search results set to ${searchLimit}`);
+      case 'quality':
+        const quality = value;
+        const qualityState = args[2];
+        if (['360p', '480p', '720p'].includes(quality) && (qualityState === 'on' || qualityState === 'off')) {
+          const qualities = [...settings.allowedQualities] || [];
+          
+          if (qualityState === 'on' && !qualities.includes(quality)) {
+            qualities.push(quality);
+          } else if (qualityState === 'off') {
+            const index = qualities.indexOf(quality);
+            if (index > -1) qualities.splice(index, 1);
+          }
+          
+          updates.allowedQualities = qualities;
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Quality ${quality} ${qualityState === 'on' ? 'enabled' : 'disabled'}`);
         } else {
-          await reply('❌ Invalid limit. Usage: .moviesettings searchlimit <1-20>');
+          await reply('❌ Usage: .moviesettings quality <360p|480p|720p> on/off');
         }
         break;
       case 'groups':
         if (value === 'on' || value === 'off') {
           updates.allowGroups = value === 'on';
-          await downloaderInstance.saveSettings(updates, sender);
-          await reply(`✅ Group commands ${value === 'on' ? 'enabled' : 'disabled'}`);
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Group downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
         } else {
           await reply('❌ Usage: .moviesettings groups on/off');
         }
@@ -673,270 +956,472 @@ async function handleMovieSettings(reply, downloaderInstance, config, sender, ar
       case 'private':
         if (value === 'on' || value === 'off') {
           updates.allowPrivate = value === 'on';
-          await downloaderInstance.saveSettings(updates, sender);
-          await reply(`✅ Private commands ${value === 'on' ? 'enabled' : 'disabled'}`);
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Private downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
         } else {
           await reply('❌ Usage: .moviesettings private on/off');
         }
         break;
-      case 'addgroup':
-        if (value) {
-          const groups = [...settings.allowedGroups];
-          if (!groups.includes(value)) {
-            groups.push(value);
-            updates.allowedGroups = groups;
-            await downloaderInstance.saveSettings(updates, sender);
-            await reply(`✅ Group ${value} added to allowed list.`);
-          } else {
-            await reply('⚠️ Group is already in the list.');
-          }
+      case 'movies':
+        if (value === 'on' || value === 'off') {
+          updates.allowMovies = value === 'on';
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Movie downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
         } else {
-          await reply('❌ Usage: .moviesettings addgroup <groupId>');
+          await reply('❌ Usage: .moviesettings movies on/off');
         }
         break;
-      case 'delgroup':
-        if (value) {
-          let groups = [...settings.allowedGroups];
-          const index = groups.indexOf(value);
-          if (index > -1) {
-            groups.splice(index, 1);
-            updates.allowedGroups = groups;
-            await downloaderInstance.saveSettings(updates, sender);
-            await reply(`✅ Group ${value} removed from allowed list.`);
-          } else {
-            await reply('⚠️ Group not found in the list.');
-          }
+      case 'tvshows':
+        if (value === 'on' || value === 'off') {
+          updates.allowTvShows = value === 'on';
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ TV show downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
         } else {
-          await reply('❌ Usage: .moviesettings delgroup <groupId>');
+          await reply('❌ Usage: .moviesettings tvshows on/off');
         }
         break;
-      case 'listgroups':
-        if (settings.allowedGroups.length === 0) {
-            await reply('📋 Allowed Groups List is empty. All groups are allowed (if .moviesettings groups on).');
+      case 'cache':
+        if (value === 'on' || value === 'off') {
+          updates.enableCache = value === 'on';
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Search cache ${value === 'on' ? 'enabled' : 'disabled'}`);
+        } else if (value === 'clear') {
+          const cleared = await downloader.clearSearchCache();
+          await reply(`✅ Cleared ${cleared} cached search results`);
         } else {
-            await reply(`*📋 Allowed Groups:*\n\n` + settings.allowedGroups.join('\n'));
+          await reply('❌ Usage: .moviesettings cache on/off/clear');
+        }
+        break;
+      case 'maxsize':
+        const maxSize = parseInt(value);
+        if (!isNaN(maxSize) && maxSize > 0) {
+          updates.maxFileSize = maxSize;
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Max file size set to ${maxSize}MB`);
+        } else {
+          await reply('❌ Invalid size. Usage: .moviesettings maxsize <number>');
+        }
+        break;
+      case 'maxresults':
+        const maxResults = parseInt(value);
+        if (!isNaN(maxResults) && maxResults > 0 && maxResults <= 20) {
+          updates.maxSearchResults = maxResults;
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Max search results set to ${maxResults}`);
+        } else {
+          await reply('❌ Invalid number. Usage: .moviesettings maxresults <1-20>');
         }
         break;
       default:
         await reply(`❌ Unknown setting: ${action}\n\nUse ${config.PREFIX}moviesettings to see available commands`);
     }
   } catch (error) {
-     console.error(chalk.red('Error updating movie setting:'), error.message);
-     await reply(`❌ Error updating setting: ${error.message}`);
+    console.error(chalk.red('Error updating setting:'), error.message);
+    await reply(`❌ Error updating setting: ${error.message}`);
   }
 }
 
-async function handleMovieSearch(reply, downloaderInstance, config, sock, m, sender, isGroup, groupId, query) {
-  if (isGroup && !downloaderInstance.isGroupAllowed(groupId)) {
-      await reply('⚠️ Movie commands are not enabled for this specific group.');
-      return;
-  }
-    
+async function handleMovieSearch(reply, downloader, config, sender, query) {
   if (!query) {
-    const remaining = await downloaderInstance.getRemainingGets(sender);
-    const settings = downloaderInstance.getSettings();
-    
-    let replyText = `*🎬 Movie & TV Show Downloader*\n\n`;
-    replyText += `*Usage:* ${config.PREFIX}movie <search term>\n`;
-    replyText += `*Example:* ${config.PREFIX}movie Black Panther\n\n`;
-    replyText += `After searching, use:\n*.movieget <ID>* (for movies or TV show info)\n`;
-    replyText += `*.movieget <ID> <season> <episode>* (for TV episodes)\n\n`;
-    replyText += `*Your Status:*\n`;
-    if (settings.premiumEnabled) {
-      replyText += `💎 Premium: ₦${settings.downloadCost} per movie/episode\n`;
-    } else {
-      replyText += `🆓 Free: ${remaining}/${settings.rateLimitFree} remaining today\n`;
-    }
-    
-    await reply(replyText);
+    await reply(
+      `*🔍 Movie Search*\n\n` +
+      `Search for movies and TV shows\n\n` +
+      `*Usage:* ${config.PREFIX}movie search <query>\n` +
+      `*Example:* ${config.PREFIX}movie search Black Panther`
+    );
     return;
   }
 
-  await sock.sendMessage(m.from, { react: { text: '⏳', key: m.key } });
-  const result = await downloaderInstance.search(query, sender);
-  
+  const result = await downloader.searchMovies(query, sender);
+
   if (result.error) {
-    await sock.sendMessage(m.from, { react: { text: '❌', key: m.key } });
     await reply(result.error);
     return;
   }
 
   if (result.success) {
-    await sock.sendMessage(m.from, { react: { text: '✅', key: m.key } });
-    await reply(result.message);
+    const settings = downloader.getSettings();
+    let message = `*🔍 Search Results for "${result.query}"*\n\n`;
+    message += `Found ${result.total} results, showing ${result.showing}\n`;
+    if (result.fromCache) {
+      message += `📦 _Loaded from cache_\n`;
+    }
+    message += `\n`;
+
+    result.results.forEach((item, index) => {
+      const type = item.subjectType === 8 ? '📺' : '🎬';
+      const year = item.releaseDate ? new Date(item.releaseDate).getFullYear() : 'N/A';
+      const rating = item.imdbRatingValue ? `⭐ ${item.imdbRatingValue}` : '';
+      
+      message += `*${index + 1}. ${item.title}* ${type}\n`;
+      message += `   Year: ${year} ${rating}\n`;
+      message += `\n`;
+    });
+
+    message += `*📥 Quick Download:*\n`;
+    message += `${config.PREFIX}movie dl <number> <quality>\n\n`;
+    message += `*Examples:*\n`;
+    message += `${config.PREFIX}movie dl 1 720p\n`;
+    message += `${config.PREFIX}movie dl 2 480p 1 1 _(for TV shows)_\n\n`;
+    
+    message += `*Available Qualities:*\n`;
+    settings.allowedQualities.forEach(q => {
+      const info = QUALITY_INFO[q];
+      message += `${info.emoji} ${q} ${info.icon}\n`;
+    });
+    
+    message += `\n_Numbers valid for 30 minutes_`;
+
+    await reply(message);
   }
 }
 
-async function handleMovieGet(reply, downloaderInstance, config, sock, m, sender, isGroup, bot, groupId, args) {
-  if (isGroup && !downloaderInstance.isGroupAllowed(groupId)) {
-      await reply('⚠️ Movie commands are not enabled for this specific group.');
+async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sender) {
+  if (!movieIdOrNumber) {
+    await reply(
+      `*ℹ️ Movie Info*\n\n` +
+      `Get detailed information about a movie or TV show\n\n` +
+      `*Usage:* ${config.PREFIX}movie info <number>\n` +
+      `*Example:* ${config.PREFIX}movie info 1`
+    );
+    return;
+  }
+
+  let movieId = movieIdOrNumber;
+  let movieFromSession = null;
+
+  if (/^\d{1,2}$/.test(movieIdOrNumber)) {
+    movieFromSession = downloader.getMovieByNumber(sender, movieIdOrNumber);
+    if (!movieFromSession) {
+      await reply(`❌ Number ${movieIdOrNumber} not found.\n\nPlease search first: ${config.PREFIX}movie search <query>`);
       return;
+    }
+    movieId = movieFromSession.subjectId;
   }
-  
-  const [movieId, season, episode] = args;
 
-  if (!movieId) {
-    await reply(`Please provide a Movie ID.\n\n*Usage:* ${config.PREFIX}movieget <ID> [season] [episode]\n\nGet the ID by searching first with *.movie <name>*`);
+  const result = await downloader.getMovieInfo(movieId);
+
+  if (result.error) {
+    await reply(result.error);
     return;
   }
 
+  if (result.success) {
+    const data = result.data;
+    const type = data.subjectType === 8 ? '📺 TV Show' : '🎬 Movie';
+    const year = data.releaseDate ? new Date(data.releaseDate).getFullYear() : 'N/A';
+
+    let message = `${type} *${data.title}*\n\n`;
+    message += `*Year:* ${year}\n`;
+    
+    if (data.countryName) {
+      message += `*Country:* ${data.countryName}\n`;
+    }
+    
+    if (data.imdbRatingValue) {
+      message += `*Rating:* ⭐ ${data.imdbRatingValue}/10`;
+      if (data.imdbRatingCount) {
+        message += ` (${(data.imdbRatingCount / 1000).toFixed(0)}K votes)`;
+      }
+      message += `\n`;
+    }
+    
+    if (data.genre) {
+      message += `*Genre:* ${data.genre}\n`;
+    }
+    
+    if (data.duration) {
+      const hours = Math.floor(data.duration / 3600);
+      const mins = Math.floor((data.duration % 3600) / 60);
+      message += `*Duration:* ${hours}h ${mins}m\n`;
+    }
+    
+    if (data.description) {
+      message += `\n*Synopsis:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
+    }
+
+    message += `\n*📥 Download:*\n`;
+    if (movieFromSession) {
+      const number = movieIdOrNumber;
+      message += `${config.PREFIX}movie dl ${number} <quality>\n\n`;
+      message += `*Examples:*\n`;
+      message += `${config.PREFIX}movie dl ${number} 720p\n`;
+      if (data.subjectType === 8) {
+        message += `${config.PREFIX}movie dl ${number} 480p 1 1\n`;
+      }
+    } else {
+      message += `Search for this movie to download easily!`;
+    }
+
+    await reply(message);
+  }
+}
+
+async function handleMovieDownload(reply, downloader, config, sock, m, sender, isGroup, args) {
+  const settings = downloader.getSettings();
+
+  if (args.length === 0) {
+    await reply(
+      `*📥 Movie Download*\n\n` +
+      `Download movies and TV shows in multiple qualities\n\n` +
+      `*Usage:*\n` +
+      `• ${config.PREFIX}movie dl <number> <quality>\n` +
+      `• ${config.PREFIX}movie dl <number> <quality> <season> <episode>\n\n` +
+      `*Examples:*\n` +
+      `${config.PREFIX}movie dl 1 720p\n` +
+      `${config.PREFIX}movie dl 3 480p 1 1 _(for TV shows)_\n\n` +
+      `*Available Qualities:*\n` +
+      `${settings.allowedQualities.map(q => {
+        const info = QUALITY_INFO[q];
+        return `${info.emoji} ${q} ${info.icon} ${info.label}`;
+      }).join('\n')}\n\n` +
+      `${settings.premiumEnabled ? `💎 Cost: ₦${settings.downloadCost} per download` : `🆓 Free downloads available`}\n\n` +
+      `_First search for movies, then use the number to download_`
+    );
+    return;
+  }
+
+  const movieIdOrNumber = args[0];
+  const quality = args[1] || settings.defaultQuality;
+  const season = args[2] ? parseInt(args[2]) : null;
+  const episode = args[3] ? parseInt(args[3]) : null;
+
   await sock.sendMessage(m.from, { react: { text: '⏳', key: m.key } });
-  const result = await downloaderInstance.getLinks(movieId, sender, isGroup, groupId, season, episode);
-  
+
+  const result = await downloader.downloadMovie(movieIdOrNumber, quality, sender, isGroup, season, episode);
+
+  await sock.sendMessage(m.from, { react: { text: '', key: m.key } });
+
   if (result.error) {
     await sock.sendMessage(m.from, { react: { text: '❌', key: m.key } });
     await reply(result.error);
     return;
   }
-  
-  // --- Handle TV Show Info Response ---
-  if (result.isTvShowInfo) {
-    await sock.sendMessage(m.from, { react: { text: 'ℹ️', key: m.key } });
-    
-    let caption = `*📺 ${result.title} (${result.year})*\n`;
-    caption += `⭐ Rating: ${result.rating}\n\n`;
-    caption += `*Plot:* ${result.plot}\n\n`;
-    
-    if (result.seasons.length > 0) {
-        caption += `*Available Seasons:*\n${result.seasons.join('\n')}\n\n`;
-    } else {
-        caption += `*No seasons found for this series.*\n\n`;
-    }
-    caption += `*Usage:* ${config.PREFIX}movieget ${result.movieId} <season> <episode>`;
 
-    try {
-      await sock.sendMessage(m.from, {
-        image: { url: result.poster },
-        caption: caption
-      }, { quoted: m });
-    } catch (sendError) {
-      await reply(`(Failed to send poster)\n\n${caption}`);
-    }
-    return;
-  }
-
-  // --- Handle Download Success Response (Movie or TV Episode) ---
   if (result.success) {
-    const settings = downloaderInstance.getSettings();
-    const remaining = await downloaderInstance.getRemainingGets(sender);
+    const remaining = await downloader.getRemainingDownloads(sender);
+    const sizeMB = (parseInt(result.size) / (1024 * 1024)).toFixed(0);
     
-    let caption = result.isTvShow 
-      ? `*📺 ${result.title} (S${result.season}E${result.episode})*\n`
-      : `*🎬 ${result.title} (${result.year})*\n`;
-      
-    caption += `⭐ Rating: ${result.rating}\n\n`;
-    caption += `*Plot:* ${result.plot}\n\n`;
-    caption += `*🔗 Download Links:*\n`;
+    let caption = `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n\n`;
     
-    if (result.sources.length === 0) {
-        caption += `No download sources found.\n`;
-    } else {
-        result.sources.forEach(source => {
-            caption += `• *${source.quality}* (${formatBytes(source.size)}): ${source.url}\n`;
-        });
+    if (result.isTvShow) {
+      caption += `*Season:* ${result.season} | *Episode:* ${result.episode}\n`;
     }
-
-    caption += `\n`;
+    
+    caption += `*Quality:* ${result.quality}\n`;
+    caption += `*Size:* ${sizeMB}MB\n`;
+    caption += `*Format:* ${result.format}\n\n`;
     
     if (settings.premiumEnabled) {
-      caption += `💳 Charged: ₦${settings.downloadCost}\n`;
+      caption += `💳 *Charged:* ₦${settings.downloadCost}\n`;
     } else {
-      caption += `🆓 Remaining: ${remaining}/${settings.rateLimitFree}\n`;
+      caption += `🆓 *Remaining:* ${remaining}/${settings.rateLimitFree}\n`;
     }
-    caption += `\n⚡ Powered by ${bot?.name || 'Groq'}`;
+    
+    caption += `\n⚡ Powered by GiftedTech API`;
 
     try {
       await sock.sendMessage(m.from, {
-        image: { url: result.poster },
+        document: { url: result.downloadUrl },
+        mimetype: 'video/mp4',
+        fileName: `${result.movieData.title}${result.isTvShow ? ` S${result.season}E${result.episode}` : ''} [${result.quality}].${result.format}`,
         caption: caption
       }, { quoted: m });
 
-      await sock.sendMessage(m.from, { react: { text: '✅', key: m.key } });
-      
+      await sock.sendMessage(m.from, {
+        react: { text: '✅', key: m.key }
+      });
+
     } catch (sendError) {
-      console.error(chalk.red('Error sending movie info:'), sendError.message);
-      await sock.sendMessage(m.from, { react: { text: '❌', key: m.key } });
-      // Send text-only fallback
-      await reply(`✅ *Download Links Ready*\n\n(Failed to send poster)\n\n${caption}`);
+      console.error(chalk.red('Error sending movie:'), sendError.message);
+      
+      await sock.sendMessage(m.from, {
+        react: { text: '❌', key: m.key }
+      });
+      
+      await reply(
+        `❌ *Send Failed*\n\n` +
+        `The movie was processed but couldn't be sent. This might be due to:\n` +
+        `• File size too large for WhatsApp\n` +
+        `• Network issues\n` +
+        `• WhatsApp restrictions\n\n` +
+        `*Direct Download Link:*\n${result.downloadUrl}\n\n` +
+        `_Link expires in 24 hours_`
+      );
     }
   }
 }
 
-
-async function handleMovieStats(reply, downloaderInstance) {
-  const stats = await downloaderInstance.getStats();
+async function handleMovieStats(reply, downloader) {
+  const stats = await downloader.getStats();
   
-  await reply(
-    `*📊 Movie Downloader Statistics*\n\n` +
-    `*Total Gets:* ${stats.totalGets || 0}\n` +
-    `*Free Gets:* ${stats.freeGets || 0}\n` +
-    `*Premium Gets:* ${stats.premiumGets || 0}\n` +
-    `*Active Requests:* ${stats.activeRequests}\n\n` +
-    `*Last Get:* ${stats.lastMovie || 'None'}\n\n` +
-    `*Users:*\n` +
-    `• Total: ${stats.totalUsers || 0}\n` +
-    `• Active (7d): ${stats.activeUsers || 0}\n\n` +
-    `*Settings:*\n` +
-    `• Mode: ${stats.settings?.premiumEnabled ? '💎 Premium' : '🆓 Free'}\n` +
-    `• Cost: ₦${stats.settings?.downloadCost || 0}\n` +
-    `• Daily Limit: ${stats.settings?.rateLimitFree || 0}\n` +
-    `• Groups Allowed: ${stats.settings?.allowGroups ? '✅' : '❌'}\n` +
-    `• Specific Groups: ${stats.settings?.allowedGroupsCount}\n\n` +
-    `*Last Updated:* ${new Date(stats.lastUpdated).toLocaleString()}`
-  );
+  let message = `*📊 Movie Downloader Statistics*\n\n`;
+  message += `*Downloads:*\n`;
+  message += `• Total: ${stats.totalDownloads || 0}\n`;
+  message += `• Movies: ${stats.movieDownloads || 0}\n`;
+  message += `• TV Shows: ${stats.tvShowDownloads || 0}\n`;
+  message += `• Active: ${stats.activeDownloads}\n\n`;
+  
+  message += `*Users:*\n`;
+  message += `• Total: ${stats.totalUsers || 0}\n`;
+  message += `• Active (7d): ${stats.activeUsers || 0}\n`;
+  message += `• Total Searches: ${stats.totalSearches || 0}\n`;
+  message += `• Active Sessions: ${stats.activeSessions || 0}\n\n`;
+  
+  if (stats.qualities && Object.keys(stats.qualities).length > 0) {
+    message += `*Quality Distribution:*\n`;
+    Object.entries(stats.qualities).forEach(([quality, count]) => {
+      const info = QUALITY_INFO[quality];
+      message += `• ${info?.icon || '📹'} ${quality}: ${count}\n`;
+    });
+    message += `\n`;
+  }
+  
+  message += `*System:*\n`;
+  message += `• Active Searches: ${stats.activeSearches}\n`;
+  message += `• Cached Searches: ${stats.cachedSearches || 0}\n\n`;
+  
+  message += `*Settings:*\n`;
+  message += `• Mode: ${stats.settings?.premiumEnabled ? '💎 Premium' : '🆓 Free'}\n`;
+  message += `• Download Cost: ₦${stats.settings?.downloadCost || 0}\n`;
+  message += `• Daily Limit: ${stats.settings?.rateLimitFree || 0}\n`;
+  message += `• Movies: ${stats.settings?.allowMovies ? '✅' : '❌'}\n`;
+  message += `• TV Shows: ${stats.settings?.allowTvShows ? '✅' : '❌'}\n\n`;
+  
+  message += `*Last Updated:* ${new Date(stats.lastUpdated).toLocaleString()}`;
+  
+  await reply(message);
 }
 
-async function handleMovieHistory(reply, downloaderInstance, sender) {
-  const history = await downloaderInstance.getUserHistory(sender, 10);
+async function handleMovieHistory(reply, downloader, sender) {
+  const history = await downloader.getUserHistory(sender, 15);
   
   if (history.length === 0) {
-    await reply(`📜 *Your Movie History*\n\nNo movies or episodes retrieved yet!`);
+    await reply(`📜 *Your Movie History*\n\nNo activity yet!`);
     return;
   }
 
-  const historyText = history.map((item, i) => 
-    `${i + 1}. ${item.title}\n   ${new Date(item.timestamp).toLocaleString()}`
-  ).join('\n\n');
+  let message = `📜 *Your Movie History*\n\n`;
+  
+  history.forEach((item, i) => {
+    const icon = item.type === 'search' ? '🔍' : '📥';
+    const date = new Date(item.timestamp).toLocaleDateString();
+    
+    if (item.type === 'search') {
+      message += `${i + 1}. ${icon} Search: "${item.query}"\n`;
+      message += `   ${date} • ${item.resultsCount || 0} results\n\n`;
+    } else {
+      message += `${i + 1}. ${icon} ${item.title}\n`;
+      message += `   ${date} • ${item.quality}`;
+      if (item.season && item.episode) {
+        message += ` • S${item.season}E${item.episode}`;
+      }
+      message += `\n\n`;
+    }
+  });
 
-  await reply(`📜 *Your Movie History*\n\n${historyText}\n\n_Showing last ${history.length} items_`);
+  message += `_Showing last ${history.length} activities_`;
+  
+  await reply(message);
 }
 
-// ===================================
-// ===== V3 PLUGIN EXPORT OBJECT =====
-// ===================================
+async function handleMovieFavorites(reply, downloader, sender, action, movieIdOrNumber) {
+  if (!action) {
+    const favorites = await downloader.getFavorites(sender);
+    
+    if (favorites.length === 0) {
+      await reply(`⭐ *Your Favorites*\n\nNo favorites yet!\n\nAdd favorites with:\n.movie fav add <number>`);
+      return;
+    }
+
+    let message = `⭐ *Your Favorites* (${favorites.length})\n\n`;
+    
+    favorites.forEach((fav, i) => {
+      const type = fav.subjectType === 8 ? '📺' : '🎬';
+      const year = fav.releaseDate ? new Date(fav.releaseDate).getFullYear() : 'N/A';
+      const rating = fav.imdbRating ? ` ⭐${fav.imdbRating}` : '';
+      
+      message += `${i + 1}. ${type} *${fav.title}*${rating}\n`;
+      message += `   Year: ${year}\n`;
+      message += `   Added: ${new Date(fav.addedAt).toLocaleDateString()}\n\n`;
+    });
+
+    message += `*Commands:*\n`;
+    message += `• Remove: .movie fav remove <number>`;
+    
+    await reply(message);
+    return;
+  }
+
+  if (action === 'add') {
+    if (!movieIdOrNumber) {
+      await reply(`❌ Usage: .movie fav add <number>\n\nExample: .movie fav add 1`);
+      return;
+    }
+
+    const result = await downloader.addFavorite(sender, movieIdOrNumber);
+    if (result.success) {
+      await reply(`✅ Added "${result.title}" to favorites!`);
+    } else {
+      await reply(`❌ ${result.error || 'Failed to add favorite'}`);
+    }
+    return;
+  }
+
+  if (action === 'remove') {
+    if (!movieIdOrNumber) {
+      await reply(`❌ Usage: .movie fav remove <number>`);
+      return;
+    }
+
+    const favorites = await downloader.getFavorites(sender);
+    const index = parseInt(movieIdOrNumber) - 1;
+    
+    if (index < 0 || index >= favorites.length) {
+      await reply(`❌ Invalid favorite number. You have ${favorites.length} favorites.`);
+      return;
+    }
+
+    const fav = favorites[index];
+    const success = await downloader.removeFavorite(sender, fav.movieId);
+    if (success) {
+      await reply(`✅ Removed "${fav.title}" from favorites!`);
+    } else {
+      await reply(`❌ Failed to remove favorite. Try again later.`);
+    }
+    return;
+  }
+
+  await reply(`❌ Invalid action. Use: add, remove, or no action to list favorites`);
+}
 
 export default {
   name: 'Movie Downloader',
-  version: '1.1.0', // Updated version
-  author: 'Your Name (Adapted from A. Macksyn)',
-  description: 'Search and get download links for movies & TV shows with economy integration',
+  version: '3.0.0',
+  author: 'Alex Macksyn',
+  description: 'Search and download movies and TV shows with numbered selection',
   category: 'media',
   
-  commands: ['movie', 'movieget', 'moviesettings', 'moviestats', 'moviehistory'],
-  aliases: [],
+  commands: ['movie', 'moviesettings', 'moviestats'],
+  aliases: ['mov', 'film'],
 
-  /**
-   * V3 init function.
-   */
   async init(context) {
     const { logger } = context;
-    await downloader.initialize();
+    await movieDownloader.initialize();
     
-    const settings = downloader.getSettings();
-    logger.info('✅ Movie Downloader V1.1 initialized');
+    const settings = movieDownloader.getSettings();
+    logger.info('✅ Movie Downloader V3 initialized');
     logger.info(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`);
+    logger.info(`Qualities: ${settings.allowedQualities.join(', ')}`);
+    logger.info(`Movies: ${settings.allowMovies ? '✅' : '❌'} | TV Shows: ${settings.allowTvShows ? '✅' : '❌'}`);
   },
 
-  /**
-   * V3 Main run function.
-   */
   async run(context) {
     const { msg: m, sock, config, bot, logger, command, args, text } = context;
 
     try {
-      // Ensure initialization
-      if (!downloader.settings) {
-        await downloader.initialize();
+      if (!movieDownloader.settings) {
+        await movieDownloader.initialize();
       }
 
       const sender = m.sender;
@@ -944,67 +1429,113 @@ export default {
       const isGroup = m.isGroup;
       
       if (!sender) {
-        logger.warn('⚠️ No sender found in message (from V3 context)');
+        logger.warn('⚠️ No sender found in message');
         return;
       }
       
-      const isAdmin = downloader.isAdmin(sender);
+      const isAdmin = movieDownloader.isAdmin(sender);
       
       const reply = async (text) => {
         if (typeof m.reply === 'function') {
-            await m.reply(text);
+          await m.reply(text);
         } else {
-            await sock.sendMessage(from, { text }, { quoted: m });
+          await sock.sendMessage(from, { text }, { quoted: m });
         }
       };
 
-      // --- Command Routing ---
-
-      // Admin Settings: .moviesettings
       if (command === 'moviesettings') {
         if (!isAdmin) {
           await reply('⛔ *Access Denied*\n\nThis command is only available to administrators.');
           return;
         }
-        await handleMovieSettings(reply, downloader, config, sender, args);
+        await handleMovieSettings(reply, movieDownloader, config, sender, args);
         return;
       }
 
-      // Search Command: .movie <query>
-      if (command === 'movie') {
-        const query = text; // 'text' is the full string after the command
-        await handleMovieSearch(reply, downloader, config, sock, m, sender, isGroup, from, query);
-        return;
-      }
-
-      // Get Links Command: .movieget <id> [season] [episode]
-      if (command === 'movieget') {
-        // 'args' is the array of arguments: [id, season, episode]
-        await handleMovieGet(reply, downloader, config, sock, m, sender, isGroup, bot, from, args);
-        return;
-      }
-
-      // Statistics Command: .moviestats
       if (command === 'moviestats') {
         if (!isAdmin) {
           await reply('⛔ *Access Denied*\n\nThis command is only available to administrators.');
           return;
         }
-        await handleMovieStats(reply, downloader);
+        await handleMovieStats(reply, movieDownloader);
         return;
       }
 
-      // User History Command: .moviehistory
-      if (command === 'moviehistory') {
-        await handleMovieHistory(reply, downloader, sender);
-        return;
+      if (command === 'movie' || command === 'mov' || command === 'film') {
+        const subCommand = args[0]?.toLowerCase();
+        
+        if (!subCommand) {
+          const remaining = await movieDownloader.getRemainingDownloads(sender);
+          const settings = movieDownloader.getSettings();
+          
+          await reply(
+            `*🎬 Movie Downloader*\n\n` +
+            `*Features:*\n` +
+            `🔍 Search movies and TV shows\n` +
+            `📥 Download with numbered selection\n` +
+            `⭐ Save favorites\n` +
+            `📜 View history\n\n` +
+            `*Your Status:*\n` +
+            `${settings.premiumEnabled ? `💎 Premium: ₦${settings.downloadCost}/download` : `🆓 Free: ${remaining}/${settings.rateLimitFree} remaining`}\n\n` +
+            `*Quick Start:*\n` +
+            `1️⃣ ${config.PREFIX}movie search Avatar\n` +
+            `2️⃣ ${config.PREFIX}movie dl 1 720p\n\n` +
+            `*All Commands:*\n` +
+            `• ${config.PREFIX}movie search <query>\n` +
+            `• ${config.PREFIX}movie info <number>\n` +
+            `• ${config.PREFIX}movie dl <number> <quality>\n` +
+            `• ${config.PREFIX}movie fav [add/remove] <number>\n` +
+            `• ${config.PREFIX}movie history\n\n` +
+            `_No more copying long IDs! Just use numbers 1-10 from search results_`
+          );
+          return;
+        }
+
+        if (subCommand === 'search' || subCommand === 's') {
+          const query = args.slice(1).join(' ');
+          await handleMovieSearch(reply, movieDownloader, config, sender, query);
+          return;
+        }
+
+        if (subCommand === 'info' || subCommand === 'i') {
+          const movieIdOrNumber = args[1];
+          await handleMovieInfo(reply, movieDownloader, config, movieIdOrNumber, sender);
+          return;
+        }
+
+        if (subCommand === 'dl' || subCommand === 'download' || subCommand === 'd') {
+          const downloadArgs = args.slice(1);
+          await handleMovieDownload(reply, movieDownloader, config, sock, m, sender, isGroup, downloadArgs);
+          return;
+        }
+
+        if (subCommand === 'fav' || subCommand === 'favorite' || subCommand === 'f') {
+          const action = args[1];
+          const movieIdOrNumber = args[2];
+          await handleMovieFavorites(reply, movieDownloader, sender, action, movieIdOrNumber);
+          return;
+        }
+
+        if (subCommand === 'history' || subCommand === 'h') {
+          await handleMovieHistory(reply, movieDownloader, sender);
+          return;
+        }
+
+        await reply(
+          `❌ Unknown subcommand: ${subCommand}\n\n` +
+          `Use ${config.PREFIX}movie to see all available commands`
+        );
       }
 
     } catch (error) {
       logger.error(error, `❌ ${this.name} plugin error`);
       try {
         const reply = (msg) => sock.sendMessage(m.from, { text: msg }, { quoted: m });
-        await reply(`❌ *Plugin Error*\n\nAn unexpected error occurred in the movie plugin. Please try again or contact admin.\n\n_Error: ${error.message}_`);
+        await reply(
+          `❌ *Plugin Error*\n\n` +
+          `An unexpected error occurred in the movie downloader. Please try again or contact admin.\n\n` +
+          `_Error: ${error.message}_`
+        );
       } catch (replyError) {
         logger.error(replyError, 'Failed to send error message');
       }
