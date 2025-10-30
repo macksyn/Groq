@@ -25,11 +25,83 @@ const DEFAULT_CONFIG = {
 // Link detection regex (comprehensive)
 const LINK_REGEX = /(https?:\/\/[^\s]+)|(www\.[^\s]+)|((whatsapp\.com|wa\.me|t\.me|telegram\.me|instagram\.com|facebook\.com|fb\.com|youtube\.com|youtu\.be|twitter\.com|x\.com|tiktok\.com)\/[^\s]+)/gi;
 
+// ==================== ADMIN CHECKING HELPERS ====================
+
+/**
+ * Check if user is bot admin (ENV or Database)
+ */
+async function checkIfBotAdmin(userId, config) {
+  const userPhone = userId.replace('@s.whatsapp.net', '');
+
+  // Check owner first
+  if (userPhone === config.OWNER_NUMBER) return true;
+
+  // Check ENV admins
+  const envAdmins = config.ADMIN_NUMBERS ? 
+    (Array.isArray(config.ADMIN_NUMBERS) ? config.ADMIN_NUMBERS : config.ADMIN_NUMBERS.split(','))
+      .map(num => String(num).trim().replace(/\D/g, ''))
+    : [];
+
+  if (envAdmins.includes(userPhone)) return true;
+
+  // Check database admins
+  try {
+    const dbAdmins = await getDbAdmins();
+    return dbAdmins.some(admin => admin.phone === userPhone);
+  } catch (error) {
+    console.error('Error checking DB admins:', error.message);
+    return false;
+  }
+}
+
+/**
+ * Get admins from database
+ */
+async function getDbAdmins() {
+  try {
+    return await PluginHelpers.safeDBOperation(async (db) => {
+      const collection = db.collection('bot_admins');
+      return await collection.find({}).toArray();
+    });
+  } catch (error) {
+    console.error('Failed to get DB admins:', error.message);
+    return [];
+  }
+}
+
+/**
+ * Simple helper to check if user can manage antilink settings
+ */
+async function canManageAntilink(userId, config, isGroup, groupId, sock) {
+  const userPhone = userId.replace('@s.whatsapp.net', '');
+
+  // Owner can always manage
+  if (userPhone === config.OWNER_NUMBER) return true;
+
+  // Check bot admins
+  const isBotAdmin = await checkIfBotAdmin(userId, config);
+  if (isBotAdmin) return true;
+
+  // Check if group admin (if in group)
+  if (isGroup) {
+    try {
+      const groupMeta = await sock.groupMetadata(groupId);
+      const participant = groupMeta.participants.find(p => p.id === userId);
+      return participant?.admin === 'admin' || participant?.admin === 'superadmin';
+    } catch (error) {
+      console.error('Error checking group admin:', error.message);
+      return false;
+    }
+  }
+
+  return false;
+}
+
 // ==================== V3 PLUGIN EXPORT ====================
 export default {
   name: 'Anti-Link Protection',
   version: '2.0.0',
-  author: 'Alex Macksyn',
+  author: 'Fresh Bot Framework',
   description: 'Enterprise-grade link protection system with persistent warnings, whitelist, and temporary permissions',
   category: 'moderation',
 
@@ -60,17 +132,9 @@ export default {
     const links = extractLinks(m.body);
     if (links.length === 0) return;
 
-    // Check exemptions
+    // Check exemptions - Use proper admin checking
     const isOwner = PermissionHelpers.isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net');
-
-    // Get bot admin status
-    let isBotAdmin = false;
-    try {
-      const admins = await PluginHelpers.getUserData('bot_admins') || [];
-      isBotAdmin = admins.some(admin => admin.phone === m.sender.replace('@s.whatsapp.net', ''));
-    } catch (e) {
-      // Fail silently
-    }
+    const isBotAdmin = await checkIfBotAdmin(m.sender, config);
 
     // Exempt owners and bot admins
     if (isOwner || (isBotAdmin && settings.exemptBotAdmins)) {
@@ -150,25 +214,10 @@ async function handleCommand(context) {
     return m.reply('❌ This command can only be used in groups.');
   }
 
-  // Permission check - Group Admin or Bot Admin/Owner
-  const isOwner = PermissionHelpers.isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net');
+  // Permission check - Use new helper function
+  const canManage = await canManageAntilink(m.sender, config, m.isGroup, m.chat, sock);
 
-  let isBotAdmin = false;
-  try {
-    const admins = await PluginHelpers.getUserData('bot_admins') || [];
-    isBotAdmin = admins.some(admin => admin.phone === m.sender.replace('@s.whatsapp.net', ''));
-  } catch (e) {
-    // Fail silently
-  }
-
-  let isGroupAdmin = false;
-  try {
-    isGroupAdmin = await m.isAdmin();
-  } catch (e) {
-    logger.warn('Failed to check group admin status', e.message);
-  }
-
-  if (!isOwner && !isBotAdmin && !isGroupAdmin) {
+  if (!canManage) {
     return m.reply('🔒 This command requires Group Admin or Bot Admin privileges.');
   }
 
@@ -957,8 +1006,8 @@ async function showHelp(m, sock, config) {
 ╰─────────────────────╯
 
 *Enable/Disable:*
-• ${prefix}antilink on - Enable Antilink protection
-• ${prefix}antilink off - Disable Antilink protection
+• ${prefix}antilink on - Enable protection
+• ${prefix}antilink off - Disable protection
 
 *Configuration:*
 • ${prefix}antilink config - View settings
