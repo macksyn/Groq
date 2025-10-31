@@ -1150,7 +1150,8 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
     // Data now contains { subject: {...}, resource: {...}, ... }
     const data = result.data.subject; // Main info is in 'subject'
     const resource = result.data.resource; // Resource info (quality, seasons)
-    const type = data.subjectType === 8 ? '📺 TV Show' : '🎬 Movie';
+    const isTvShow = downloader.isTvShow(data, resource); // <-- MODIFIED: Use new helper
+    const type = isTvShow ? '📺 TV Series' : '🎬 Movie'; // <-- MODIFIED: Use new boolean
     const year = data.releaseDate ? new Date(data.releaseDate).getFullYear() : 'N/A';
     const coverUrl = data.cover?.url; // Get cover URL
 
@@ -1179,18 +1180,18 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
       message += `*Duration:* ${hours}h ${mins}m\n`;
     }
 
-    if (resource && resource.seasons) {
-      if (data.subjectType === 8) { // TV Show
-        // Filter out seasons with se = 0 unless it's the only one
-        const validSeasons = resource.seasons.filter(s => s.se > 0);
-        const seasonCount = validSeasons.length > 0 ? validSeasons.length : resource.seasons.length;
-        const lastSeason = validSeasons.length > 0 ? validSeasons[validSeasons.length - 1] : resource.seasons[resource.seasons.length - 1];
+      if (resource && resource.seasons) {
+        if (isTvShow) { // TV Show // <-- MODIFIED: Use new boolean
+          // Filter out seasons with se = 0 unless it's the only one
+          const validSeasons = resource.seasons.filter(s => s.se > 0);
+          const seasonCount = validSeasons.length > 0 ? validSeasons.length : resource.seasons.length;
+          const lastSeason = validSeasons.length > 0 ? validSeasons[validSeasons.length - 1] : resource.seasons[resource.seasons.length - 1];
 
-        message += `*Seasons:* ${seasonCount}\n`;
-        if (lastSeason.maxEp > 0) {
-           message += `*Latest Episode:* S${String(lastSeason.se).padStart(2, '0')}E${String(lastSeason.maxEp).padStart(2, '0')}\n`;
+          message += `*Seasons:* ${seasonCount}\n`;
+          if (lastSeason.maxEp > 0) {
+             message += `*Latest Episode:* S${String(lastSeason.se).padStart(2, '0')}E${String(lastSeason.maxEp).padStart(2, '0')}\n`;
+          }
         }
-      }
 
       // Get available qualities (resolutions)
       const resolutions = resource.seasons[0]?.resolutions;
@@ -1210,7 +1211,7 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
 
     message += `\n*📥 Download (Reply to this message):*\n`;
     // Provide examples of how to reply
-    if (data.subjectType === 8) { // TV Show
+      if (isTvShow) { // TV Show
       message += `Example: _${config.PREFIX}movie download S01 E01 HD_\n`;
     } else { // Movie
       message += `Example: _${config.PREFIX}movie download HD_\n`;
