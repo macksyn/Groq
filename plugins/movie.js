@@ -1119,14 +1119,10 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
       // --- END MODIFICATION ---
     });
 
-    message += `*📥 Download Commands:*\n\n`;
-    message += `*For Movies:*\n`;
-    message += `${config.PREFIX}movie dl <number> <quality>\n`;
-    message += `Example: ${config.PREFIX}movie dl 1 HD\n\n`;
-
-    message += `*For TV Shows:*\n`;
-    message += `${config.PREFIX}movie dl <number> S<season> E<episode> <quality>\n`;
-    message += `Example: ${config.PREFIX}movie dl 3 S01 E08 FHD\n\n`;
+    message += `*📥 Select Your Prefered Choice!*\n\n`;
+    message += `*Reply with:*\n`;
+    message += `${config.PREFIX}movie number <number>\n`;
+    message += `Example: ${config.PREFIX}movie number 1\n\n`;
 
     message += `*📊 Available Qualities:*\n`;
     settings.allowedQualities.forEach(q => {
@@ -1146,8 +1142,8 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
     await reply(
       `*ℹ️ Movie Info*\n\n` +
       `Get detailed information about a movie or TV show\n\n` +
-      `*Usage:* ${config.PREFIX}movie info <number>\n` +
-      `*Example:* ${config.PREFIX}movie info 1`
+      `*Usage:* ${config.PREFIX}movie number <number>\n` +
+      `*Example:* ${config.PREFIX}movie number 1`
     );
     return;
   }
@@ -1180,7 +1176,7 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
     const data = result.data.subject; // Main info is in 'subject'
     const resource = result.data.resource; // Resource info (quality, seasons)
     const isTvShow = downloader.isTvShow(data, resource); // <-- MODIFIED: Use new helper
-    const type = isTvShow ? '📺 TV Show' : '🎬 Movie'; // <-- MODIFIED: Use new boolean
+    const type = isTvShow ? '📺 TV Series' : '🎬 Movie'; // <-- MODIFIED: Use new boolean
     const year = data.releaseDate ? new Date(data.releaseDate).getFullYear() : 'N/A';
     const coverUrl = data.cover?.url; // Get cover URL
 
@@ -1235,20 +1231,20 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
     }
 
     if (data.description) {
-      message += `\n*Synopsis:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
+      message += `\n*Story:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
     }
 
     message += `\n*📥 Download (Reply to this message):*\n`;
     // Provide examples of how to reply
     if (isTvShow) { // TV Show // <-- MODIFIED: Use new boolean
-      message += `Example: ${config.PREFIX}movie dl S01 E01 HD\n`;
+      message += `Example: ${config.PREFIX}movie download S01 E01 HD\n`;
     } else { // Movie
-      message += `Example: ${config.PREFIX}movie dl HD\n`;
+      message += `Example: ${config.PREFIX}movie download HD\n`;
     }
 
     // --- NEW LOGIC ---
     // Add the permanent subjectId as a hidden reference tag
-    message += `\n\n[Ref-ID: ${movieId}]`;
+    message += `\n\n_[Ref-ID: ${movieId}]_`;
     // --- END NEW LOGIC ---
 
     if (coverUrl && sock && m) {
@@ -1303,9 +1299,10 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       `Download movies and TV shows in multiple qualities\n\n` +
       `*Usage (Option 1):*\n` +
       `1. ${config.PREFIX}movie search <name>\n` +
-      `2. ${config.PREFIX}movie dl <number> <quality>\n\n` +
+      `2. Choose you options. ${config.PREFIX}movie number <number>\n\n` +
+      `3. *Reply* to the info message: E.g ${config.PREFIX}movie download SD\n\n` +
       `*Usage (Option 2):*\n` +
-      `1. ${config.PREFIX}movie info <number>\n` +
+      `1. ${config.PREFIX}movie number <number>\n` +
       `2. *Reply* to the info message:\n` +
       `   ${config.PREFIX}movie dl <S/E> <quality>\n\n` +
       `*Examples:*\n` +
@@ -1371,8 +1368,7 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       `${result.season && result.episode ? `Season ${result.season} • Episode ${result.episode}\n` : ''}` + // <-- MODIFIED
       `Quality: ${result.qualityLabel} (${result.quality})\n` +
       `Size: ${sizeMB}MB\n\n` +
-      `⏳ Please be patient, this may take a few moments...\n` +
-      `_Do not send another command while downloading_`
+      `⏳ _Please be patient, this may take a few minutes..._\n`
     );
 
     let caption = `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n\n`;
