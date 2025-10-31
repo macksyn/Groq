@@ -209,6 +209,30 @@ class MovieDownloader {
     return session.searchResults[index];
   }
 
+  // --- NEW HELPER FUNCTION ---
+  // Centralized logic to determine if a title is a TV Show
+  isTvShow(subject, resource) {
+    // 1. Trust the API's subjectType if it's 8
+    if (subject.subjectType === 8) {
+      return true;
+    }
+
+    // 2. Check resource.seasons structure as a fallback
+    if (resource && resource.seasons && resource.seasons.length > 0) {
+      const validSeasons = resource.seasons.filter(s => s.se > 0);
+      // It's a TV show if:
+      // 1. There are any seasons with se > 0
+      // 2. OR, there's more than 1 season entry (e.g., Season 0 and Season 1)
+      if (validSeasons.length > 0 || resource.seasons.length > 1) {
+        return true;
+      }
+    }
+
+    // 3. Default to false (it's a movie)
+    return false;
+  }
+  // --- END NEW HELPER FUNCTION ---
+
   async getUserUsage(userId) {
     try {
       return await safeOperation(async (db, collection) => {
@@ -561,7 +585,8 @@ class MovieDownloader {
 
       // Data now contains { subject: {...}, resource: {...} }
       const movieData = infoResult.data.subject;
-      const isTvShow = movieData.subjectType === 8;
+      const resourceData = infoResult.data.resource; // Get resource data
+      const isTvShow = this.isTvShow(movieData, resourceData); // <-- MODIFIED: Use new helper
 
       if (isTvShow && (!season || !episode)) {
         // If it's a TV show and no S/E info, *and* it came from a session number, show error
@@ -624,7 +649,7 @@ class MovieDownloader {
         qualityLabel: QUALITY_INFO[source.quality]?.label || source.quality,
         size: source.size,
         format: source.format,
-        isTvShow,
+        isTvShow, // <-- MODIFIED: Pass the correct boolean
         season,
         episode
       };
@@ -1095,9 +1120,13 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
     });
 
     message += `*📥 Download Commands:*\n\n`;
-    message += `*To select your choice...*\n`;
-    message += `${config.PREFIX}movie number <number>\n`;
-    message += `Example: ${config.PREFIX}movie number 1\n\n`;
+    message += `*For Movies:*\n`;
+    message += `${config.PREFIX}movie dl <number> <quality>\n`;
+    message += `Example: ${config.PREFIX}movie dl 1 HD\n\n`;
+
+    message += `*For TV Shows:*\n`;
+    message += `${config.PREFIX}movie dl <number> S<season> E<episode> <quality>\n`;
+    message += `Example: ${config.PREFIX}movie dl 3 S01 E08 FHD\n\n`;
 
     message += `*📊 Available Qualities:*\n`;
     settings.allowedQualities.forEach(q => {
@@ -1105,7 +1134,7 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
       message += `${info.emoji} *${info.label}* - ${info.displayLabel}\n`;
     });
 
-    message += `\n💡 _Tip: Use '.movie number <number>' to select your choice from the list._`;
+    message += `\n💡 _Tip: Use '.movie info <number>' to see details before downloading_`;
     message += `\n⏱️ _Results valid for 30 minutes_`;
 
     await reply(message);
@@ -1151,7 +1180,7 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
     const data = result.data.subject; // Main info is in 'subject'
     const resource = result.data.resource; // Resource info (quality, seasons)
     const isTvShow = downloader.isTvShow(data, resource); // <-- MODIFIED: Use new helper
-    const type = isTvShow ? '📺 TV Series' : '🎬 Movie'; // <-- MODIFIED: Use new boolean
+    const type = isTvShow ? '📺 TV Show' : '🎬 Movie'; // <-- MODIFIED: Use new boolean
     const year = data.releaseDate ? new Date(data.releaseDate).getFullYear() : 'N/A';
     const coverUrl = data.cover?.url; // Get cover URL
 
@@ -1180,18 +1209,18 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
       message += `*Duration:* ${hours}h ${mins}m\n`;
     }
 
-      if (resource && resource.seasons) {
-        if (isTvShow) { // TV Show // <-- MODIFIED: Use new boolean
-          // Filter out seasons with se = 0 unless it's the only one
-          const validSeasons = resource.seasons.filter(s => s.se > 0);
-          const seasonCount = validSeasons.length > 0 ? validSeasons.length : resource.seasons.length;
-          const lastSeason = validSeasons.length > 0 ? validSeasons[validSeasons.length - 1] : resource.seasons[resource.seasons.length - 1];
+    if (resource && resource.seasons) {
+      if (isTvShow) { // TV Show // <-- MODIFIED: Use new boolean
+        // Filter out seasons with se = 0 unless it's the only one
+        const validSeasons = resource.seasons.filter(s => s.se > 0);
+        const seasonCount = validSeasons.length > 0 ? validSeasons.length : resource.seasons.length;
+        const lastSeason = validSeasons.length > 0 ? validSeasons[validSeasons.length - 1] : resource.seasons[resource.seasons.length - 1];
 
-          message += `*Seasons:* ${seasonCount}\n`;
-          if (lastSeason.maxEp > 0) {
-             message += `*Latest Episode:* S${String(lastSeason.se).padStart(2, '0')}E${String(lastSeason.maxEp).padStart(2, '0')}\n`;
-          }
+        message += `*Seasons:* ${seasonCount}\n`;
+        if (lastSeason.maxEp > 0) {
+           message += `*Latest Episode:* S${String(lastSeason.se).padStart(2, '0')}E${String(lastSeason.maxEp).padStart(2, '0')}\n`;
         }
+      }
 
       // Get available qualities (resolutions)
       const resolutions = resource.seasons[0]?.resolutions;
@@ -1206,15 +1235,15 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
     }
 
     if (data.description) {
-      message += `\n*Story:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
+      message += `\n*Synopsis:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
     }
 
     message += `\n*📥 Download (Reply to this message):*\n`;
     // Provide examples of how to reply
-      if (isTvShow) { // TV Show
-      message += `Example: _${config.PREFIX}movie download S01 E01 HD_\n`;
+    if (isTvShow) { // TV Show // <-- MODIFIED: Use new boolean
+      message += `Example: ${config.PREFIX}movie dl S01 E01 HD\n`;
     } else { // Movie
-      message += `Example: _${config.PREFIX}movie download HD_\n`;
+      message += `Example: ${config.PREFIX}movie dl HD\n`;
     }
 
     // --- NEW LOGIC ---
@@ -1342,7 +1371,8 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       `${result.season && result.episode ? `Season ${result.season} • Episode ${result.episode}\n` : ''}` + // <-- MODIFIED
       `Quality: ${result.qualityLabel} (${result.quality})\n` +
       `Size: ${sizeMB}MB\n\n` +
-      `⏳ _Please be patient, this may take a few minutes..._` 
+      `⏳ Please be patient, this may take a few moments...\n` +
+      `_Do not send another command while downloading_`
     );
 
     let caption = `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n\n`;
@@ -1688,5 +1718,3 @@ export default {
     }
   }
 };
-
-
