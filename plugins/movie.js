@@ -366,7 +366,7 @@ class MovieDownloader {
         {
           timeout: API_CONFIG.timeout,
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.G (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
           }
         }
       );
@@ -430,8 +430,6 @@ class MovieDownloader {
         throw new Error(response.data.message || 'Failed to get movie info');
       }
 
-      // --- MODIFIED ---
-      // Return the entire 'results' object, not just 'subject'
       const resultsData = response.data.results;
       if (!resultsData || !resultsData.subject) {
         throw new Error('Invalid movie data received');
@@ -439,7 +437,6 @@ class MovieDownloader {
 
       console.log(chalk.green(`✅ Got info for: ${resultsData.subject.title}`));
       return { success: true, data: resultsData };
-      // --- END MODIFICATION ---
 
     } catch (error) {
       console.error(chalk.red('Movie info error:'), error.message);
@@ -519,6 +516,11 @@ class MovieDownloader {
         console.log(chalk.cyan(`📌 Using movie #${movieIdOrNumber}: ${movieFromSession.title}`));
       }
 
+      // If movieIdOrNumber is not a session number, it's assumed to be the full subjectId
+      // (e.g., from a quote reply)
+      movieId = movieFromSession ? movieFromSession.subjectId : movieIdOrNumber;
+
+
       // Normalize quality input (SD/HD/FHD to 360p/480p/720p)
       const normalizedQuality = QUALITY_ALIASES[quality.toLowerCase()];
       if (!normalizedQuality) {
@@ -562,9 +564,14 @@ class MovieDownloader {
       const isTvShow = movieData.subjectType === 8;
 
       if (isTvShow && (!season || !episode)) {
-        return { 
-          error: `📺 *TV Show Detected*\n\nPlease specify season and episode.\n\nUsage: .movie dl ${movieIdOrNumber} S<season> E<episode> <quality>\nExample: .movie dl ${movieIdOrNumber} S01 E05 HD` 
-        };
+        // If it's a TV show and no S/E info, *and* it came from a session number, show error
+        if (movieFromSession) {
+          return { 
+            error: `📺 *TV Show Detected*\n\nPlease specify season and episode.\n\nUsage: .movie dl ${movieIdOrNumber} S<season> E<episode> <quality>\nExample: .movie dl ${movieIdOrNumber} S01 E05 HD` 
+          };
+        }
+        // If it came from a quote, the S/E info might be in the command
+        // This check is now handled in handleMovieDownload before calling this
       }
 
       if (isTvShow && !settings.allowTvShows) {
@@ -1081,7 +1088,10 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
 
       message += `*${index + 1}. ${item.title}* ${type}\n`;
       message += `   Year: ${year} ${rating}\n`;
-      message += `\n`;
+      // --- MODIFICATION ---
+      // Add info command example for each result
+      message += `   Info: ${config.PREFIX}movie info ${index + 1}\n\n`;
+      // --- END MODIFICATION ---
     });
 
     message += `*📥 Download Commands:*\n\n`;
@@ -1099,14 +1109,13 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
       message += `${info.emoji} *${info.label}* - ${info.displayLabel}\n`;
     });
 
-    message += `\n💡 _Tip: Use S01-S99 and E01-E99 format for TV shows_`;
+    message += `\n💡 _Tip: Use '.movie info <number>' to see details before downloading_`;
     message += `\n⏱️ _Results valid for 30 minutes_`;
 
     await reply(message);
   }
 }
 
-// --- MODIFIED FUNCTION ---
 async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sender, sock, m) {
   if (!movieIdOrNumber) {
     await reply(
@@ -1128,7 +1137,11 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
       return;
     }
     movieId = movieFromSession.subjectId;
+  } else {
+    // It's not a session number, assume it's a full ID
+    movieId = movieIdOrNumber;
   }
+
 
   const result = await downloader.getMovieInfo(movieId);
 
@@ -1170,7 +1183,6 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
       message += `*Duration:* ${hours}h ${mins}m\n`;
     }
 
-    // --- NEW LOGIC ---
     if (resource && resource.seasons) {
       if (data.subjectType === 8) { // TV Show
         // Filter out seasons with se = 0 unless it's the only one
@@ -1195,32 +1207,24 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
         message += `*Available Qualities:* ${qualities}\n`;
       }
     }
-    // --- END NEW LOGIC ---
 
     if (data.description) {
       message += `\n*Synopsis:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
     }
 
-    message += `\n*📥 Download:*\n`;
-    if (movieFromSession) {
-      const number = movieIdOrNumber;
-      message += `${config.PREFIX}movie dl ${number} <quality>\n\n`;
-      message += `*Examples:*\n`;
-      message += `${config.PREFIX}movie dl ${number} HD\n`;
-      if (data.subjectType === 8) {
-         // Find first valid season (se > 0)
-         const firstSeason = resource?.seasons?.find(s => s.se > 0);
-         if(firstSeason) {
-           message += `${config.PREFIX}movie dl ${number} S${String(firstSeason.se).padStart(2, '0')} E01 HD\n`;
-         } else {
-            message += `${config.PREFIX}movie dl ${number} S01 E01 HD\n`;
-         }
-      }
-    } else {
-      message += `Search for this movie to download easily!`;
+    message += `\n*📥 Download (Reply to this message):*\n`;
+    // Provide examples of how to reply
+    if (data.subjectType === 8) { // TV Show
+      message += `Example: ${config.PREFIX}movie dl S01 E01 HD\n`;
+    } else { // Movie
+      message += `Example: ${config.PREFIX}movie dl HD\n`;
     }
 
-    // --- NEW SEND LOGIC ---
+    // --- NEW LOGIC ---
+    // Add the permanent subjectId as a hidden reference tag
+    message += `\n\n[Ref-ID: ${movieId}]`;
+    // --- END NEW LOGIC ---
+
     if (coverUrl && sock && m) {
       // Send image with caption
       try {
@@ -1238,45 +1242,69 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
       // Fallback to text-only reply
       await reply(message);
     }
-    // --- END NEW SEND LOGIC ---
   }
 }
-// --- END MODIFIED FUNCTION ---
 
+// --- MODIFIED FUNCTION ---
 async function handleMovieDownload(reply, downloader, config, sock, m, sender, isGroup, args) {
   const settings = downloader.getSettings();
+  let movieIdOrNumber = args[0]; // May be undefined, '1', or 'S01'
 
-  if (args.length === 0) {
+  // --- NEW QUOTE LOGIC ---
+  // Check if first arg is missing OR looks like a season (e.g., "S01")
+  const isMissingNumber = !movieIdOrNumber || /^S\d+$/i.test(movieIdOrNumber);
+
+  if (isMissingNumber && m.quoted) {
+    const caption = m.quoted.text;
+    if (caption) {
+      // Look for our hidden [Ref-ID: ...] tag
+      const match = caption.match(/\[Ref-ID: (\S+)\]/);
+      if (match && match[1]) {
+        const extractedMovieId = match[1];
+        args.unshift(extractedMovieId); // Add the found ID to the start of args
+        movieIdOrNumber = extractedMovieId; // Update our local variable
+        console.log(chalk.cyan(`📥 Download triggered from quote. Found ID: ${extractedMovieId}`));
+      }
+    }
+  }
+  // --- END NEW QUOTE LOGIC ---
+
+  // This check now correctly catches cases where user types just ".movie dl"
+  // and is NOT replying to a valid info message.
+  if (args.length === 0 || !movieIdOrNumber) {
     await reply(
       `*📥 Movie Download*\n\n` +
       `Download movies and TV shows in multiple qualities\n\n` +
-      `*For Movies:*\n` +
-      `${config.PREFIX}movie dl <number> <quality>\n` +
-      `Example: ${config.PREFIX}movie dl 1 HD\n\n` +
-      `*For TV Shows:*\n` +
-      `${config.PREFIX}movie dl <number> S<season> E<episode> <quality>\n` +
-      `Example: ${config.PREFIX}movie dl 3 S01 E08 FHD\n\n` +
+      `*Usage (Option 1):*\n` +
+      `1. ${config.PREFIX}movie search <name>\n` +
+      `2. ${config.PREFIX}movie dl <number> <quality>\n\n` +
+      `*Usage (Option 2):*\n` +
+      `1. ${config.PREFIX}movie info <number>\n` +
+      `2. *Reply* to the info message:\n` +
+      `   ${config.PREFIX}movie dl <S/E> <quality>\n\n` +
+      `*Examples:*\n` +
+      `${config.PREFIX}movie dl 1 HD (for movies)\n` +
+      `${config.PREFIX}movie dl 3 S01 E08 FHD (for TV)\n` +
+      `(Replying) ${config.PREFIX}movie dl S01 E08 FHD\n\n` +
       `*📊 Available Qualities:*\n` +
       `${settings.allowedQualities.map(q => {
         const info = QUALITY_INFO[q];
         return `${info.emoji} *${info.label}* - ${info.displayLabel}`;
-      }).join('\n')}\n\n` +
-      `${settings.premiumEnabled ? `💎 Cost: ₦${settings.downloadCost} per download` : `🆓 Free downloads available`}\n\n` +
-      `💡 _First search for movies, then use the number to download_`
+      }).join('\n')}\n`
     );
     return;
   }
 
-  const movieIdOrNumber = args[0];
+  // --- ORIGINAL PARSING LOGIC (NOW WORKS WITH QUOTES) ---
+  // At this point, movieIdOrNumber is args[0] ('1' or '5099...848')
   let quality = settings.defaultQuality;
   let season = null;
   let episode = null;
 
-  // Parse arguments for TV shows: "dl 1 S01 E08 HD" or "dl 1 HD" for movies
+  // We parse args starting from index 1 (args[0] is the ID)
   if (args.length >= 2) {
-    // Check if second arg is season (S01, S1, etc.)
     if (/^S\d+$/i.test(args[1])) {
-      // TV Show format: dl 1 S01 E08 HD
+      // TV Show format: dl <id> S01 E08 HD
       season = parseInt(args[1].substring(1));
 
       if (args.length >= 3 && /^E\d+$/i.test(args[2])) {
@@ -1286,11 +1314,13 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       if (args.length >= 4) {
         quality = args[3];
       }
+      // If quality is missing but S/E are present, it uses defaultQuality
     } else {
-      // Movie format: dl 1 HD
+      // Movie format: dl <id> HD
       quality = args[1];
     }
   }
+  // --- END ORIGINAL PARSING LOGIC ---
 
   await sock.sendMessage(m.from, { react: { text: '⏳', key: m.key } });
 
@@ -1369,6 +1399,7 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     }
   }
 }
+// --- END MODIFIED FUNCTION ---
 
 async function handleMovieStats(reply, downloader) {
   const stats = await downloader.getStats();
@@ -1597,11 +1628,12 @@ export default {
             `${settings.premiumEnabled ? `💎 Premium: ₦${settings.downloadCost}/download` : `🆓 Free: ${remaining}/${settings.rateLimitFree} remaining`}\n\n` +
             `*Quick Start:*\n` +
             `1️⃣ ${config.PREFIX}movie search Avatar\n` +
-            `2️⃣ ${config.PREFIX}movie dl 1 720p\n\n` +
+            `2️⃣ ${config.PREFIX}movie info 1\n` +
+            `3️⃣ *Reply* to the info: ${config.PREFIX}movie dl HD\n\n` +
             `*All Commands:*\n` +
             `• ${config.PREFIX}movie search <query>\n` +
-            `• ${config.PREFIX}movie number <number>\n` +
-            `• ${config.PREFIX}movie dl <number> <quality>\n` +
+            `• ${config.PREFIX}movie info <number>\n` +
+            `• ${config.PREFIX}movie dl ... (use 'info' first)\n` +
             `• ${config.PREFIX}movie fav [add/remove] <number>\n` +
             `• ${config.PREFIX}movie history\n\n` +
             `_Our Very Own Netflix. Simple, Fast and Easy._`
@@ -1617,10 +1649,7 @@ export default {
 
         if (subCommand === 'info' || subCommand === 'number') {
           const movieIdOrNumber = args[1];
-          // --- MODIFIED ---
-          // Pass sock and m to the handler
           await handleMovieInfo(reply, movieDownloader, config, movieIdOrNumber, sender, sock, m);
-          // --- END MODIFICATION ---
           return;
         }
 
@@ -1663,3 +1692,4 @@ export default {
     }
   }
 };
+
