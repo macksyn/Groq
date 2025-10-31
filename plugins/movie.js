@@ -1095,13 +1095,9 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
     });
 
     message += `*📥 Download Commands:*\n\n`;
-    message += `*For Movies:*\n`;
-    message += `${config.PREFIX}movie dl <number> <quality>\n`;
-    message += `Example: ${config.PREFIX}movie dl 1 HD\n\n`;
-
-    message += `*For TV Shows:*\n`;
-    message += `${config.PREFIX}movie dl <number> S<season> E<episode> <quality>\n`;
-    message += `Example: ${config.PREFIX}movie dl 3 S01 E08 FHD\n\n`;
+    message += `*To select your choice...*\n`;
+    message += `${config.PREFIX}movie number <number>\n`;
+    message += `Example: ${config.PREFIX}movie number 1\n\n`;
 
     message += `*📊 Available Qualities:*\n`;
     settings.allowedQualities.forEach(q => {
@@ -1109,7 +1105,7 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
       message += `${info.emoji} *${info.label}* - ${info.displayLabel}\n`;
     });
 
-    message += `\n💡 _Tip: Use '.movie info <number>' to see details before downloading_`;
+    message += `\n💡 _Tip: Use '.movie number <number>' to select your choice from the list._`;
     message += `\n⏱️ _Results valid for 30 minutes_`;
 
     await reply(message);
@@ -1209,15 +1205,15 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
     }
 
     if (data.description) {
-      message += `\n*Synopsis:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
+      message += `\n*Story:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
     }
 
     message += `\n*📥 Download (Reply to this message):*\n`;
     // Provide examples of how to reply
     if (data.subjectType === 8) { // TV Show
-      message += `Example: ${config.PREFIX}movie dl S01 E01 HD\n`;
+      message += `Example: _${config.PREFIX}movie download S01 E01 HD_\n`;
     } else { // Movie
-      message += `Example: ${config.PREFIX}movie dl HD\n`;
+      message += `Example: _${config.PREFIX}movie download HD_\n`;
     }
 
     // --- NEW LOGIC ---
@@ -1342,16 +1338,15 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     const downloadingMsg = await reply(
       `⏬ *Downloading Movie...*\n\n` +
       `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n` +
-      `${result.isTvShow ? `Season ${result.season} • Episode ${result.episode}\n` : ''}` +
+      `${result.season && result.episode ? `Season ${result.season} • Episode ${result.episode}\n` : ''}` + // <-- MODIFIED
       `Quality: ${result.qualityLabel} (${result.quality})\n` +
       `Size: ${sizeMB}MB\n\n` +
-      `⏳ Please be patient, this may take a few moments...\n` +
-      `_Do not send another command while downloading_`
+      `⏳ _Please be patient, this may take a few minutes..._` 
     );
 
     let caption = `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n\n`;
 
-    if (result.isTvShow) {
+    if (result.season && result.episode) { // <-- MODIFIED
       caption += `*Season:* ${result.season} | *Episode:* ${result.episode}\n`;
     }
 
@@ -1692,4 +1687,5 @@ export default {
     }
   }
 };
+
 
