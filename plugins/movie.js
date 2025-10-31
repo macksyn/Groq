@@ -1215,37 +1215,10 @@ async function handleMovieInfo(reply, downloader, config, sock, m, movieIdOrNumb
     // Send image with caption
     if (coverUrl) {
       try {
-        const sentMsg = await sock.sendMessage(m.from, {
+        await sock.sendMessage(m.from, {
           image: { url: coverUrl },
-          caption: message,
-          contextInfo: {
-            externalAdReply: {
-              title: data.title,
-              body: `${type} • ${year}`,
-              thumbnailUrl: coverUrl,
-              sourceUrl: `movie://${data.subjectId || movieId}`,
-              mediaType: 1
-            }
-          }
+          caption: message
         }, { quoted: m });
-
-        // Store the movie ID reference with the sent message ID for quoted replies
-        if (sentMsg && sentMsg.key) {
-          const messageRef = {
-            movieId: data.subjectId || movieId,
-            title: data.title,
-            isTvShow: data.subjectType === 8,
-            messageId: sentMsg.key.id,
-            timestamp: Date.now()
-          };
-
-          // Store in user session with message reference
-          const session = downloader.getUserSession(sender);
-          if (session) {
-            session.lastMovieInfo = messageRef;
-            downloader.userSessions.set(sender, session);
-          }
-        }
       } catch (imageError) {
         console.error(chalk.red('Error sending cover image:'), imageError.message);
         // Fallback to text-only if image fails
