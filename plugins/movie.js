@@ -1102,7 +1102,7 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
   }
 }
 
-async function handleMovieInfo(reply, downloader, config, sock, m, movieIdOrNumber, sender) {
+async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sender) {
   if (!movieIdOrNumber) {
     await reply(
       `*ℹ️ Movie Info*\n\n` +
@@ -1136,15 +1136,14 @@ async function handleMovieInfo(reply, downloader, config, sock, m, movieIdOrNumb
     const data = result.data;
     const type = data.subjectType === 8 ? '📺 TV Show' : '🎬 Movie';
     const year = data.releaseDate ? new Date(data.releaseDate).getFullYear() : 'N/A';
-    const isTvShow = data.subjectType === 8;
 
     let message = `${type} *${data.title}*\n\n`;
     message += `*Year:* ${year}\n`;
-
+    
     if (data.countryName) {
       message += `*Country:* ${data.countryName}\n`;
     }
-
+    
     if (data.imdbRatingValue) {
       message += `*Rating:* ⭐ ${data.imdbRatingValue}/10`;
       if (data.imdbRatingCount) {
@@ -1152,43 +1151,17 @@ async function handleMovieInfo(reply, downloader, config, sock, m, movieIdOrNumb
       }
       message += `\n`;
     }
-
+    
     if (data.genre) {
       message += `*Genre:* ${data.genre}\n`;
     }
-
+    
     if (data.duration) {
       const hours = Math.floor(data.duration / 3600);
       const mins = Math.floor((data.duration % 3600) / 60);
       message += `*Duration:* ${hours}h ${mins}m\n`;
     }
-
-    // Display available qualities
-    if (data.resource && data.resource.seasons && data.resource.seasons.length > 0) {
-      const season = data.resource.seasons[0];
-      const resolutions = season.resolutions || [];
-
-      if (resolutions.length > 0) {
-        message += `*Available Qualities:* `;
-        const qualities = resolutions.map(r => {
-          const qualityKey = `${r.resolution}p`;
-          const qualityInfo = QUALITY_INFO[qualityKey];
-          return qualityInfo ? `${qualityInfo.emoji} ${qualityInfo.label}` : `${r.resolution}p`;
-        }).join(', ');
-        message += `${qualities}\n`;
-      }
-
-      // For TV shows, display seasons and episodes info
-      if (isTvShow && data.resource.seasons.length > 0) {
-        message += `\n*📺 Seasons & Episodes:*\n`;
-        data.resource.seasons.forEach((s, idx) => {
-          if (s.se > 0) { // Only show seasons with season number
-            message += `• Season ${s.se}: ${s.maxEp || 'Unknown'} episodes\n`;
-          }
-        });
-      }
-    }
-
+    
     if (data.description) {
       message += `\n*Synopsis:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
     }
@@ -1196,38 +1169,17 @@ async function handleMovieInfo(reply, downloader, config, sock, m, movieIdOrNumb
     message += `\n*📥 Download:*\n`;
     if (movieFromSession) {
       const number = movieIdOrNumber;
-      if (isTvShow) {
-        message += `${config.PREFIX}movie dl ${number} S<season> E<episode> <quality>\n\n`;
-        message += `*Example:*\n`;
-        message += `${config.PREFIX}movie dl ${number} S01 E01 HD\n`;
-      } else {
-        message += `${config.PREFIX}movie dl ${number} <quality>\n\n`;
-        message += `*Example:*\n`;
-        message += `${config.PREFIX}movie dl ${number} HD\n`;
+      message += `${config.PREFIX}movie dl ${number} <quality>\n\n`;
+      message += `*Examples:*\n`;
+      message += `${config.PREFIX}movie dl ${number} 720p\n`;
+      if (data.subjectType === 8) {
+        message += `${config.PREFIX}movie dl ${number} 480p 1 1\n`;
       }
     } else {
       message += `Search for this movie to download easily!`;
     }
 
-    // Get cover image URL (prefer cover.url, fallback to thumbnail or stills)
-    const coverUrl = data.cover?.url || data.thumbnail || data.stills?.url;
-
-    // Send image with caption
-    if (coverUrl) {
-      try {
-        await sock.sendMessage(m.from, {
-          image: { url: coverUrl },
-          caption: message
-        }, { quoted: m });
-      } catch (imageError) {
-        console.error(chalk.red('Error sending cover image:'), imageError.message);
-        // Fallback to text-only if image fails
-        await reply(message);
-      }
-    } else {
-      // No image available, send text only
-      await reply(message);
-    }
+    await reply(message);
   }
 }
 
