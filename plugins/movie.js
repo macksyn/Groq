@@ -1275,7 +1275,7 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       caption += `🆓 *Remaining:* ${remaining}/${settings.rateLimitFree}\n`;
     }
     
-    caption += `\n✅ *Download Complete!*\n_⚡ Powered by Groq_`;
+    caption += `\n✅ *Download Complete!*\n⚡ Powered by GiftedTech API`;
 
     try {
       // Send as video for better WhatsApp compatibility
