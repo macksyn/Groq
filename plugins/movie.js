@@ -32,7 +32,7 @@ const DEFAULT_SETTINGS = {
 
 const API_CONFIG = {
   baseUrl: 'https://movieapi.giftedtech.co.ke/api',
-  timeout: 30000,
+  timeout: 60000,
   endpoints: {
     search: '/search',
     info: '/info',
