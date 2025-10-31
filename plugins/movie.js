@@ -130,7 +130,7 @@ class MovieDownloader {
   }
 
   isAdmin(userId) {
-    const adminNumber = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER;
+    const adminNumber = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBERS;
     if (!adminNumber) return false;
     
     const userNumber = userId.split('@')[0];
@@ -1540,11 +1540,11 @@ export default {
             `2️⃣ ${config.PREFIX}movie dl 1 720p\n\n` +
             `*All Commands:*\n` +
             `• ${config.PREFIX}movie search <query>\n` +
-            `• ${config.PREFIX}movie info <number>\n` +
+            `• ${config.PREFIX}movie number <number>\n` +
             `• ${config.PREFIX}movie dl <number> <quality>\n` +
             `• ${config.PREFIX}movie fav [add/remove] <number>\n` +
             `• ${config.PREFIX}movie history\n\n` +
-            `_No more copying long IDs! Just use numbers 1-10 from search results_`
+            `_Our Very Own Netflix. Simple, Fast and Easy._`
           );
           return;
         }
@@ -1555,7 +1555,7 @@ export default {
           return;
         }
 
-        if (subCommand === 'info' || subCommand === 'i') {
+        if (subCommand === 'info' || subCommand === 'number') {
           const movieIdOrNumber = args[1];
           await handleMovieInfo(reply, movieDownloader, config, movieIdOrNumber, sender, sock, m);
           return;
