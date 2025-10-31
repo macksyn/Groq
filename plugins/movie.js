@@ -42,9 +42,18 @@ const API_CONFIG = {
 };
 
 const QUALITY_INFO = {
-  '360p': { label: '360p SD', icon: '📱', emoji: '1️⃣' },
-  '480p': { label: '480p HD', icon: '💻', emoji: '2️⃣' },
-  '720p': { label: '720p Full HD', icon: '📺', emoji: '3️⃣' }
+  '360p': { label: 'SD', displayLabel: 'SD (360p)', icon: '📱', emoji: '📱' },
+  '480p': { label: 'HD', displayLabel: 'HD (480p)', icon: '💻', emoji: '💻' },
+  '720p': { label: 'FHD', displayLabel: 'FHD (720p)', icon: '📺', emoji: '📺' }
+};
+
+const QUALITY_ALIASES = {
+  'sd': '360p',
+  'hd': '480p',
+  'fhd': '720p',
+  '360p': '360p',
+  '480p': '480p',
+  '720p': '720p'
 };
 
 class MovieDownloader {
@@ -275,17 +284,19 @@ class MovieDownloader {
   async incrementUsage(userId, type = 'download', movieData = {}) {
     try {
       return await safeOperation(async (db, collection) => {
-        const updateFields = {
+        const setFields = {
           lastDownload: new Date()
         };
+        
+        const incFields = {};
 
         if (type === 'download') {
-          updateFields.totalDownloads = 1;
-          updateFields.count = 1;
+          incFields.totalDownloads = 1;
+          incFields.count = 1;
         } else if (type === 'search') {
-          updateFields.totalSearches = 1;
-          updateFields.searchCount = 1;
-          updateFields.lastSearch = new Date();
+          incFields.totalSearches = 1;
+          incFields.searchCount = 1;
+          setFields.lastSearch = new Date();
         }
 
         const historyItem = {
@@ -297,7 +308,8 @@ class MovieDownloader {
         await collection.updateOne(
           { userId },
           { 
-            $inc: updateFields,
+            $set: setFields,
+            $inc: incFields,
             $push: { 
               history: { 
                 $each: [historyItem],
@@ -504,9 +516,18 @@ class MovieDownloader {
         console.log(chalk.cyan(`📌 Using movie #${movieIdOrNumber}: ${movieFromSession.title}`));
       }
 
-      if (!settings.allowedQualities.includes(quality)) {
+      // Normalize quality input (SD/HD/FHD to 360p/480p/720p)
+      const normalizedQuality = QUALITY_ALIASES[quality.toLowerCase()];
+      if (!normalizedQuality) {
         return { 
-          error: `❌ Quality "${quality}" is not allowed.\n\nAvailable: ${settings.allowedQualities.join(', ')}` 
+          error: `❌ Invalid quality "${quality}".\n\nAvailable: SD, HD, FHD` 
+        };
+      }
+
+      if (!settings.allowedQualities.includes(normalizedQuality)) {
+        const allowedLabels = settings.allowedQualities.map(q => QUALITY_INFO[q].label).join(', ');
+        return { 
+          error: `❌ Quality "${quality}" is not allowed.\n\nAvailable: ${allowedLabels}` 
         };
       }
 
@@ -538,7 +559,7 @@ class MovieDownloader {
 
       if (isTvShow && (!season || !episode)) {
         return { 
-          error: `📺 *TV Show Detected*\n\nPlease specify season and episode.\n\nUsage: .movie dl ${movieIdOrNumber} ${quality} <season> <episode>\nExample: .movie dl ${movieIdOrNumber} 720p 1 1` 
+          error: `📺 *TV Show Detected*\n\nPlease specify season and episode.\n\nUsage: .movie dl ${movieIdOrNumber} S<season> E<episode> <quality>\nExample: .movie dl ${movieIdOrNumber} S01 E05 HD` 
         };
       }
 
@@ -555,9 +576,9 @@ class MovieDownloader {
         return sourcesResult;
       }
 
-      const source = sourcesResult.sources.find(s => s.quality === quality);
+      const source = sourcesResult.sources.find(s => s.quality === normalizedQuality);
       if (!source) {
-        const availableQualities = sourcesResult.sources.map(s => s.quality).join(', ');
+        const availableQualities = sourcesResult.sources.map(s => QUALITY_INFO[s.quality]?.label || s.quality).join(', ');
         return { 
           error: `❌ Quality "${quality}" not available.\n\nAvailable: ${availableQualities}` 
         };
@@ -576,19 +597,20 @@ class MovieDownloader {
         await this.incrementUsage(userId, 'download', {
           movieId,
           title: movieData.title,
-          quality,
+          quality: normalizedQuality,
           season,
           episode
         });
       }
 
-      await this.logDownload(userId, movieData, quality, isTvShow);
+      await this.logDownload(userId, movieData, normalizedQuality, isTvShow);
 
       return {
         success: true,
         downloadUrl: source.download_url,
         movieData,
         quality: source.quality,
+        qualityLabel: QUALITY_INFO[source.quality]?.label || source.quality,
         size: source.size,
         format: source.format,
         isTvShow,
@@ -1027,7 +1049,7 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
       `*🔍 Movie Search*\n\n` +
       `Search for movies and TV shows\n\n` +
       `*Usage:* ${config.PREFIX}movie search <query>\n` +
-      `*Example:* ${config.PREFIX}movie search Black Panther`
+      `*Example:* ${config.PREFIX}movie search Game of Thrones`
     );
     return;
   }
@@ -1058,19 +1080,23 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
       message += `\n`;
     });
 
-    message += `*📥 Quick Download:*\n`;
-    message += `${config.PREFIX}movie dl <number> <quality>\n\n`;
-    message += `*Examples:*\n`;
-    message += `${config.PREFIX}movie dl 1 720p\n`;
-    message += `${config.PREFIX}movie dl 2 480p 1 1 _(for TV shows)_\n\n`;
+    message += `*📥 Download Commands:*\n\n`;
+    message += `*For Movies:*\n`;
+    message += `${config.PREFIX}movie dl <number> <quality>\n`;
+    message += `Example: ${config.PREFIX}movie dl 1 HD\n\n`;
     
-    message += `*Available Qualities:*\n`;
+    message += `*For TV Shows:*\n`;
+    message += `${config.PREFIX}movie dl <number> S<season> E<episode> <quality>\n`;
+    message += `Example: ${config.PREFIX}movie dl 3 S01 E08 FHD\n\n`;
+    
+    message += `*📊 Available Qualities:*\n`;
     settings.allowedQualities.forEach(q => {
       const info = QUALITY_INFO[q];
-      message += `${info.emoji} ${q} ${info.icon}\n`;
+      message += `${info.emoji} *${info.label}* - ${info.displayLabel}\n`;
     });
     
-    message += `\n_Numbers valid for 30 minutes_`;
+    message += `\n💡 _Tip: Use S01-S99 and E01-E99 format for TV shows_`;
+    message += `\n⏱️ _Results valid for 30 minutes_`;
 
     await reply(message);
   }
@@ -1164,27 +1190,47 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     await reply(
       `*📥 Movie Download*\n\n` +
       `Download movies and TV shows in multiple qualities\n\n` +
-      `*Usage:*\n` +
-      `• ${config.PREFIX}movie dl <number> <quality>\n` +
-      `• ${config.PREFIX}movie dl <number> <quality> <season> <episode>\n\n` +
-      `*Examples:*\n` +
-      `${config.PREFIX}movie dl 1 720p\n` +
-      `${config.PREFIX}movie dl 3 480p 1 1 _(for TV shows)_\n\n` +
-      `*Available Qualities:*\n` +
+      `*For Movies:*\n` +
+      `${config.PREFIX}movie dl <number> <quality>\n` +
+      `Example: ${config.PREFIX}movie dl 1 HD\n\n` +
+      `*For TV Shows:*\n` +
+      `${config.PREFIX}movie dl <number> S<season> E<episode> <quality>\n` +
+      `Example: ${config.PREFIX}movie dl 3 S01 E08 FHD\n\n` +
+      `*📊 Available Qualities:*\n` +
       `${settings.allowedQualities.map(q => {
         const info = QUALITY_INFO[q];
-        return `${info.emoji} ${q} ${info.icon} ${info.label}`;
+        return `${info.emoji} *${info.label}* - ${info.displayLabel}`;
       }).join('\n')}\n\n` +
       `${settings.premiumEnabled ? `💎 Cost: ₦${settings.downloadCost} per download` : `🆓 Free downloads available`}\n\n` +
-      `_First search for movies, then use the number to download_`
+      `💡 _First search for movies, then use the number to download_`
     );
     return;
   }
 
   const movieIdOrNumber = args[0];
-  const quality = args[1] || settings.defaultQuality;
-  const season = args[2] ? parseInt(args[2]) : null;
-  const episode = args[3] ? parseInt(args[3]) : null;
+  let quality = settings.defaultQuality;
+  let season = null;
+  let episode = null;
+
+  // Parse arguments for TV shows: "dl 1 S01 E08 HD" or "dl 1 HD" for movies
+  if (args.length >= 2) {
+    // Check if second arg is season (S01, S1, etc.)
+    if (/^S\d+$/i.test(args[1])) {
+      // TV Show format: dl 1 S01 E08 HD
+      season = parseInt(args[1].substring(1));
+      
+      if (args.length >= 3 && /^E\d+$/i.test(args[2])) {
+        episode = parseInt(args[2].substring(1));
+      }
+      
+      if (args.length >= 4) {
+        quality = args[3];
+      }
+    } else {
+      // Movie format: dl 1 HD
+      quality = args[1];
+    }
+  }
 
   await sock.sendMessage(m.from, { react: { text: '⏳', key: m.key } });
 
@@ -1202,13 +1248,24 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     const remaining = await downloader.getRemainingDownloads(sender);
     const sizeMB = (parseInt(result.size) / (1024 * 1024)).toFixed(0);
     
+    // Send initial downloading message
+    const downloadingMsg = await reply(
+      `⏬ *Downloading Movie...*\n\n` +
+      `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n` +
+      `${result.isTvShow ? `Season ${result.season} • Episode ${result.episode}\n` : ''}` +
+      `Quality: ${result.qualityLabel} (${result.quality})\n` +
+      `Size: ${sizeMB}MB\n\n` +
+      `⏳ Please be patient, this may take a few moments...\n` +
+      `_Do not send another command while downloading_`
+    );
+    
     let caption = `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n\n`;
     
     if (result.isTvShow) {
       caption += `*Season:* ${result.season} | *Episode:* ${result.episode}\n`;
     }
     
-    caption += `*Quality:* ${result.quality}\n`;
+    caption += `*Quality:* ${result.qualityLabel} (${result.quality})\n`;
     caption += `*Size:* ${sizeMB}MB\n`;
     caption += `*Format:* ${result.format}\n\n`;
     
@@ -1218,14 +1275,15 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       caption += `🆓 *Remaining:* ${remaining}/${settings.rateLimitFree}\n`;
     }
     
-    caption += `\n⚡ Powered by GiftedTech API`;
+    caption += `\n✅ *Download Complete!*\n_⚡ Powered by Groq_`;
 
     try {
+      // Send as video for better WhatsApp compatibility
       await sock.sendMessage(m.from, {
-        document: { url: result.downloadUrl },
+        video: { url: result.downloadUrl },
+        caption: caption,
         mimetype: 'video/mp4',
-        fileName: `${result.movieData.title}${result.isTvShow ? ` S${result.season}E${result.episode}` : ''} [${result.quality}].${result.format}`,
-        caption: caption
+        fileName: `${result.movieData.title}${result.isTvShow ? ` S${String(result.season).padStart(2, '0')}E${String(result.episode).padStart(2, '0')}` : ''} [${result.qualityLabel}].mp4`
       }, { quoted: m });
 
       await sock.sendMessage(m.from, {
@@ -1240,13 +1298,13 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       });
       
       await reply(
-        `❌ *Send Failed*\n\n` +
+        `❌ *Download Failed*\n\n` +
         `The movie was processed but couldn't be sent. This might be due to:\n` +
-        `• File size too large for WhatsApp\n` +
+        `• File size too large for WhatsApp (${sizeMB}MB)\n` +
         `• Network issues\n` +
         `• WhatsApp restrictions\n\n` +
         `*Direct Download Link:*\n${result.downloadUrl}\n\n` +
-        `_Link expires in 24 hours_`
+        `_Link expires in 24 hours. Use a browser to download._`
       );
     }
   }
@@ -1499,7 +1557,7 @@ export default {
 
         if (subCommand === 'info' || subCommand === 'i') {
           const movieIdOrNumber = args[1];
-          await handleMovieInfo(reply, movieDownloader, config, movieIdOrNumber, sender);
+          await handleMovieInfo(reply, movieDownloader, config, movieIdOrNumber, sender, sock, m);
           return;
         }
 
