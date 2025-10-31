@@ -84,13 +84,13 @@ class MovieDownloader {
     try {
       return await safeOperation(async (db, collection) => {
         let settings = await collection.findOne({ _id: 'main_settings' });
-        
+
         if (!settings) {
           settings = { _id: 'main_settings', ...DEFAULT_SETTINGS };
           await collection.insertOne(settings);
           console.log(chalk.cyan('📝 Created default movie downloader settings'));
         }
-        
+
         return settings;
       }, SETTINGS_COLLECTION);
     } catch (error) {
@@ -107,15 +107,15 @@ class MovieDownloader {
           updatedAt: new Date(),
           updatedBy
         };
-        
+
         const result = await collection.updateOne(
           { _id: 'main_settings' },
           { $set: updateData },
           { upsert: true }
         );
-        
+
         this.settings = await this.loadSettings();
-        
+
         console.log(chalk.green('✅ Movie downloader settings updated'));
         return result;
       }, SETTINGS_COLLECTION);
@@ -132,7 +132,7 @@ class MovieDownloader {
   isAdmin(userId) {
     const adminNumber = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBERS;
     if (!adminNumber) return false;
-    
+
     const userNumber = userId.split('@')[0];
     return adminNumber === userNumber || adminNumber.includes(userNumber);
   }
@@ -144,7 +144,7 @@ class MovieDownloader {
         const validSessions = await collection.find({
           expiresAt: { $gte: new Date(now) }
         }).toArray();
-        
+
         return validSessions;
       }, USER_SESSIONS_COLLECTION);
 
@@ -214,7 +214,7 @@ class MovieDownloader {
       return await safeOperation(async (db, collection) => {
         const now = Date.now();
         let usage = await collection.findOne({ userId });
-        
+
         if (!usage) {
           usage = {
             userId,
@@ -229,7 +229,7 @@ class MovieDownloader {
           };
           await collection.insertOne(usage);
         }
-        
+
         if (now > usage.resetTime) {
           await collection.updateOne(
             { userId },
@@ -245,7 +245,7 @@ class MovieDownloader {
           usage.searchCount = 0;
           usage.resetTime = now + this.getSettings().rateLimitCooldown;
         }
-        
+
         return usage;
       }, USAGE_COLLECTION);
     } catch (error) {
@@ -287,7 +287,7 @@ class MovieDownloader {
         const setFields = {
           lastDownload: new Date()
         };
-        
+
         const incFields = {};
 
         if (type === 'download') {
@@ -376,7 +376,7 @@ class MovieDownloader {
       }
 
       const results = response.data.results?.items || [];
-      
+
       if (results.length === 0) {
         return { 
           error: `❌ *No Results Found*\n\nNo movies or TV shows found for "${query}"\n\n_Try different keywords_` 
@@ -430,13 +430,16 @@ class MovieDownloader {
         throw new Error(response.data.message || 'Failed to get movie info');
       }
 
-      const movieData = response.data.results?.subject;
-      if (!movieData) {
+      // --- MODIFIED ---
+      // Return the entire 'results' object, not just 'subject'
+      const resultsData = response.data.results;
+      if (!resultsData || !resultsData.subject) {
         throw new Error('Invalid movie data received');
       }
 
-      console.log(chalk.green(`✅ Got info for: ${movieData.title}`));
-      return { success: true, data: movieData };
+      console.log(chalk.green(`✅ Got info for: ${resultsData.subject.title}`));
+      return { success: true, data: resultsData };
+      // --- END MODIFICATION ---
 
     } catch (error) {
       console.error(chalk.red('Movie info error:'), error.message);
@@ -449,7 +452,7 @@ class MovieDownloader {
   async getDownloadSources(movieId, season = null, episode = null) {
     try {
       let url = `${API_CONFIG.baseUrl}${API_CONFIG.endpoints.sources}/${movieId}`;
-      
+
       if (season && episode) {
         url += `?season=${season}&episode=${episode}`;
         console.log(chalk.cyan(`📺 Getting sources for S${season}E${episode}`));
@@ -554,7 +557,8 @@ class MovieDownloader {
         return infoResult;
       }
 
-      const movieData = infoResult.data;
+      // Data now contains { subject: {...}, resource: {...} }
+      const movieData = infoResult.data.subject;
       const isTvShow = movieData.subjectType === 8;
 
       if (isTvShow && (!season || !episode)) {
@@ -608,7 +612,7 @@ class MovieDownloader {
       return {
         success: true,
         downloadUrl: source.download_url,
-        movieData,
+        movieData, // This is infoResult.data.subject
         quality: source.quality,
         qualityLabel: QUALITY_INFO[source.quality]?.label || source.quality,
         size: source.size,
@@ -630,7 +634,7 @@ class MovieDownloader {
     try {
       return await safeOperation(async (db, collection) => {
         const cached = await collection.findOne({ query: query.toLowerCase() });
-        
+
         if (!cached) return null;
 
         const now = Date.now();
@@ -695,13 +699,13 @@ class MovieDownloader {
           return { error: `Number ${movieIdOrNumber} not found in recent search.` };
         }
         movieId = movieFromSession.subjectId;
-        movieData = movieFromSession;
+        movieData = movieFromSession; // This is from search, might be minimal
       } else {
         const infoResult = await this.getMovieInfo(movieId);
         if (infoResult.error) {
           return { error: infoResult.error };
         }
-        movieData = infoResult.data;
+        movieData = infoResult.data.subject; // Get the subject block
       }
 
       return await safeOperation(async (db, collection) => {
@@ -784,7 +788,7 @@ class MovieDownloader {
 
   async getStats() {
     const now = Date.now();
-    
+
     if (this.statsCache && (now - this.statsCacheTime < this.statsCacheDuration)) {
       return this.statsCache;
     }
@@ -797,7 +801,7 @@ class MovieDownloader {
           tvShowDownloads: 0,
           qualities: {}
         };
-        
+
         return globalStats;
       }, SETTINGS_COLLECTION);
 
@@ -806,7 +810,7 @@ class MovieDownloader {
         const activeUsers = await collection.countDocuments({ 
           lastDownload: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } 
         });
-        
+
         const totalSearches = await collection.aggregate([
           { $group: { _id: null, total: { $sum: '$totalSearches' } } }
         ]).toArray();
@@ -951,14 +955,14 @@ async function handleMovieSettings(reply, downloader, config, sender, args) {
         const qualityState = args[2];
         if (['360p', '480p', '720p'].includes(quality) && (qualityState === 'on' || qualityState === 'off')) {
           const qualities = [...settings.allowedQualities] || [];
-          
+
           if (qualityState === 'on' && !qualities.includes(quality)) {
             qualities.push(quality);
           } else if (qualityState === 'off') {
             const index = qualities.indexOf(quality);
             if (index > -1) qualities.splice(index, 1);
           }
-          
+
           updates.allowedQualities = qualities;
           await downloader.saveSettings(updates, sender);
           await reply(`✅ Quality ${quality} ${qualityState === 'on' ? 'enabled' : 'disabled'}`);
@@ -1074,7 +1078,7 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
       const type = item.subjectType === 8 ? '📺' : '🎬';
       const year = item.releaseDate ? new Date(item.releaseDate).getFullYear() : 'N/A';
       const rating = item.imdbRatingValue ? `⭐ ${item.imdbRatingValue}` : '';
-      
+
       message += `*${index + 1}. ${item.title}* ${type}\n`;
       message += `   Year: ${year} ${rating}\n`;
       message += `\n`;
@@ -1084,17 +1088,17 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
     message += `*For Movies:*\n`;
     message += `${config.PREFIX}movie dl <number> <quality>\n`;
     message += `Example: ${config.PREFIX}movie dl 1 HD\n\n`;
-    
+
     message += `*For TV Shows:*\n`;
     message += `${config.PREFIX}movie dl <number> S<season> E<episode> <quality>\n`;
     message += `Example: ${config.PREFIX}movie dl 3 S01 E08 FHD\n\n`;
-    
+
     message += `*📊 Available Qualities:*\n`;
     settings.allowedQualities.forEach(q => {
       const info = QUALITY_INFO[q];
       message += `${info.emoji} *${info.label}* - ${info.displayLabel}\n`;
     });
-    
+
     message += `\n💡 _Tip: Use S01-S99 and E01-E99 format for TV shows_`;
     message += `\n⏱️ _Results valid for 30 minutes_`;
 
@@ -1102,7 +1106,8 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
   }
 }
 
-async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sender) {
+// --- MODIFIED FUNCTION ---
+async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sender, sock, m) {
   if (!movieIdOrNumber) {
     await reply(
       `*ℹ️ Movie Info*\n\n` +
@@ -1133,17 +1138,20 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
   }
 
   if (result.success) {
-    const data = result.data;
+    // Data now contains { subject: {...}, resource: {...}, ... }
+    const data = result.data.subject; // Main info is in 'subject'
+    const resource = result.data.resource; // Resource info (quality, seasons)
     const type = data.subjectType === 8 ? '📺 TV Show' : '🎬 Movie';
     const year = data.releaseDate ? new Date(data.releaseDate).getFullYear() : 'N/A';
+    const coverUrl = data.cover?.url; // Get cover URL
 
     let message = `${type} *${data.title}*\n\n`;
     message += `*Year:* ${year}\n`;
-    
+
     if (data.countryName) {
       message += `*Country:* ${data.countryName}\n`;
     }
-    
+
     if (data.imdbRatingValue) {
       message += `*Rating:* ⭐ ${data.imdbRatingValue}/10`;
       if (data.imdbRatingCount) {
@@ -1151,17 +1159,44 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
       }
       message += `\n`;
     }
-    
+
     if (data.genre) {
       message += `*Genre:* ${data.genre}\n`;
     }
-    
+
     if (data.duration) {
       const hours = Math.floor(data.duration / 3600);
       const mins = Math.floor((data.duration % 3600) / 60);
       message += `*Duration:* ${hours}h ${mins}m\n`;
     }
-    
+
+    // --- NEW LOGIC ---
+    if (resource && resource.seasons) {
+      if (data.subjectType === 8) { // TV Show
+        // Filter out seasons with se = 0 unless it's the only one
+        const validSeasons = resource.seasons.filter(s => s.se > 0);
+        const seasonCount = validSeasons.length > 0 ? validSeasons.length : resource.seasons.length;
+        const lastSeason = validSeasons.length > 0 ? validSeasons[validSeasons.length - 1] : resource.seasons[resource.seasons.length - 1];
+
+        message += `*Seasons:* ${seasonCount}\n`;
+        if (lastSeason.maxEp > 0) {
+           message += `*Latest Episode:* S${String(lastSeason.se).padStart(2, '0')}E${String(lastSeason.maxEp).padStart(2, '0')}\n`;
+        }
+      }
+
+      // Get available qualities (resolutions)
+      const resolutions = resource.seasons[0]?.resolutions;
+      if (resolutions && resolutions.length > 0) {
+        // Map to labels (SD, HD, FHD) if possible
+        const qualities = resolutions.map(r => {
+            const qualityStr = `${r.resolution}p`;
+            return QUALITY_INFO[qualityStr]?.label || qualityStr;
+        }).join(', ');
+        message += `*Available Qualities:* ${qualities}\n`;
+      }
+    }
+    // --- END NEW LOGIC ---
+
     if (data.description) {
       message += `\n*Synopsis:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
     }
@@ -1171,17 +1206,42 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
       const number = movieIdOrNumber;
       message += `${config.PREFIX}movie dl ${number} <quality>\n\n`;
       message += `*Examples:*\n`;
-      message += `${config.PREFIX}movie dl ${number} 720p\n`;
+      message += `${config.PREFIX}movie dl ${number} HD\n`;
       if (data.subjectType === 8) {
-        message += `${config.PREFIX}movie dl ${number} 480p 1 1\n`;
+         // Find first valid season (se > 0)
+         const firstSeason = resource?.seasons?.find(s => s.se > 0);
+         if(firstSeason) {
+           message += `${config.PREFIX}movie dl ${number} S${String(firstSeason.se).padStart(2, '0')} E01 HD\n`;
+         } else {
+            message += `${config.PREFIX}movie dl ${number} S01 E01 HD\n`;
+         }
       }
     } else {
       message += `Search for this movie to download easily!`;
     }
 
-    await reply(message);
+    // --- NEW SEND LOGIC ---
+    if (coverUrl && sock && m) {
+      // Send image with caption
+      try {
+        await sock.sendMessage(m.from, {
+          image: { url: coverUrl },
+          caption: message,
+          mimetype: 'image/jpeg' // API response says jpg
+        }, { quoted: m });
+      } catch (imgErr) {
+        console.error(chalk.red('Failed to send info with image:'), imgErr.message);
+        // Fallback to text-only reply
+        await reply(message);
+      }
+    } else {
+      // Fallback to text-only reply
+      await reply(message);
+    }
+    // --- END NEW SEND LOGIC ---
   }
 }
+// --- END MODIFIED FUNCTION ---
 
 async function handleMovieDownload(reply, downloader, config, sock, m, sender, isGroup, args) {
   const settings = downloader.getSettings();
@@ -1218,11 +1278,11 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     if (/^S\d+$/i.test(args[1])) {
       // TV Show format: dl 1 S01 E08 HD
       season = parseInt(args[1].substring(1));
-      
+
       if (args.length >= 3 && /^E\d+$/i.test(args[2])) {
         episode = parseInt(args[2].substring(1));
       }
-      
+
       if (args.length >= 4) {
         quality = args[3];
       }
@@ -1247,7 +1307,7 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
   if (result.success) {
     const remaining = await downloader.getRemainingDownloads(sender);
     const sizeMB = (parseInt(result.size) / (1024 * 1024)).toFixed(0);
-    
+
     // Send initial downloading message
     const downloadingMsg = await reply(
       `⏬ *Downloading Movie...*\n\n` +
@@ -1258,23 +1318,23 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       `⏳ Please be patient, this may take a few moments...\n` +
       `_Do not send another command while downloading_`
     );
-    
+
     let caption = `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n\n`;
-    
+
     if (result.isTvShow) {
       caption += `*Season:* ${result.season} | *Episode:* ${result.episode}\n`;
     }
-    
+
     caption += `*Quality:* ${result.qualityLabel} (${result.quality})\n`;
     caption += `*Size:* ${sizeMB}MB\n`;
     caption += `*Format:* ${result.format}\n\n`;
-    
+
     if (settings.premiumEnabled) {
       caption += `💳 *Charged:* ₦${settings.downloadCost}\n`;
     } else {
       caption += `🆓 *Remaining:* ${remaining}/${settings.rateLimitFree}\n`;
     }
-    
+
     caption += `\n✅ *Download Complete!*\n_⚡ Powered by Groq_`;
 
     try {
@@ -1292,11 +1352,11 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
 
     } catch (sendError) {
       console.error(chalk.red('Error sending movie:'), sendError.message);
-      
+
       await sock.sendMessage(m.from, {
         react: { text: '❌', key: m.key }
       });
-      
+
       await reply(
         `❌ *Download Failed*\n\n` +
         `The movie was processed but couldn't be sent. This might be due to:\n` +
@@ -1312,20 +1372,20 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
 
 async function handleMovieStats(reply, downloader) {
   const stats = await downloader.getStats();
-  
+
   let message = `*📊 Movie Downloader Statistics*\n\n`;
   message += `*Downloads:*\n`;
   message += `• Total: ${stats.totalDownloads || 0}\n`;
   message += `• Movies: ${stats.movieDownloads || 0}\n`;
   message += `• TV Shows: ${stats.tvShowDownloads || 0}\n`;
   message += `• Active: ${stats.activeDownloads}\n\n`;
-  
+
   message += `*Users:*\n`;
   message += `• Total: ${stats.totalUsers || 0}\n`;
   message += `• Active (7d): ${stats.activeUsers || 0}\n`;
   message += `• Total Searches: ${stats.totalSearches || 0}\n`;
   message += `• Active Sessions: ${stats.activeSessions || 0}\n\n`;
-  
+
   if (stats.qualities && Object.keys(stats.qualities).length > 0) {
     message += `*Quality Distribution:*\n`;
     Object.entries(stats.qualities).forEach(([quality, count]) => {
@@ -1334,37 +1394,37 @@ async function handleMovieStats(reply, downloader) {
     });
     message += `\n`;
   }
-  
+
   message += `*System:*\n`;
   message += `• Active Searches: ${stats.activeSearches}\n`;
   message += `• Cached Searches: ${stats.cachedSearches || 0}\n\n`;
-  
+
   message += `*Settings:*\n`;
   message += `• Mode: ${stats.settings?.premiumEnabled ? '💎 Premium' : '🆓 Free'}\n`;
   message += `• Download Cost: ₦${stats.settings?.downloadCost || 0}\n`;
   message += `• Daily Limit: ${stats.settings?.rateLimitFree || 0}\n`;
   message += `• Movies: ${stats.settings?.allowMovies ? '✅' : '❌'}\n`;
   message += `• TV Shows: ${stats.settings?.allowTvShows ? '✅' : '❌'}\n\n`;
-  
+
   message += `*Last Updated:* ${new Date(stats.lastUpdated).toLocaleString()}`;
-  
+
   await reply(message);
 }
 
 async function handleMovieHistory(reply, downloader, sender) {
   const history = await downloader.getUserHistory(sender, 15);
-  
+
   if (history.length === 0) {
     await reply(`📜 *Your Movie History*\n\nNo activity yet!`);
     return;
   }
 
   let message = `📜 *Your Movie History*\n\n`;
-  
+
   history.forEach((item, i) => {
     const icon = item.type === 'search' ? '🔍' : '📥';
     const date = new Date(item.timestamp).toLocaleDateString();
-    
+
     if (item.type === 'search') {
       message += `${i + 1}. ${icon} Search: "${item.query}"\n`;
       message += `   ${date} • ${item.resultsCount || 0} results\n\n`;
@@ -1379,26 +1439,26 @@ async function handleMovieHistory(reply, downloader, sender) {
   });
 
   message += `_Showing last ${history.length} activities_`;
-  
+
   await reply(message);
 }
 
 async function handleMovieFavorites(reply, downloader, sender, action, movieIdOrNumber) {
   if (!action) {
     const favorites = await downloader.getFavorites(sender);
-    
+
     if (favorites.length === 0) {
       await reply(`⭐ *Your Favorites*\n\nNo favorites yet!\n\nAdd favorites with:\n.movie fav add <number>`);
       return;
     }
 
     let message = `⭐ *Your Favorites* (${favorites.length})\n\n`;
-    
+
     favorites.forEach((fav, i) => {
       const type = fav.subjectType === 8 ? '📺' : '🎬';
       const year = fav.releaseDate ? new Date(fav.releaseDate).getFullYear() : 'N/A';
       const rating = fav.imdbRating ? ` ⭐${fav.imdbRating}` : '';
-      
+
       message += `${i + 1}. ${type} *${fav.title}*${rating}\n`;
       message += `   Year: ${year}\n`;
       message += `   Added: ${new Date(fav.addedAt).toLocaleDateString()}\n\n`;
@@ -1406,7 +1466,7 @@ async function handleMovieFavorites(reply, downloader, sender, action, movieIdOr
 
     message += `*Commands:*\n`;
     message += `• Remove: .movie fav remove <number>`;
-    
+
     await reply(message);
     return;
   }
@@ -1434,7 +1494,7 @@ async function handleMovieFavorites(reply, downloader, sender, action, movieIdOr
 
     const favorites = await downloader.getFavorites(sender);
     const index = parseInt(movieIdOrNumber) - 1;
-    
+
     if (index < 0 || index >= favorites.length) {
       await reply(`❌ Invalid favorite number. You have ${favorites.length} favorites.`);
       return;
@@ -1459,14 +1519,14 @@ export default {
   author: 'Alex Macksyn',
   description: 'Search and download movies and TV shows with numbered selection',
   category: 'media',
-  
+
   commands: ['movie', 'moviesettings', 'moviestats'],
   aliases: ['mov', 'film'],
 
   async init(context) {
     const { logger } = context;
     await movieDownloader.initialize();
-    
+
     const settings = movieDownloader.getSettings();
     logger.info('✅ Movie Downloader V3 initialized');
     logger.info(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`);
@@ -1485,14 +1545,14 @@ export default {
       const sender = m.sender;
       const from = m.from;
       const isGroup = m.isGroup;
-      
+
       if (!sender) {
         logger.warn('⚠️ No sender found in message');
         return;
       }
-      
+
       const isAdmin = movieDownloader.isAdmin(sender);
-      
+
       const reply = async (text) => {
         if (typeof m.reply === 'function') {
           await m.reply(text);
@@ -1521,11 +1581,11 @@ export default {
 
       if (command === 'movie' || command === 'mov' || command === 'film') {
         const subCommand = args[0]?.toLowerCase();
-        
+
         if (!subCommand) {
           const remaining = await movieDownloader.getRemainingDownloads(sender);
           const settings = movieDownloader.getSettings();
-          
+
           await reply(
             `*🎬 Movie Downloader*\n\n` +
             `*Features:*\n` +
@@ -1557,7 +1617,10 @@ export default {
 
         if (subCommand === 'info' || subCommand === 'number') {
           const movieIdOrNumber = args[1];
+          // --- MODIFIED ---
+          // Pass sock and m to the handler
           await handleMovieInfo(reply, movieDownloader, config, movieIdOrNumber, sender, sock, m);
+          // --- END MODIFICATION ---
           return;
         }
 
