@@ -56,6 +56,33 @@ const QUALITY_ALIASES = {
   '720p': '720p'
 };
 
+// --- NEW HELPER FUNCTION FOR LINK SHORTENER---
+/**
+ * Helper function to shorten a URL using TinyURL
+ * @param {string} longUrl The URL to shorten
+ * @returns {string} The shortened URL or the original URL on failure
+ */
+async function _shortenLink(longUrl) {
+  if (!longUrl) return longUrl; // Don't crash on empty URLs
+  try {
+    const response = await axios.get(
+      `https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`,
+      { timeout: 5000 } // Give it a short 5-second timeout
+    );
+    if (response.data && response.status === 200) {
+      return response.data; // This is the short URL
+    }
+    // If response is weird, return original
+    return longUrl;
+  } catch (error) {
+    console.error(chalk.red('Error shortening link:'), error.message);
+    // CRITICAL: Return the original URL as a fallback
+    return longUrl; 
+  }
+}
+// --- END NEW HELPER FUNCTION ---
+
+
 class MovieDownloader {
   constructor() {
     this.settings = null;
@@ -1409,19 +1436,25 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
         react: { text: '❌', key: m.key }
       });
 
+// --- MODIFIED SECTION ---
+      // Show a "linking" reaction while we shorten the URL
+      await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
+      const shortUrl = await _shortenLink(result.downloadUrl);
+      await sock.sendMessage(m.from, { react: { text: '', key: m.key } }); // Clear reaction
+
       await reply(
         `❌ *Download Failed*\n\n` +
         `The movie was processed but couldn't be sent. This might be due to:\n` +
         `• File size too large for WhatsApp (${sizeMB}MB)\n` +
         `• Network issues\n` +
         `• WhatsApp restrictions\n\n` +
-        `*Direct Download Link:*\n${result.downloadUrl}\n\n` +
+        `*Direct Download Link:*\n${shortUrl}\n\n` + // <-- Now uses the shortened URL
         `_Link expires in 24 hours. Use a browser to download._`
       );
+      // --- END MODIFIED SECTION ---
     }
   }
 }
-// --- END MODIFIED FUNCTION ---
 
 async function handleMovieStats(reply, downloader) {
   const stats = await downloader.getStats();
