@@ -9,8 +9,6 @@ const FAVORITES_COLLECTION = 'movie_favorites';
 const SEARCH_CACHE_COLLECTION = 'movie_search_cache';
 const USER_SESSIONS_COLLECTION = 'movie_user_sessions';
 
-// --- Removed the SAFE_SEND_LIMIT_MB, as we will now try to stream all files ---
-
 const DEFAULT_SETTINGS = {
   premiumEnabled: false,
   downloadCost: 100,
@@ -85,46 +83,6 @@ async function _shortenLink(longUrl) {
 // --- END NEW HELPER FUNCTION ---
 
 
-// --- *** NEW HELPER FUNCTION FOR REDIRECT *** ---
-/**
- * Helper function to resolve a redirect URL
- * @param {string} proxyUrl The API's download_url
- * @returns {string} The final, direct .mp4 URL
- */
-async function _resolveRedirect(proxyUrl) {
-  if (!proxyUrl) throw new Error('No URL provided');
-
-  try {
-    const response = await axios.get(proxyUrl, {
-      maxRedirects: 0, // IMPORTANT: Do not follow redirects
-      validateStatus: (status) => status >= 200 && status < 400, // Accept 3xx as success
-      timeout: 15000 // 15-second timeout
-    });
-
-    // If we get a redirect response, return the new location
-    if (response.status >= 300 && response.headers.location) {
-      console.log(chalk.cyan(`🔗 Redirect resolved to: ${response.headers.location}`));
-      return response.headers.location;
-    }
-
-    // If it wasn't a redirect, return the original URL (unlikely)
-    return proxyUrl;
-
-  } catch (error) {
-    // If axios throws an error (e.g., on 3xx with maxRedirects: 0),
-    // the redirect location is often in error.response.headers.location
-    if (error.response && error.response.headers.location) {
-      console.log(chalk.cyan(`🔗 Redirect (via catch) resolved to: ${error.response.headers.location}`));
-      return error.response.headers.location;
-    }
-
-    console.error(chalk.red('Redirect resolve error:'), error.message);
-    throw new Error('Failed to resolve final download URL. The link may be broken.');
-  }
-}
-// --- *** END NEW HELPER FUNCTION *** ---
-
-
 class MovieDownloader {
   constructor() {
     this.settings = null;
@@ -135,10 +93,6 @@ class MovieDownloader {
     this.statsCacheTime = 0;
     this.statsCacheDuration = 5 * 60 * 1000;
   }
-
-  // --- Add the new function to the class instance ---
-  _resolveRedirect = _resolveRedirect;
-  // ---
 
   async initialize() {
     try {
@@ -716,7 +670,7 @@ class MovieDownloader {
 
       return {
         success: true,
-        downloadUrl: source.download_url, // This is the API PROXY URL
+        downloadUrl: source.download_url,
         movieData, // This is infoResult.data.subject
         quality: source.quality,
         qualityLabel: QUALITY_INFO[source.quality]?.label || source.quality,
@@ -1340,7 +1294,7 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
   }
 }
 
-// --- *** MODIFIED FUNCTION (Now uses streaming) *** ---
+// --- MODIFIED FUNCTION ---
 async function handleMovieDownload(reply, downloader, config, sock, m, sender, isGroup, args) {
   const settings = downloader.getSettings();
   let movieIdOrNumber = args[0]; // May be undefined, '1', or 'S01'
@@ -1463,38 +1417,13 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     caption += `\n✅ *Download Complete!*\n_⚡ Powered by Groq_`;
 
     try {
-      // --- *** START: MODIFIED STREAMING SECTION *** ---
-
-      // 1. Add a reaction while we resolve the link
+      // Send as video for better WhatsApp compatibility
       await sock.sendMessage(m.from, {
-        react: { text: '🔗', key: m.key }
-      });
-
-      // 2. Call our helper to get the REAL MP4 link
-      // We use downloader._resolveRedirect because it's part of the class instance
-      const directMp4Url = await downloader._resolveRedirect(result.downloadUrl);
-
-      // 3. Clear the reaction
-      await sock.sendMessage(m.from, {
-        react: { text: '', key: m.key }
-      });
-
-      // 4. Get the file as a STREAM
-      console.log(chalk.cyan(`🛰️  Attempting to stream from: ${directMp4Url}`));
-      const streamResponse = await axios.get(directMp4Url, {
-        responseType: 'stream',
-        timeout: API_CONFIG.timeout // Use the long timeout
-      });
-
-      // 5. Send the stream to WhatsApp
-      await sock.sendMessage(m.from, {
-        video: streamResponse.data, // Pass the stream directly
+        video: { url: result.downloadUrl },
         caption: caption,
         mimetype: 'video/mp4',
         fileName: `${result.movieData.title}${result.isTvShow ? ` S${String(result.season).padStart(2, '0')}E${String(result.episode).padStart(2, '0')}` : ''} [${result.qualityLabel}].mp4`
       }, { quoted: m });
-
-      // --- *** END: MODIFIED STREAMING SECTION *** ---
 
       await sock.sendMessage(m.from, {
         react: { text: '✅', key: m.key }
@@ -1507,29 +1436,25 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
         react: { text: '❌', key: m.key }
       });
 
-      // --- MODIFIED SECTION (Error Fallback) ---
+// --- MODIFIED SECTION ---
       // Show a "linking" reaction while we shorten the URL
       await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
-      // Use the ORIGINAL proxy URL for shortening, as tinyurl can follow redirects
       const shortUrl = await _shortenLink(result.downloadUrl);
       await sock.sendMessage(m.from, { react: { text: '', key: m.key } }); // Clear reaction
 
-      // --- *** MODIFIED: Simpler error message *** ---
-      let errorMessage = `❌ *Download Failed*\n\n` +
-                       `The movie was processed but couldn't be sent. This might be due to:\n` +
-                       `• Network issues (Error: ${sendError.message})\n` +
-                       `• WhatsApp restrictions (e.g., file too large)\n\n`;
-
       await reply(
-        `${errorMessage}` +
+        `❌ *Download Failed*\n\n` +
+        `The movie was processed but couldn't be sent. This might be due to:\n` +
+        `• File size too large for WhatsApp (${sizeMB}MB)\n` +
+        `• Network issues\n` +
+        `• WhatsApp restrictions\n\n` +
         `*Direct Download Link:*\n${shortUrl}\n\n` + // <-- Now uses the shortened URL
         `_Link expires in 24 hours. Use a browser to download._`
       );
-      // --- *** END: Simpler error message *** ---
+      // --- END MODIFIED SECTION ---
     }
   }
 }
-
 
 async function handleMovieStats(reply, downloader) {
   const stats = await downloader.getStats();
@@ -1676,8 +1601,8 @@ async function handleMovieFavorites(reply, downloader, sender, action, movieIdOr
 
 export default {
   name: 'Movie Downloader',
-  version: '3.0.2', // Incremented version
-  author: 'Alex Macksyn (with streaming)',
+  version: '3.0.0',
+  author: 'Alex Macksyn',
   description: 'Search and download movies and TV shows with numbered selection',
   category: 'media',
 
@@ -1689,7 +1614,7 @@ export default {
     await movieDownloader.initialize();
 
     const settings = movieDownloader.getSettings();
-    logger.info('✅ Movie Downloader V3.0.2 (Streaming) initialized');
+    logger.info('✅ Movie Downloader V3 initialized');
     logger.info(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`);
     logger.info(`Qualities: ${settings.allowedQualities.join(', ')}`);
     logger.info(`Movies: ${settings.allowMovies ? '✅' : '❌'} | TV Shows: ${settings.allowTvShows ? '✅' : '❌'}`);
@@ -1822,4 +1747,3 @@ export default {
     }
   }
 };
-
