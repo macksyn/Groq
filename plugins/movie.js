@@ -1487,14 +1487,14 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     try {
       await sock.sendMessage(m.from, { react: { text: '📥', key: m.key } });
 
-      // Extract direct URL
-      const directMp4Url = downloader._extractDirectUrl(result.downloadUrl);
-      console.log(chalk.cyan(`🎬 Streaming ${sizeMB}MB file as ${sendMethod} from: ${directMp4Url}`));
+      // Use the download URL directly from API (no extraction needed)
+      const downloadUrl = result.downloadUrl;
+      console.log(chalk.cyan(`🎬 Streaming ${sizeMB}MB file as ${sendMethod} from API source`));
 
       // Get video as stream with extended timeout for large files
       const timeoutMs = fileSizeMB > 500 ? 900000 : 600000; // 15 min for >500MB, 10 min otherwise
 
-      const streamResponse = await axios.get(directMp4Url, {
+      const streamResponse = await axios.get(downloadUrl, {
         responseType: 'stream',
         timeout: timeoutMs,
         maxContentLength: Infinity,
@@ -1563,8 +1563,7 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       console.log(chalk.yellow(`⚠️ Falling back to download link due to: ${errorType}`));
 
       await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
-      const directMp4Url = downloader._extractDirectUrl(result.downloadUrl);
-      const shortUrl = await _shortenLink(directMp4Url);
+      const shortUrl = await _shortenLink(result.downloadUrl);
       await sock.sendMessage(m.from, { react: { text: '', key: m.key } });
 
       await reply(
