@@ -1495,11 +1495,11 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       const timeoutMs = fileSizeMB > 500 ? 900000 : 600000; // 15 min for >500MB, 10 min otherwise
 
       // Download to temp file first (more reliable than direct streaming)
-      const fs = require('fs');
-      const path = require('path');
-      const { pipeline } = require('stream');
-      const { promisify } = require('util');
-      const pipelineAsync = promisify(pipeline);
+      const fs = await import('fs');
+      const path = await import('path');
+      const stream = await import('stream');
+      const util = await import('util');
+      const pipelineAsync = util.promisify(stream.pipeline);
 
       // Create temp file path
       const tempDir = '/tmp';
