@@ -32,7 +32,7 @@ const DEFAULT_SETTINGS = {
 
 const API_CONFIG = {
   baseUrl: 'https://movieapi.giftedtech.co.ke/api',
-  timeout: 60000,
+  timeout: 30000,
   endpoints: {
     search: '/search',
     info: '/info',
@@ -55,33 +55,6 @@ const QUALITY_ALIASES = {
   '480p': '480p',
   '720p': '720p'
 };
-
-// --- NEW HELPER FUNCTION FOR LINK SHORTENER---
-/**
- * Helper function to shorten a URL using TinyURL
- * @param {string} longUrl The URL to shorten
- * @returns {string} The shortened URL or the original URL on failure
- */
-async function _shortenLink(longUrl) {
-  if (!longUrl) return longUrl; // Don't crash on empty URLs
-  try {
-    const response = await axios.get(
-      `https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`,
-      { timeout: 5000 } // Give it a short 5-second timeout
-    );
-    if (response.data && response.status === 200) {
-      return response.data; // This is the short URL
-    }
-    // If response is weird, return original
-    return longUrl;
-  } catch (error) {
-    console.error(chalk.red('Error shortening link:'), error.message);
-    // CRITICAL: Return the original URL as a fallback
-    return longUrl; 
-  }
-}
-// --- END NEW HELPER FUNCTION ---
-
 
 class MovieDownloader {
   constructor() {
@@ -235,30 +208,6 @@ class MovieDownloader {
 
     return session.searchResults[index];
   }
-
-  // --- NEW HELPER FUNCTION ---
-  // Centralized logic to determine if a title is a TV Show
-  isTvShow(subject, resource) {
-    // 1. Trust the API's subjectType if it's 8
-    if (subject.subjectType === 8) {
-      return true;
-    }
-
-    // 2. Check resource.seasons structure as a fallback
-    if (resource && resource.seasons && resource.seasons.length > 0) {
-      const validSeasons = resource.seasons.filter(s => s.se > 0);
-      // It's a TV show if:
-      // 1. There are any seasons with se > 0
-      // 2. OR, there's more than 1 season entry (e.g., Season 0 and Season 1)
-      if (validSeasons.length > 0 || resource.seasons.length > 1) {
-        return true;
-      }
-    }
-
-    // 3. Default to false (it's a movie)
-    return false;
-  }
-  // --- END NEW HELPER FUNCTION ---
 
   async getUserUsage(userId) {
     try {
@@ -612,8 +561,7 @@ class MovieDownloader {
 
       // Data now contains { subject: {...}, resource: {...} }
       const movieData = infoResult.data.subject;
-      const resourceData = infoResult.data.resource; // Get resource data
-      const isTvShow = this.isTvShow(movieData, resourceData); // <-- MODIFIED: Use new helper
+      const isTvShow = movieData.subjectType === 8;
 
       if (isTvShow && (!season || !episode)) {
         // If it's a TV show and no S/E info, *and* it came from a session number, show error
@@ -676,7 +624,7 @@ class MovieDownloader {
         qualityLabel: QUALITY_INFO[source.quality]?.label || source.quality,
         size: source.size,
         format: source.format,
-        isTvShow, // <-- MODIFIED: Pass the correct boolean
+        isTvShow,
         season,
         episode
       };
@@ -1146,10 +1094,14 @@ async function handleMovieSearch(reply, downloader, config, sender, query) {
       // --- END MODIFICATION ---
     });
 
-    message += `*📥 Select Your Prefered Choice!*\n\n`;
-    message += `*Reply with:*\n`;
-    message += `${config.PREFIX}movie number <number>\n`;
-    message += `Example: ${config.PREFIX}movie number 1\n\n`;
+    message += `*📥 Download Commands:*\n\n`;
+    message += `*For Movies:*\n`;
+    message += `${config.PREFIX}movie dl <number> <quality>\n`;
+    message += `Example: ${config.PREFIX}movie dl 1 HD\n\n`;
+
+    message += `*For TV Shows:*\n`;
+    message += `${config.PREFIX}movie dl <number> S<season> E<episode> <quality>\n`;
+    message += `Example: ${config.PREFIX}movie dl 3 S01 E08 FHD\n\n`;
 
     message += `*📊 Available Qualities:*\n`;
     settings.allowedQualities.forEach(q => {
@@ -1169,8 +1121,8 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
     await reply(
       `*ℹ️ Movie Info*\n\n` +
       `Get detailed information about a movie or TV show\n\n` +
-      `*Usage:* ${config.PREFIX}movie number <number>\n` +
-      `*Example:* ${config.PREFIX}movie number 1`
+      `*Usage:* ${config.PREFIX}movie info <number>\n` +
+      `*Example:* ${config.PREFIX}movie info 1`
     );
     return;
   }
@@ -1202,8 +1154,7 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
     // Data now contains { subject: {...}, resource: {...}, ... }
     const data = result.data.subject; // Main info is in 'subject'
     const resource = result.data.resource; // Resource info (quality, seasons)
-    const isTvShow = downloader.isTvShow(data, resource); // <-- MODIFIED: Use new helper
-    const type = isTvShow ? '📺 TV Series' : '🎬 Movie'; // <-- MODIFIED: Use new boolean
+    const type = data.subjectType === 8 ? '📺 TV Show' : '🎬 Movie';
     const year = data.releaseDate ? new Date(data.releaseDate).getFullYear() : 'N/A';
     const coverUrl = data.cover?.url; // Get cover URL
 
@@ -1233,7 +1184,7 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
     }
 
     if (resource && resource.seasons) {
-      if (isTvShow) { // TV Show // <-- MODIFIED: Use new boolean
+      if (data.subjectType === 8) { // TV Show
         // Filter out seasons with se = 0 unless it's the only one
         const validSeasons = resource.seasons.filter(s => s.se > 0);
         const seasonCount = validSeasons.length > 0 ? validSeasons.length : resource.seasons.length;
@@ -1258,20 +1209,20 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
     }
 
     if (data.description) {
-      message += `\n*Story:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
+      message += `\n*Synopsis:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
     }
 
     message += `\n*📥 Download (Reply to this message):*\n`;
     // Provide examples of how to reply
-    if (isTvShow) { // TV Show // <-- MODIFIED: Use new boolean
-      message += `Example: ${config.PREFIX}movie download S01 E01 HD\n`;
+    if (data.subjectType === 8) { // TV Show
+      message += `Example: ${config.PREFIX}movie dl S01 E01 HD\n`;
     } else { // Movie
-      message += `Example: ${config.PREFIX}movie download HD\n`;
+      message += `Example: ${config.PREFIX}movie dl HD\n`;
     }
 
     // --- NEW LOGIC ---
     // Add the permanent subjectId as a hidden reference tag
-    message += `\n\n_[Ref-ID: ${movieId}]_`;
+    message += `\n\n[Ref-ID: ${movieId}]`;
     // --- END NEW LOGIC ---
 
     if (coverUrl && sock && m) {
@@ -1326,10 +1277,9 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       `Download movies and TV shows in multiple qualities\n\n` +
       `*Usage (Option 1):*\n` +
       `1. ${config.PREFIX}movie search <name>\n` +
-      `2. Choose you options. ${config.PREFIX}movie number <number>\n\n` +
-      `3. *Reply* to the info message: E.g ${config.PREFIX}movie download SD\n\n` +
+      `2. ${config.PREFIX}movie dl <number> <quality>\n\n` +
       `*Usage (Option 2):*\n` +
-      `1. ${config.PREFIX}movie number <number>\n` +
+      `1. ${config.PREFIX}movie info <number>\n` +
       `2. *Reply* to the info message:\n` +
       `   ${config.PREFIX}movie dl <S/E> <quality>\n\n` +
       `*Examples:*\n` +
@@ -1392,15 +1342,16 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     const downloadingMsg = await reply(
       `⏬ *Downloading Movie...*\n\n` +
       `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n` +
-      `${result.season && result.episode ? `Season ${result.season} • Episode ${result.episode}\n` : ''}` + // <-- MODIFIED
+      `${result.isTvShow ? `Season ${result.season} • Episode ${result.episode}\n` : ''}` +
       `Quality: ${result.qualityLabel} (${result.quality})\n` +
       `Size: ${sizeMB}MB\n\n` +
-      `⏳ _Please be patient, this may take a few minutes..._\n`
+      `⏳ Please be patient, this may take a few moments...\n` +
+      `_Do not send another command while downloading_`
     );
 
     let caption = `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n\n`;
 
-    if (result.season && result.episode) { // <-- MODIFIED
+    if (result.isTvShow) {
       caption += `*Season:* ${result.season} | *Episode:* ${result.episode}\n`;
     }
 
@@ -1436,25 +1387,19 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
         react: { text: '❌', key: m.key }
       });
 
-// --- MODIFIED SECTION ---
-      // Show a "linking" reaction while we shorten the URL
-      await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
-      const shortUrl = await _shortenLink(result.downloadUrl);
-      await sock.sendMessage(m.from, { react: { text: '', key: m.key } }); // Clear reaction
-
       await reply(
         `❌ *Download Failed*\n\n` +
         `The movie was processed but couldn't be sent. This might be due to:\n` +
         `• File size too large for WhatsApp (${sizeMB}MB)\n` +
         `• Network issues\n` +
         `• WhatsApp restrictions\n\n` +
-        `*Direct Download Link:*\n${shortUrl}\n\n` + // <-- Now uses the shortened URL
+        `*Direct Download Link:*\n${result.downloadUrl}\n\n` +
         `_Link expires in 24 hours. Use a browser to download._`
       );
-      // --- END MODIFIED SECTION ---
     }
   }
 }
+// --- END MODIFIED FUNCTION ---
 
 async function handleMovieStats(reply, downloader) {
   const stats = await downloader.getStats();
