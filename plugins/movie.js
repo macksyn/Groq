@@ -1500,8 +1500,13 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       // Show a "linking" reaction while we shorten the URL
       await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
 
-      // We shorten the *original* proxy URL, as tinyurl can handle redirects itself
-      const shortUrl = await _shortenLink(result.downloadUrl);
+      // --- *** START: FIX *** ---
+      // We MUST shorten the direct, bypassed link, not the broken proxy link.
+      // 1. Get the direct URL.
+      const directMp4Url = downloader._extractDirectUrl(result.downloadUrl);
+      // 2. Shorten the *direct* URL.
+      const shortUrl = await _shortenLink(directMp4Url);
+      // --- *** END: FIX *** ---
 
       await sock.sendMessage(m.from, { react: { text: '', key: m.key } }); // Clear reaction
 
@@ -1813,4 +1818,5 @@ export default {
     }
   }
 };
+
 
