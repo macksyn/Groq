@@ -1329,44 +1329,35 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
   }
 }
 
-// --- *** MODIFIED FUNCTION (Now uses extractor) *** ---
+// Replace the handleMovieDownload function with this improved version
 async function handleMovieDownload(reply, downloader, config, sock, m, sender, isGroup, args) {
   const settings = downloader.getSettings();
-  let movieIdOrNumber = args[0]; // May be undefined, '1', or 'S01'
+  let movieIdOrNumber = args[0];
 
-  // --- NEW QUOTE LOGIC ---
-  // Check if first arg is missing OR looks like a season (e.g., "S01")
+  // Quote detection logic (unchanged)
   const isMissingNumber = !movieIdOrNumber || /^S\d+$/i.test(movieIdOrNumber);
-
   if (isMissingNumber && m.quoted) {
     const caption = m.quoted.text;
     if (caption) {
-      // Look for our hidden [Ref-ID: ...] tag
       const match = caption.match(/\[Ref-ID: (\S+)\]/);
       if (match && match[1]) {
         const extractedMovieId = match[1];
-        args.unshift(extractedMovieId); // Add the found ID to the start of args
-        movieIdOrNumber = extractedMovieId; // Update our local variable
+        args.unshift(extractedMovieId);
+        movieIdOrNumber = extractedMovieId;
         console.log(chalk.cyan(`📥 Download triggered from quote. Found ID: ${extractedMovieId}`));
       }
     }
   }
-  // --- END NEW QUOTE LOGIC ---
 
-  // This check now correctly catches cases where user types just ".movie dl"
-  // and is NOT replying to a valid info message.
+  // Help message (unchanged)
   if (args.length === 0 || !movieIdOrNumber) {
     await reply(
       `*📥 Movie Download*\n\n` +
       `Download movies and TV shows in multiple qualities\n\n` +
       `*Usage (Option 1):*\n` +
       `1. ${config.PREFIX}movie search <name>\n` +
-      `2. Choose you options. ${config.PREFIX}movie number <number>\n\n` +
-      `3. *Reply* to the info message: E.g ${config.PREFIX}movie download SD\n\n` +
-      `*Usage (Option 2):*\n` +
-      `1. ${config.PREFIX}movie number <number>\n` +
-      `2. *Reply* to the info message:\n` +
-      `   ${config.PREFIX}movie dl <S/E> <quality>\n\n` +
+      `2. Choose your option: ${config.PREFIX}movie number <number>\n` +
+      `3. *Reply* to the info message: ${config.PREFIX}movie download SD\n\n` +
       `*Examples:*\n` +
       `${config.PREFIX}movie dl 1 HD (for movies)\n` +
       `${config.PREFIX}movie dl 3 S01 E08 FHD (for TV)\n` +
@@ -1380,32 +1371,24 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     return;
   }
 
-  // --- ORIGINAL PARSING LOGIC (NOW WORKS WITH QUOTES) ---
-  // At this point, movieIdOrNumber is args[0] ('1' or '5099...848')
+  // Parsing logic (unchanged)
   let quality = settings.defaultQuality;
   let season = null;
   let episode = null;
 
-  // We parse args starting from index 1 (args[0] is the ID)
   if (args.length >= 2) {
     if (/^S\d+$/i.test(args[1])) {
-      // TV Show format: dl <id> S01 E08 HD
       season = parseInt(args[1].substring(1));
-
       if (args.length >= 3 && /^E\d+$/i.test(args[2])) {
         episode = parseInt(args[2].substring(1));
       }
-
       if (args.length >= 4) {
         quality = args[3];
       }
-      // If quality is missing but S/E are present, it uses defaultQuality
     } else {
-      // Movie format: dl <id> HD
       quality = args[1];
     }
   }
-  // --- END ORIGINAL PARSING LOGIC ---
 
   await sock.sendMessage(m.from, { react: { text: '⏳', key: m.key } });
 
@@ -1424,18 +1407,18 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     const sizeMB = (parseInt(result.size) / (1024 * 1024)).toFixed(0);
 
     // Send initial downloading message
-    const downloadingMsg = await reply(
+    await reply(
       `⏬ *Downloading Movie...*\n\n` +
       `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n` +
-      `${result.season && result.episode ? `Season ${result.season} • Episode ${result.episode}\n` : ''}` + // <-- MODIFIED
+      `${result.season && result.episode ? `Season ${result.season} • Episode ${result.episode}\n` : ''}` +
       `Quality: ${result.qualityLabel} (${result.quality})\n` +
       `Size: ${sizeMB}MB\n\n` +
-      `⏳ _Please be patient, this may take a few minutes..._\n`
+      `⏳ _Please wait, streaming video..._\n`
     );
 
     let caption = `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n\n`;
 
-    if (result.season && result.episode) { // <-- MODIFIED
+    if (result.season && result.episode) {
       caption += `*Season:* ${result.season} | *Episode:* ${result.episode}\n`;
     }
 
@@ -1452,71 +1435,84 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     caption += `\n✅ *Download Complete!*\n_⚡ Powered by Groq_`;
 
     try {
-      // --- *** START: MODIFIED STREAMING SECTION *** ---
+      // IMPROVED: Better video sending logic
+      await sock.sendMessage(m.from, { react: { text: '📥', key: m.key } });
 
-      // 1. Add a reaction
-      await sock.sendMessage(m.from, {
-        react: { text: '🔗', key: m.key }
-      });
-
-      // 2. Call our new helper to get the REAL MP4 link
-      // This is now a simple string parser, not an async call
+      // Extract direct URL
       const directMp4Url = downloader._extractDirectUrl(result.downloadUrl);
+      console.log(chalk.cyan(`🎬 Streaming from: ${directMp4Url}`));
 
-      // 3. Clear the reaction
-      await sock.sendMessage(m.from, {
-        react: { text: '', key: m.key }
-      });
-
-      // 4. Get the file as a STREAM
-      console.log(chalk.cyan(`🛰️  Attempting to stream from: ${directMp4Url}`));
+      // Get video as stream with longer timeout
       const streamResponse = await axios.get(directMp4Url, {
         responseType: 'stream',
-        timeout: API_CONFIG.timeout // Use the long timeout
+        timeout: 300000, // 5 minutes timeout for large files
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
       });
 
-      // 5. Send the stream to WhatsApp
+      console.log(chalk.green(`✅ Stream obtained, sending to WhatsApp...`));
+
+      // Send video with proper filename
+      const fileName = `${result.movieData.title}${result.isTvShow ? ` S${String(result.season).padStart(2, '0')}E${String(result.episode).padStart(2, '0')}` : ''} [${result.qualityLabel}].mp4`;
+
       await sock.sendMessage(m.from, {
-        video: streamResponse.data, // Pass the stream directly
+        video: streamResponse.data,
         caption: caption,
         mimetype: 'video/mp4',
-        fileName: `${result.movieData.title}${result.isTvShow ? ` S${String(result.season).padStart(2, '0')}E${String(result.episode).padStart(2, '0')}` : ''} [${result.qualityLabel}].mp4`
+        fileName: fileName
       }, { quoted: m });
 
-      // --- *** END: MODIFIED STREAMING SECTION *** ---
-
-      await sock.sendMessage(m.from, {
-        react: { text: '✅', key: m.key }
-      });
+      await sock.sendMessage(m.from, { react: { text: '✅', key: m.key } });
+      console.log(chalk.green(`✅ Video sent successfully!`));
 
     } catch (sendError) {
-      console.error(chalk.red('Error sending movie:'), sendError.message);
+      console.error(chalk.red('❌ Video send error:'), sendError.message);
+      console.error(chalk.red('Full error:'), sendError);
 
-      await sock.sendMessage(m.from, {
-        react: { text: '❌', key: m.key }
-      });
+      await sock.sendMessage(m.from, { react: { text: '⚠️', key: m.key } });
 
-      // --- MODIFIED SECTION (Error Fallback) ---
-      // Show a "linking" reaction while we shorten the URL
-      await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
+      // Check file size limit
+      const fileSizeMB = parseInt(result.size) / (1024 * 1024);
 
-      // We shorten the *original* proxy URL, as tinyurl can handle redirects itself
-      const shortUrl = await _shortenLink(result.downloadUrl);
+      // IMPROVED: Better error handling with specific messages
+      if (fileSizeMB > 100) {
+        // File too large for WhatsApp
+        await reply(
+          `⚠️ *File Too Large for WhatsApp*\n\n` +
+          `The video (${sizeMB}MB) exceeds WhatsApp's limit.\n\n` +
+          `*Alternative:* Use a lower quality (SD or HD instead of FHD)\n\n` +
+          `Try: ${config.PREFIX}movie dl ${movieIdOrNumber}${result.season ? ` S${String(result.season).padStart(2, '0')} E${String(result.episode).padStart(2, '0')}` : ''} HD`
+        );
+      } else if (sendError.message.includes('timeout')) {
+        await reply(
+          `⚠️ *Download Timeout*\n\n` +
+          `The download took too long. This usually happens with:\n` +
+          `• Slow internet connection\n` +
+          `• Server issues\n\n` +
+          `*Try again:* ${config.PREFIX}movie dl ${movieIdOrNumber}${result.season ? ` S${String(result.season).padStart(2, '0')} E${String(result.episode).padStart(2, '0')}` : ''} ${quality}`
+        );
+      } else if (sendError.message.includes('stream')) {
+        await reply(
+          `⚠️ *Streaming Error*\n\n` +
+          `Failed to stream the video. The source might be temporarily unavailable.\n\n` +
+          `*Please try again in a few minutes.*`
+        );
+      } else {
+        // Generic error - provide link as last resort
+        await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
+        const shortUrl = await _shortenLink(result.downloadUrl);
+        await sock.sendMessage(m.from, { react: { text: '', key: m.key } });
 
-      await sock.sendMessage(m.from, { react: { text: '', key: m.key } }); // Clear reaction
-
-      // --- *** MODIFIED: Simpler error message *** ---
-      let errorMessage = `❌ *Download Failed*\n\n` +
-                       `The movie was processed but couldn't be sent. This might be due to:\n` +
-                       `• Network issues (Error: ${sendError.message})\n` +
-                       `• WhatsApp restrictions (e.g., file too large)\n\n`;
-
-      await reply(
-        `${errorMessage}` +
-        `*Direct Download Link:*\n${shortUrl}\n\n` + // <-- Now uses the shortened URL
-        `_Link expires in 24 hours. Use a browser to download._`
-      );
-      // --- *** END: Simpler error message *** ---
+        await reply(
+          `⚠️ *Could Not Send Video*\n\n` +
+          `Error: ${sendError.message}\n\n` +
+          `*Direct Download Link:*\n${shortUrl}\n\n` +
+          `_Use a browser to download. Link expires in 24 hours._`
+        );
+      }
     }
   }
 }
