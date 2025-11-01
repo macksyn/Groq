@@ -1577,41 +1577,31 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
 
       const fileName = `${result.movieData.title}${result.isTvShow ? ` S${String(result.season).padStart(2, '0')}E${String(result.episode).padStart(2, '0')}` : ''} [${result.qualityLabel}].mp4`;
 
-      // Read file in chunks to avoid memory issues
-      console.log(chalk.cyan(`📤 Uploading to WhatsApp...`));
+      // Always send as video for better playback experience
+      console.log(chalk.cyan(`📤 Uploading ${actualSizeMB}MB video to WhatsApp...`));
 
-      if (canSendAsVideo) {
-        // Send as video (≤ 64MB) - plays directly in chat
-        try {
-          await sock.sendMessage(m.from, {
-            video: { url: tempFilePath }, // Send from file path instead of buffer
-            caption: caption,
-            mimetype: 'video/mp4',
-            fileName: fileName
-          }, { quoted: m });
-
-          console.log(chalk.green(`✅ Video sent successfully! (${actualSizeMB}MB)`));
-        } catch (videoError) {
-          console.error(chalk.red('❌ Video send failed, trying as document...'), videoError.message);
-          // Fallback to document
-          await sock.sendMessage(m.from, {
-            document: { url: tempFilePath },
-            caption: caption,
-            mimetype: 'video/mp4',
-            fileName: fileName
-          }, { quoted: m });
-          console.log(chalk.green(`✅ Sent as document instead (${actualSizeMB}MB)`));
-        }
-      } else {
-        // Send as document (64MB - 2GB) - user downloads then watches
+      try {
         await sock.sendMessage(m.from, {
-          document: { url: tempFilePath }, // Send from file path instead of buffer
+          video: fs.readFileSync(tempFilePath),
           caption: caption,
           mimetype: 'video/mp4',
           fileName: fileName
         }, { quoted: m });
 
-        console.log(chalk.green(`✅ Document sent successfully! (${actualSizeMB}MB)`));
+        console.log(chalk.green(`✅ Video sent successfully! (${actualSizeMB}MB)`));
+      } catch (videoError) {
+        console.error(chalk.red('❌ Video send failed:'), videoError.message);
+        console.log(chalk.yellow('⚠️ Trying as document fallback...'));
+
+        // Fallback to document only if video completely fails
+        await sock.sendMessage(m.from, {
+          document: fs.readFileSync(tempFilePath),
+          caption: caption,
+          mimetype: 'application/octet-stream',
+          fileName: fileName
+        }, { quoted: m });
+
+        console.log(chalk.green(`✅ Sent as document instead (${actualSizeMB}MB)`));
       }
 
       // Clean up temp file
