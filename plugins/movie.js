@@ -9,13 +9,6 @@ const FAVORITES_COLLECTION = 'movie_favorites';
 const SEARCH_CACHE_COLLECTION = 'movie_search_cache';
 const USER_SESSIONS_COLLECTION = 'movie_user_sessions';
 
-// --- *** NEW *** ---
-// Set a safe limit for WhatsApp (in MB). 95MB is a safe bet.
-const WHATSAPP_LIMIT_MB = 95;
-// Add a real browser User-Agent to bypass anti-bot measures
-const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
-// --- *** END NEW *** ---
-
 const DEFAULT_SETTINGS = {
   premiumEnabled: false,
   downloadCost: 100,
@@ -979,83 +972,426 @@ class MovieDownloader {
   }
 }
 
-// --- *** MODIFIED FUNCTION (Smarter Size Check + User-Agent) *** ---
-async function handleMovieDownload(reply, downloader, config, sock, m, sender, isGroup, args) {
+const movieDownloader = new MovieDownloader();
+
+async function handleMovieSettings(reply, downloader, config, sender, args) {
   const settings = downloader.getSettings();
-  let movieIdOrNumber = args[0]; // May be undefined, '1', or 'S01'
 
-  // --- NEW QUOTE LOGIC ---
-  // Check if first arg is missing OR looks like a season (e.g., "S01")
-  const isMissingNumber = !movieIdOrNumber || /^S\d+$/i.test(movieIdOrNumber);
-
-  if (isMissingNumber && m.quoted) {
-    const caption = m.quoted.text;
-    if (caption) {
-      // Look for our hidden [Ref-ID: ...] tag
-      const match = caption.match(/\[Ref-ID: (\S+)\]/);
-      if (match && match[1]) {
-        const extractedMovieId = match[1];
-        args.unshift(extractedMovieId); // Add the found ID to the start of args
-        movieIdOrNumber = extractedMovieId; // Update our local variable
-        console.log(chalk.cyan(`📥 Download triggered from quote. Found ID: ${extractedMovieId}`));
-      }
-    }
-  }
-  // --- END NEW QUOTE LOGIC ---
-
-  // This check now correctly catches cases where user types just ".movie dl"
-  // and is NOT replying to a valid info message.
-  if (args.length === 0 || !movieIdOrNumber) {
+  if (args.length === 0) {
     await reply(
-      `*📥 Movie Download*\n\n` +
-      `Download movies and TV shows in multiple qualities\n\n` +
-      `*Usage (Option 1):*\n` +
-      `1. ${config.PREFIX}movie search <name>\n` +
-      `2. Choose you options. ${config.PREFIX}movie number <number>\n\n` +
-      `3. *Reply* to the info message: E.g ${config.PREFIX}movie download SD\n\n` +
-      `*Usage (Option 2):*\n` +
-      `1. ${config.PREFIX}movie number <number>\n` +
-      `2. *Reply* to the info message:\n` +
-      `   ${config.PREFIX}movie dl <S/E> <quality>\n\n` +
-      `*Examples:*\n` +
-      `${config.PREFIX}movie dl 1 HD (for movies)\n` +
-      `${config.PREFIX}movie dl 3 S01 E08 FHD (for TV)\n` +
-      `(Replying) ${config.PREFIX}movie dl S01 E08 FHD\n\n` +
-      `*📊 Available Qualities:*\n` +
-      `${settings.allowedQualities.map(q => {
-        const info = QUALITY_INFO[q];
-        return `${info.emoji} *${info.label}* - ${info.displayLabel}`;
-      }).join('\n')}\n`
+      `*⚙️ Movie Downloader Settings*\n\n` +
+      `*Premium Mode:* ${settings.premiumEnabled ? '✅ Enabled' : '❌ Disabled'}\n` +
+      `*Download Cost:* ₦${settings.downloadCost}\n` +
+      `*Search Cost:* ₦${settings.searchCost}\n` +
+      `*Free Limit:* ${settings.rateLimitFree} per day\n` +
+      `*Cooldown:* ${settings.rateLimitCooldown / (60 * 60 * 1000)}h\n\n` +
+      `*Allowed Qualities:*\n${settings.allowedQualities.map(q => `• ${q}`).join('\n')}\n` +
+      `*Default Quality:* ${settings.defaultQuality}\n` +
+      `*Max Search Results:* ${settings.maxSearchResults}\n` +
+      `*Max File Size:* ${settings.maxFileSize}MB\n\n` +
+      `*Features:*\n` +
+      `• Groups: ${settings.allowGroups ? '✅' : '❌'}\n` +
+      `• Private: ${settings.allowPrivate ? '✅' : '❌'}\n` +
+      `• Movies: ${settings.allowMovies ? '✅' : '❌'}\n` +
+      `• TV Shows: ${settings.allowTvShows ? '✅' : '❌'}\n` +
+      `• Cache: ${settings.enableCache ? '✅' : '❌'}\n\n` +
+      `*Last Updated:* ${new Date(settings.updatedAt).toLocaleString()}\n` +
+      `*Updated By:* ${settings.updatedBy}\n\n` +
+      `*Commands:*\n` +
+      `${config.PREFIX}moviesettings premium on/off\n` +
+      `${config.PREFIX}moviesettings cost <amount>\n` +
+      `${config.PREFIX}moviesettings limit <number>\n` +
+      `${config.PREFIX}moviesettings quality <360p|480p|720p> on/off\n` +
+      `${config.PREFIX}moviesettings groups on/off\n` +
+      `${config.PREFIX}moviesettings movies on/off\n` +
+      `${config.PREFIX}moviesettings tvshows on/off`
     );
     return;
   }
 
-  // --- ORIGINAL PARSING LOGIC (NOW WORKS WITH QUOTES) ---
-  // At this point, movieIdOrNumber is args[0] ('1' or '5099...848')
+  const action = args[0];
+  const value = args[1];
+  const updates = {};
+
+  try {
+    switch (action) {
+      case 'premium':
+        if (value === 'on' || value === 'off') {
+          updates.premiumEnabled = value === 'on';
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Premium mode ${value === 'on' ? 'enabled' : 'disabled'}`);
+        } else {
+          await reply('❌ Usage: .moviesettings premium on/off');
+        }
+        break;
+      case 'cost':
+        const cost = parseInt(value);
+        if (!isNaN(cost) && cost >= 0) {
+          updates.downloadCost = cost;
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Download cost set to ₦${cost}`);
+        } else {
+          await reply('❌ Invalid cost. Usage: .moviesettings cost <number>');
+        }
+        break;
+      case 'limit':
+        const limit = parseInt(value);
+        if (!isNaN(limit) && limit > 0) {
+          updates.rateLimitFree = limit;
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Free download limit set to ${limit} per day`);
+        } else {
+          await reply('❌ Invalid limit. Usage: .moviesettings limit <number>');
+        }
+        break;
+      case 'quality':
+        const quality = value;
+        const qualityState = args[2];
+        if (['360p', '480p', '720p'].includes(quality) && (qualityState === 'on' || qualityState === 'off')) {
+          const qualities = [...settings.allowedQualities] || [];
+
+          if (qualityState === 'on' && !qualities.includes(quality)) {
+            qualities.push(quality);
+          } else if (qualityState === 'off') {
+            const index = qualities.indexOf(quality);
+            if (index > -1) qualities.splice(index, 1);
+          }
+
+          updates.allowedQualities = qualities;
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Quality ${quality} ${qualityState === 'on' ? 'enabled' : 'disabled'}`);
+        } else {
+          await reply('❌ Usage: .moviesettings quality <360p|480p|720p> on/off');
+        }
+        break;
+      case 'groups':
+        if (value === 'on' || value === 'off') {
+          updates.allowGroups = value === 'on';
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Group downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
+        } else {
+          await reply('❌ Usage: .moviesettings groups on/off');
+        }
+        break;
+      case 'private':
+        if (value === 'on' || value === 'off') {
+          updates.allowPrivate = value === 'on';
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Private downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
+        } else {
+          await reply('❌ Usage: .moviesettings private on/off');
+        }
+        break;
+      case 'movies':
+        if (value === 'on' || value === 'off') {
+          updates.allowMovies = value === 'on';
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Movie downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
+        } else {
+          await reply('❌ Usage: .moviesettings movies on/off');
+        }
+        break;
+      case 'tvshows':
+        if (value === 'on' || value === 'off') {
+          updates.allowTvShows = value === 'on';
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ TV show downloads ${value === 'on' ? 'enabled' : 'disabled'}`);
+        } else {
+          await reply('❌ Usage: .moviesettings tvshows on/off');
+        }
+        break;
+      case 'cache':
+        if (value === 'on' || value === 'off') {
+          updates.enableCache = value === 'on';
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Search cache ${value === 'on' ? 'enabled' : 'disabled'}`);
+        } else if (value === 'clear') {
+          const cleared = await downloader.clearSearchCache();
+          await reply(`✅ Cleared ${cleared} cached search results`);
+        } else {
+          await reply('❌ Usage: .moviesettings cache on/off/clear');
+        }
+        break;
+      case 'maxsize':
+        const maxSize = parseInt(value);
+        if (!isNaN(maxSize) && maxSize > 0) {
+          updates.maxFileSize = maxSize;
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Max file size set to ${maxSize}MB`);
+        } else {
+          await reply('❌ Invalid size. Usage: .moviesettings maxsize <number>');
+        }
+        break;
+      case 'maxresults':
+        const maxResults = parseInt(value);
+        if (!isNaN(maxResults) && maxResults > 0 && maxResults <= 20) {
+          updates.maxSearchResults = maxResults;
+          await downloader.saveSettings(updates, sender);
+          await reply(`✅ Max search results set to ${maxResults}`);
+        } else {
+          await reply('❌ Invalid number. Usage: .moviesettings maxresults <1-20>');
+        }
+        break;
+      default:
+        await reply(`❌ Unknown setting: ${action}\n\nUse ${config.PREFIX}moviesettings to see available commands`);
+    }
+  } catch (error) {
+    console.error(chalk.red('Error updating setting:'), error.message);
+    await reply(`❌ Error updating setting: ${error.message}`);
+  }
+}
+
+async function handleMovieSearch(reply, downloader, config, sender, query) {
+  if (!query) {
+    await reply(
+      `*🔍 Movie Search*\n\n` +
+      `Search for movies and TV shows\n\n` +
+      `*Usage:* ${config.PREFIX}movie search <query>\n` +
+      `*Example:* ${config.PREFIX}movie search Game of Thrones`
+    );
+    return;
+  }
+
+  const result = await downloader.searchMovies(query, sender);
+
+  if (result.error) {
+    await reply(result.error);
+    return;
+  }
+
+  if (result.success) {
+    const settings = downloader.getSettings();
+    let message = `*🔍 Search Results for "${result.query}"*\n\n`;
+    message += `Found ${result.total} results, showing ${result.showing}\n`;
+    if (result.fromCache) {
+      message += `📦 _Loaded from cache_\n`;
+    }
+    message += `\n`;
+
+    result.results.forEach((item, index) => {
+      const type = item.subjectType === 8 ? '📺' : '🎬';
+      const year = item.releaseDate ? new Date(item.releaseDate).getFullYear() : 'N/A';
+      const rating = item.imdbRatingValue ? `⭐ ${item.imdbRatingValue}` : '';
+
+      message += `*${index + 1}. ${item.title}* ${type}\n`;
+      message += `   Year: ${year} ${rating}\n`;
+      // --- MODIFICATION ---
+      // Add info command example for each result
+      message += `   Info: ${config.PREFIX}movie info ${index + 1}\n\n`;
+      // --- END MODIFICATION ---
+    });
+
+    message += `*📥 Select Your Prefered Choice!*\n\n`;
+    message += `*Reply with:*\n`;
+    message += `${config.PREFIX}movie number <number>\n`;
+    message += `Example: ${config.PREFIX}movie number 1\n\n`;
+
+    message += `*📊 Available Qualities:*\n`;
+    settings.allowedQualities.forEach(q => {
+      const info = QUALITY_INFO[q];
+      message += `${info.emoji} *${info.label}* - ${info.displayLabel}\n`;
+    });
+
+    message += `\n💡 _Tip: Use '.movie info <number>' to see details before downloading_`;
+    message += `\n⏱️ _Results valid for 30 minutes_`;
+
+    await reply(message);
+  }
+}
+
+async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sender, sock, m) {
+  if (!movieIdOrNumber) {
+    await reply(
+      `*ℹ️ Movie Info*\n\n` +
+      `Get detailed information about a movie or TV show\n\n` +
+      `*Usage:* ${config.PREFIX}movie number <number>\n` +
+      `*Example:* ${config.PREFIX}movie number 1`
+    );
+    return;
+  }
+
+  let movieId = movieIdOrNumber;
+  let movieFromSession = null;
+
+  if (/^\d{1,2}$/.test(movieIdOrNumber)) {
+    movieFromSession = downloader.getMovieByNumber(sender, movieIdOrNumber);
+    if (!movieFromSession) {
+      await reply(`❌ Number ${movieIdOrNumber} not found.\n\nPlease search first: ${config.PREFIX}movie search <query>`);
+      return;
+    }
+    movieId = movieFromSession.subjectId;
+  } else {
+    // It's not a session number, assume it's a full ID
+    movieId = movieIdOrNumber;
+  }
+
+
+  const result = await downloader.getMovieInfo(movieId);
+
+  if (result.error) {
+    await reply(result.error);
+    return;
+  }
+
+  if (result.success) {
+    // Data now contains { subject: {...}, resource: {...}, ... }
+    const data = result.data.subject; // Main info is in 'subject'
+    const resource = result.data.resource; // Resource info (quality, seasons)
+    const isTvShow = downloader.isTvShow(data, resource); // <-- MODIFIED: Use new helper
+    const type = isTvShow ? '📺 TV Series' : '🎬 Movie'; // <-- MODIFIED: Use new boolean
+    const year = data.releaseDate ? new Date(data.releaseDate).getFullYear() : 'N/A';
+    const coverUrl = data.cover?.url; // Get cover URL
+
+    let message = `${type} *${data.title}*\n\n`;
+    message += `*Year:* ${year}\n`;
+
+    if (data.countryName) {
+      message += `*Country:* ${data.countryName}\n`;
+    }
+
+    if (data.imdbRatingValue) {
+      message += `*Rating:* ⭐ ${data.imdbRatingValue}/10`;
+      if (data.imdbRatingCount) {
+        message += ` (${(data.imdbRatingCount / 1000).toFixed(0)}K votes)`;
+      }
+      message += `\n`;
+    }
+
+    if (data.genre) {
+      message += `*Genre:* ${data.genre}\n`;
+    }
+
+    if (data.duration) {
+      const hours = Math.floor(data.duration / 3600);
+      const mins = Math.floor((data.duration % 3600) / 60);
+      message += `*Duration:* ${hours}h ${mins}m\n`;
+    }
+
+    if (resource && resource.seasons) {
+      if (isTvShow) { // TV Show // <-- MODIFIED: Use new boolean
+        // Filter out seasons with se = 0 unless it's the only one
+        const validSeasons = resource.seasons.filter(s => s.se > 0);
+        const seasonCount = validSeasons.length > 0 ? validSeasons.length : resource.seasons.length;
+        const lastSeason = validSeasons.length > 0 ? validSeasons[validSeasons.length - 1] : resource.seasons[resource.seasons.length - 1];
+
+        message += `*Seasons:* ${seasonCount}\n`;
+        if (lastSeason.maxEp > 0) {
+           message += `*Latest Episode:* S${String(lastSeason.se).padStart(2, '0')}E${String(lastSeason.maxEp).padStart(2, '0')}\n`;
+        }
+      }
+
+      // Get available qualities (resolutions)
+      const resolutions = resource.seasons[0]?.resolutions;
+      if (resolutions && resolutions.length > 0) {
+        // Map to labels (SD, HD, FHD) if possible
+        const qualities = resolutions.map(r => {
+            const qualityStr = `${r.resolution}p`;
+            return QUALITY_INFO[qualityStr]?.label || qualityStr;
+        }).join(', ');
+        message += `*Available Qualities:* ${qualities}\n`;
+      }
+    }
+
+    if (data.description) {
+      message += `\n*Story:*\n${data.description.substring(0, 250)}${data.description.length > 250 ? '...' : ''}\n`;
+    }
+
+    message += `\n*📥 Download (Reply to this message):*\n`;
+    // Provide examples of how to reply
+    if (isTvShow) { // TV Show // <-- MODIFIED: Use new boolean
+      message += `Example: ${config.PREFIX}movie download S01 E01 HD\n`;
+    } else { // Movie
+      message += `Example: ${config.PREFIX}movie download HD\n`;
+    }
+
+    // --- NEW LOGIC ---
+    // Add the permanent subjectId as a hidden reference tag
+    message += `\n\n_[Ref-ID: ${movieId}]_`;
+    // --- END NEW LOGIC ---
+
+    if (coverUrl && sock && m) {
+      // Send image with caption
+      try {
+        await sock.sendMessage(m.from, {
+          image: { url: coverUrl },
+          caption: message,
+          mimetype: 'image/jpeg' // API response says jpg
+        }, { quoted: m });
+      } catch (imgErr) {
+        console.error(chalk.red('Failed to send info with image:'), imgErr.message);
+        // Fallback to text-only reply
+        await reply(message);
+      }
+    } else {
+      // Fallback to text-only reply
+      await reply(message);
+    }
+  }
+}
+
+// Replace the handleMovieDownload function with this version
+// Replace the handleMovieDownload function with this version
+async function handleMovieDownload(reply, downloader, config, sock, m, sender, isGroup, args) {
+  const settings = downloader.getSettings();
+  let movieIdOrNumber = args[0];
+
+  // Quote detection logic
+  const isMissingNumber = !movieIdOrNumber || /^S\d+$/i.test(movieIdOrNumber);
+  if (isMissingNumber && m.quoted) {
+    const caption = m.quoted.text;
+    if (caption) {
+      const match = caption.match(/\[Ref-ID: (\S+)\]/);
+      if (match && match[1]) {
+        const extractedMovieId = match[1];
+        args.unshift(extractedMovieId);
+        movieIdOrNumber = extractedMovieId;
+        console.log(chalk.cyan(`📥 Download triggered from quote. Found ID: ${extractedMovieId}`));
+      }
+    }
+  }
+
+  // Help message
+  if (args.length === 0 || !movieIdOrNumber) {
+    await reply(
+      `*📥 Movie Download*\n\n` +
+      `Download movies and TV shows in all qualities\n\n` +
+      `*Usage:*\n` +
+      `1. ${config.PREFIX}movie search <name>\n` +
+      `2. ${config.PREFIX}movie number <number>\n` +
+      `3. *Reply* to info: ${config.PREFIX}movie dl <quality>\n\n` +
+      `*Examples:*\n` +
+      `${config.PREFIX}movie dl 1 HD (movies)\n` +
+      `${config.PREFIX}movie dl 3 S01 E08 FHD (TV)\n\n` +
+      `*📊 Quality Guide:*\n` +
+      `${settings.allowedQualities.map(q => {
+        const info = QUALITY_INFO[q];
+        const sizeGuide = q === '360p' ? '~80MB' : q === '480p' ? '~150MB' : '~300MB+';
+        return `${info.emoji} *${info.label}* (${sizeGuide}) - ${info.displayLabel}`;
+      }).join('\n')}\n\n` +
+      `✅ *All files sent directly via WhatsApp*\n` +
+      `(Video < 64MB | Document < 2GB)`
+    );
+    return;
+  }
+
+  // Parsing logic
   let quality = settings.defaultQuality;
   let season = null;
   let episode = null;
 
-  // We parse args starting from index 1 (args[0] is the ID)
   if (args.length >= 2) {
     if (/^S\d+$/i.test(args[1])) {
-      // TV Show format: dl <id> S01 E08 HD
       season = parseInt(args[1].substring(1));
-
       if (args.length >= 3 && /^E\d+$/i.test(args[2])) {
         episode = parseInt(args[2].substring(1));
       }
-
       if (args.length >= 4) {
         quality = args[3];
       }
-      // If quality is missing but S/E are present, it uses defaultQuality
     } else {
-      // Movie format: dl <id> HD
       quality = args[1];
     }
   }
-  // --- END ORIGINAL PARSING LOGIC ---
 
   await sock.sendMessage(m.from, { react: { text: '⏳', key: m.key } });
 
@@ -1072,20 +1408,68 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
   if (result.success) {
     const remaining = await downloader.getRemainingDownloads(sender);
     const sizeMB = (parseInt(result.size) / (1024 * 1024)).toFixed(0);
+    const fileSizeMB = parseInt(result.size) / (1024 * 1024);
 
-    // Send initial downloading message
-    const downloadingMsg = await reply(
-      `⏬ *Downloading Movie...*\n\n` +
+    // CORRECT WhatsApp limits
+    const VIDEO_LIMIT_MB = 64;      // WhatsApp video limit is 64MB
+    const DOCUMENT_LIMIT_MB = 2048; // WhatsApp document limit is 2GB (2048MB)
+
+    // Determine send method
+    const canSendAsVideo = fileSizeMB <= VIDEO_LIMIT_MB;
+    const canSendAsDocument = fileSizeMB <= DOCUMENT_LIMIT_MB;
+    const sendAsDocument = !canSendAsVideo && canSendAsDocument;
+
+    // Check if file is too large even for WhatsApp
+    if (!canSendAsDocument) {
+      console.log(chalk.yellow(`⚠️ File exceeds 2GB (${sizeMB}MB), sending link`));
+
+      await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
+
+      const directMp4Url = downloader._extractDirectUrl(result.downloadUrl);
+      const shortUrl = await _shortenLink(directMp4Url);
+
+      await sock.sendMessage(m.from, { react: { text: '', key: m.key } });
+
+      let message = `📥 *${result.movieData.title}*\n\n`;
+
+      if (result.season && result.episode) {
+        message += `*Season ${result.season} • Episode ${result.episode}*\n\n`;
+      }
+
+      message += `*Quality:* ${result.qualityLabel} (${result.quality})\n`;
+      message += `*Size:* ${sizeMB}MB\n`;
+      message += `*Format:* MP4\n\n`;
+
+      if (settings.premiumEnabled) {
+        message += `💳 *Charged:* ₦${settings.downloadCost}\n`;
+      } else {
+        message += `🆓 *Remaining:* ${remaining}/${settings.rateLimitFree}\n`;
+      }
+
+      message += `\n⚠️ *File Exceeds WhatsApp Limit* (2GB)\n\n`;
+      message += `*📥 Direct Download Link:*\n${shortUrl}\n\n`;
+      message += `_Link valid for 24 hours • ⚡ Powered by Groq_`;
+
+      await reply(message);
+      await sock.sendMessage(m.from, { react: { text: '✅', key: m.key } });
+      return;
+    }
+
+    // File can be sent via WhatsApp
+    const sendMethod = canSendAsVideo ? 'Video' : 'Document';
+    await reply(
+      `⏬ *Downloading ${sendMethod}...*\n\n` +
       `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n` +
-      `${result.season && result.episode ? `Season ${result.season} • Episode ${result.episode}\n` : ''}` + // <-- MODIFIED
+      `${result.season && result.episode ? `Season ${result.season} • Episode ${result.episode}\n` : ''}` +
       `Quality: ${result.qualityLabel} (${result.quality})\n` +
       `Size: ${sizeMB}MB\n\n` +
-      `⏳ _Please be patient, this may take a few minutes..._\n`
+      `${sendAsDocument ? '📄 *Sending as document (optimized for large files)*\n' : '📹 *Sending as video*\n'}` +
+      `⏳ _Streaming to WhatsApp, please be patient..._`
     );
 
     let caption = `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n\n`;
 
-    if (result.season && result.episode) { // <-- MODIFIED
+    if (result.season && result.episode) {
       caption += `*Season:* ${result.season} | *Episode:* ${result.episode}\n`;
     }
 
@@ -1102,107 +1486,113 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     caption += `\n✅ *Download Complete!*\n_⚡ Powered by Groq_`;
 
     try {
-      // --- *** START: MODIFIED STREAMING SECTION *** ---
+      await sock.sendMessage(m.from, { react: { text: '📥', key: m.key } });
 
-      // 1. Add a reaction
-      await sock.sendMessage(m.from, {
-        react: { text: '🔗', key: m.key }
-      });
+      // Use the download URL directly from API (no extraction needed)
+      const downloadUrl = result.downloadUrl;
+      console.log(chalk.cyan(`🎬 Streaming ${sizeMB}MB file as ${sendMethod} from API source`));
 
-      // 2. Call our helper to get the REAL MP4 link
-      const directMp4Url = downloader._extractDirectUrl(result.downloadUrl);
+      // Get video as stream with extended timeout for large files
+      const timeoutMs = fileSizeMB > 500 ? 900000 : 600000; // 15 min for >500MB, 10 min otherwise
 
-      // --- *** NEW: Smart Size Check *** ---
-      try {
-        console.log(chalk.cyan(`Checking file size for: ${directMp4Url}`));
-        const headResponse = await axios.head(directMp4Url, {
-          headers: { 'User-Agent': BROWSER_USER_AGENT },
-          timeout: 10000 // 10-second timeout for HEAD request
-        });
-
-        const contentLength = headResponse.headers['content-length'];
-        if (contentLength) {
-          const fileSizeMB = parseInt(contentLength) / (1024 * 1024);
-          console.log(chalk.cyan(`Reported file size: ${fileSizeMB.toFixed(2)}MB`));
-
-          if (fileSizeMB > WHATSAPP_LIMIT_MB) {
-            // Throw an error to trigger the 'catch' block (Plan B)
-            throw new Error(`File is ${fileSizeMB.toFixed(0)}MB (over ${WHATSAPP_LIMIT_MB}MB limit), sending link instead.`);
-          }
-        } else {
-          console.warn(chalk.yellow('Could not determine file size, attempting to stream anyway.'));
-        }
-      } catch (headError) {
-        if (headError.message.includes('sending link instead')) {
-          // This is our own error, re-throw it
-          throw headError;
-        }
-        // If HEAD request fails, log it and proceed
-        console.warn(chalk.yellow(`HEAD request failed (${headError.message}). Proceeding to stream...`));
-      }
-      // --- *** END: Smart Size Check *** ---
-
-
-      // 3. Clear the reaction
-      await sock.sendMessage(m.from, {
-        react: { text: '', key: m.key }
-      });
-
-      // 4. Get the file as a STREAM (now with User-Agent)
-      console.log(chalk.cyan(`🛰️  Attempting to stream from: ${directMp4Url}`));
-      const streamResponse = await axios.get(directMp4Url, {
+      // Full Chrome browser headers to bypass bot detection
+      const streamResponse = await axios.get(downloadUrl, {
         responseType: 'stream',
-        timeout: API_CONFIG.timeout, // Use the long timeout
-        headers: { 'User-Agent': BROWSER_USER_AGENT } // <-- Add browser disguise
+        timeout: timeoutMs,
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+        maxRedirects: 10,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Connection': 'keep-alive',
+          'Upgrade-Insecure-Requests': '1',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'none',
+          'Sec-Fetch-User': '?1',
+          'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+          'sec-ch-ua-mobile': '?0',
+          'sec-ch-ua-platform': '"Windows"',
+          'Cache-Control': 'max-age=0',
+          'Referer': 'https://movieapi.giftedtech.co.ke/',
+          'Origin': 'https://movieapi.giftedtech.co.ke'
+        }
       });
 
-      // 5. Send the stream to WhatsApp
-      await sock.sendMessage(m.from, {
-        video: streamResponse.data, // Pass the stream directly
-        caption: caption,
-        mimetype: 'video/mp4',
-        fileName: `${result.movieData.title}${result.isTvShow ? ` S${String(result.season).padStart(2, '0')}E${String(result.episode).padStart(2, '0')}` : ''} [${result.qualityLabel}].mp4`
-      }, { quoted: m });
+      console.log(chalk.green(`✅ Stream established, uploading to WhatsApp...`));
 
-      // --- *** END: MODIFIED STREAMING SECTION *** ---
+      const fileName = `${result.movieData.title}${result.isTvShow ? ` S${String(result.season).padStart(2, '0')}E${String(result.episode).padStart(2, '0')}` : ''} [${result.qualityLabel}].mp4`;
 
-      await sock.sendMessage(m.from, {
-        react: { text: '✅', key: m.key }
-      });
+      if (canSendAsVideo) {
+        // Send as video (≤ 64MB) - plays directly in chat
+        await sock.sendMessage(m.from, {
+          video: streamResponse.data,
+          caption: caption,
+          mimetype: 'video/mp4',
+          fileName: fileName
+        }, { quoted: m });
+
+        console.log(chalk.green(`✅ Video sent successfully! (${sizeMB}MB)`));
+      } else {
+        // Send as document (64MB - 2GB) - user downloads then watches
+        await sock.sendMessage(m.from, {
+          document: streamResponse.data,
+          caption: caption,
+          mimetype: 'video/mp4',
+          fileName: fileName
+        }, { quoted: m });
+
+        console.log(chalk.green(`✅ Document sent successfully! (${sizeMB}MB)`));
+      }
+
+      await sock.sendMessage(m.from, { react: { text: '✅', key: m.key } });
 
     } catch (sendError) {
-      console.error(chalk.red('Error sending movie:'), sendError.message);
+      console.error(chalk.red('❌ Upload error:'), sendError.message);
+      console.error(chalk.red('Full error stack:'), sendError);
 
-      await sock.sendMessage(m.from, {
-        react: { text: '❌', key: m.key }
-      });
+      await sock.sendMessage(m.from, { react: { text: '⚠️', key: m.key } });
 
-      // --- MODIFIED SECTION (Error Fallback) ---
-      // Show a "linking" reaction while we shorten the URL
+      // Determine error type
+      let errorType = 'Upload Failed';
+      let errorHelp = 'An unexpected error occurred while uploading to WhatsApp.';
+
+      if (sendError.message.includes('timeout') || sendError.message.includes('ETIMEDOUT')) {
+        errorType = 'Upload Timeout';
+        errorHelp = 'The upload took too long. This can happen with:\n• Large files on slow connections\n• Server delays\n• Network instability';
+      } else if (sendError.message.includes('ECONNRESET') || sendError.message.includes('ECONNREFUSED')) {
+        errorType = 'Connection Lost';
+        errorHelp = 'Connection was interrupted during upload. This could be:\n• Temporary network issue\n• Server connection dropped';
+      } else if (sendError.message.includes('stream') || sendError.message.includes('read')) {
+        errorType = 'Stream Error';
+        errorHelp = 'Failed to stream the video data. The source might be temporarily unavailable.';
+      } else if (sendError.message.includes('ENOTFOUND') || sendError.message.includes('getaddrinfo')) {
+        errorType = 'Network Error';
+        errorHelp = 'Could not reach the download server. Check your internet connection.';
+      }
+
+      // Fallback to download link
+      console.log(chalk.yellow(`⚠️ Falling back to download link due to: ${errorType}`));
+
       await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
-
-      // --- *** START: FIX *** ---
-      // We MUST shorten the direct, bypassed link, not the broken proxy link.
-      // 1. Get the direct URL.
-      const directMp4Url = downloader._extractDirectUrl(result.downloadUrl);
-      // 2. Shorten the *direct* URL.
-      const shortUrl = await _shortenLink(directMp4Url);
-      // --- *** END: FIX *** ---
-
-      await sock.sendMessage(m.from, { react: { text: '', key: m.key } }); // Clear reaction
-
-      // --- *** MODIFIED: Simpler error message *** ---
-      let errorMessage = `❌ *Download Failed*\n\n` +
-                       `The movie was processed but couldn't be sent. This might be due to:\n` +
-                       `• Network issues (Error: ${sendError.message})\n` + // Will now show our "File is too large" error
-                       `• WhatsApp restrictions (e.g., file too large)\n\n`;
+      const shortUrl = await _shortenLink(result.downloadUrl);
+      await sock.sendMessage(m.from, { react: { text: '', key: m.key } });
 
       await reply(
-        `${errorMessage}` +
-        `*Direct Download Link:*\n${shortUrl}\n\n` + // <-- Now uses the shortened URL
-        `_Link expires in 24 hours. Use a browser to download._`
+        `⚠️ *${errorType}*\n\n` +
+        `${errorHelp}\n\n` +
+        `${caption}\n\n` +
+        `*📥 Direct Download Link:*\n${shortUrl}\n\n` +
+        `*How to Download:*\n` +
+        `1. Tap the link above\n` +
+        `2. Video will download automatically\n` +
+        `3. Find it in your Downloads folder\n\n` +
+        `💡 *Tip:* Try again or use lower quality for faster downloads\n\n` +
+        `_Link expires in 24 hours_`
       );
-      // --- *** END: Simpler error message *** ---
     }
   }
 }
@@ -1499,6 +1889,4 @@ export default {
     }
   }
 };
-
-
 
