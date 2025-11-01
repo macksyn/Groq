@@ -1581,8 +1581,9 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       console.log(chalk.cyan(`📤 Uploading ${actualSizeMB}MB video to WhatsApp...`));
 
       try {
+        // Use file path streaming for large files (avoids loading entire file to RAM)
         await sock.sendMessage(m.from, {
-          video: fs.readFileSync(tempFilePath),
+          video: fs.createReadStream(tempFilePath),
           caption: caption,
           mimetype: 'video/mp4',
           fileName: fileName
@@ -1594,14 +1595,19 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
         console.log(chalk.yellow('⚠️ Trying as document fallback...'));
 
         // Fallback to document only if video completely fails
-        await sock.sendMessage(m.from, {
-          document: fs.readFileSync(tempFilePath),
-          caption: caption,
-          mimetype: 'application/octet-stream',
-          fileName: fileName
-        }, { quoted: m });
+        try {
+          await sock.sendMessage(m.from, {
+            document: fs.createReadStream(tempFilePath),
+            caption: caption,
+            mimetype: 'application/octet-stream',
+            fileName: fileName
+          }, { quoted: m });
 
-        console.log(chalk.green(`✅ Sent as document instead (${actualSizeMB}MB)`));
+          console.log(chalk.green(`✅ Sent as document instead (${actualSizeMB}MB)`));
+        } catch (docError) {
+          console.error(chalk.red('❌ Both video and document send failed'));
+          throw docError; // Re-throw to trigger link fallback
+        }
       }
 
       // Clean up temp file
