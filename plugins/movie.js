@@ -1577,36 +1577,58 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
 
       const fileName = `${result.movieData.title}${result.isTvShow ? ` S${String(result.season).padStart(2, '0')}E${String(result.episode).padStart(2, '0')}` : ''} [${result.qualityLabel}].mp4`;
 
-      // Always send as video for better playback experience
-      console.log(chalk.cyan(`📤 Uploading ${actualSizeMB}MB video to WhatsApp...`));
+      // Check file size and decide how to handle it
+      const fileSizeLimit = 100 * 1024 * 1024; // 100MB safe limit for readFileSync
 
-      try {
-        // Use file path streaming for large files (avoids loading entire file to RAM)
-        await sock.sendMessage(m.from, {
-          video: fs.createReadStream(tempFilePath),
-          caption: caption,
-          mimetype: 'video/mp4',
-          fileName: fileName
-        }, { quoted: m });
+      if (fileStats.size <= fileSizeLimit) {
+        // Small files: Load to buffer (fast, works perfectly)
+        console.log(chalk.cyan(`📤 Uploading ${actualSizeMB}MB video to WhatsApp (using buffer)...`));
 
-        console.log(chalk.green(`✅ Video sent successfully! (${actualSizeMB}MB)`));
-      } catch (videoError) {
-        console.error(chalk.red('❌ Video send failed:'), videoError.message);
-        console.log(chalk.yellow('⚠️ Trying as document fallback...'));
-
-        // Fallback to document only if video completely fails
         try {
+          const videoBuffer = fs.readFileSync(tempFilePath);
+
           await sock.sendMessage(m.from, {
-            document: fs.createReadStream(tempFilePath),
+            video: videoBuffer,
+            caption: caption,
+            mimetype: 'video/mp4',
+            fileName: fileName
+          }, { quoted: m });
+
+          console.log(chalk.green(`✅ Video sent successfully! (${actualSizeMB}MB)`));
+        } catch (videoError) {
+          console.error(chalk.red('❌ Video send failed:'), videoError.message);
+          console.log(chalk.yellow('⚠️ Trying as document...'));
+
+          const docBuffer = fs.readFileSync(tempFilePath);
+          await sock.sendMessage(m.from, {
+            document: docBuffer,
             caption: caption,
             mimetype: 'application/octet-stream',
             fileName: fileName
           }, { quoted: m });
 
           console.log(chalk.green(`✅ Sent as document instead (${actualSizeMB}MB)`));
-        } catch (docError) {
-          console.error(chalk.red('❌ Both video and document send failed'));
-          throw docError; // Re-throw to trigger link fallback
+        }
+      } else {
+        // Large files: Send as document with link fallback
+        console.log(chalk.yellow(`⚠️ File is large (${actualSizeMB}MB), attempting document send...`));
+
+        try {
+          // Try sending large file as document
+          const docBuffer = fs.readFileSync(tempFilePath);
+
+          await sock.sendMessage(m.from, {
+            document: docBuffer,
+            caption: caption,
+            mimetype: 'application/octet-stream',
+            fileName: fileName
+          }, { quoted: m });
+
+          console.log(chalk.green(`✅ Document sent successfully! (${actualSizeMB}MB)`));
+        } catch (largeFileError) {
+          console.error(chalk.red('❌ Document send failed (file too large):'), largeFileError.message);
+          // This will trigger the link fallback in the outer catch block
+          throw new Error(`FILE_TOO_LARGE_FOR_WHATSAPP:${actualSizeMB}MB`);
         }
       }
 
