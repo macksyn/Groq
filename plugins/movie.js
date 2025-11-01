@@ -56,7 +56,7 @@ const QUALITY_ALIASES = {
   '720p': '720p'
 };
 
-// --- NEW HELPER FUNCTION FOR LINK SHORTENER---
+// --- HELPER FUNCTION FOR LINK SHORTENER---
 /**
  * Helper function to shorten a URL using TinyURL
  * @param {string} longUrl The URL to shorten
@@ -80,7 +80,38 @@ async function _shortenLink(longUrl) {
     return longUrl; 
   }
 }
-// --- END NEW HELPER FUNCTION ---
+// --- END HELPER FUNCTION ---
+
+
+// --- *** NEW BYPASS FUNCTION *** ---
+/**
+ * Extracts the direct URL from the API's proxy link.
+ * @param {string} proxyUrl The API's download_url
+ * @returns {string} The final, direct .mp4 URL
+ */
+function _extractDirectUrl(proxyUrl) {
+  const proxyPrefix = 'https://movieapi.giftedtech.co.ke/api/download/';
+
+  if (proxyUrl.startsWith(proxyPrefix)) {
+    // Get the encoded part of the URL
+    const encodedUrl = proxyUrl.substring(proxyPrefix.length);
+
+    try {
+      // Decode it to get the real URL
+      const directUrl = decodeURIComponent(encodedUrl);
+      console.log(chalk.cyan(`🔗 Extracted direct URL: ${directUrl}`));
+      return directUrl;
+    } catch (e) {
+      console.error(chalk.red('Failed to decode URL, falling back'), e.message);
+      // Fallback if decoding fails
+      return proxyUrl;
+    }
+  }
+
+  // If it's not a proxy link, return it as-is
+  return proxyUrl;
+}
+// --- *** END NEW BYPASS FUNCTION *** ---
 
 
 class MovieDownloader {
@@ -93,6 +124,10 @@ class MovieDownloader {
     this.statsCacheTime = 0;
     this.statsCacheDuration = 5 * 60 * 1000;
   }
+
+  // --- Add the new function to the class instance ---
+  _extractDirectUrl = _extractDirectUrl;
+  // ---
 
   async initialize() {
     try {
@@ -670,7 +705,7 @@ class MovieDownloader {
 
       return {
         success: true,
-        downloadUrl: source.download_url,
+        downloadUrl: source.download_url, // This is the API PROXY URL
         movieData, // This is infoResult.data.subject
         quality: source.quality,
         qualityLabel: QUALITY_INFO[source.quality]?.label || source.quality,
@@ -1294,7 +1329,7 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
   }
 }
 
-// --- MODIFIED FUNCTION ---
+// --- *** MODIFIED FUNCTION (Now uses extractor) *** ---
 async function handleMovieDownload(reply, downloader, config, sock, m, sender, isGroup, args) {
   const settings = downloader.getSettings();
   let movieIdOrNumber = args[0]; // May be undefined, '1', or 'S01'
@@ -1417,13 +1452,38 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     caption += `\n✅ *Download Complete!*\n_⚡ Powered by Groq_`;
 
     try {
-      // Send as video for better WhatsApp compatibility
+      // --- *** START: MODIFIED STREAMING SECTION *** ---
+
+      // 1. Add a reaction
       await sock.sendMessage(m.from, {
-        video: { url: result.downloadUrl },
+        react: { text: '🔗', key: m.key }
+      });
+
+      // 2. Call our new helper to get the REAL MP4 link
+      // This is now a simple string parser, not an async call
+      const directMp4Url = downloader._extractDirectUrl(result.downloadUrl);
+
+      // 3. Clear the reaction
+      await sock.sendMessage(m.from, {
+        react: { text: '', key: m.key }
+      });
+
+      // 4. Get the file as a STREAM
+      console.log(chalk.cyan(`🛰️  Attempting to stream from: ${directMp4Url}`));
+      const streamResponse = await axios.get(directMp4Url, {
+        responseType: 'stream',
+        timeout: API_CONFIG.timeout // Use the long timeout
+      });
+
+      // 5. Send the stream to WhatsApp
+      await sock.sendMessage(m.from, {
+        video: streamResponse.data, // Pass the stream directly
         caption: caption,
         mimetype: 'video/mp4',
         fileName: `${result.movieData.title}${result.isTvShow ? ` S${String(result.season).padStart(2, '0')}E${String(result.episode).padStart(2, '0')}` : ''} [${result.qualityLabel}].mp4`
       }, { quoted: m });
+
+      // --- *** END: MODIFIED STREAMING SECTION *** ---
 
       await sock.sendMessage(m.from, {
         react: { text: '✅', key: m.key }
@@ -1436,25 +1496,31 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
         react: { text: '❌', key: m.key }
       });
 
-// --- MODIFIED SECTION ---
+      // --- MODIFIED SECTION (Error Fallback) ---
       // Show a "linking" reaction while we shorten the URL
       await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
+
+      // We shorten the *original* proxy URL, as tinyurl can handle redirects itself
       const shortUrl = await _shortenLink(result.downloadUrl);
+
       await sock.sendMessage(m.from, { react: { text: '', key: m.key } }); // Clear reaction
 
+      // --- *** MODIFIED: Simpler error message *** ---
+      let errorMessage = `❌ *Download Failed*\n\n` +
+                       `The movie was processed but couldn't be sent. This might be due to:\n` +
+                       `• Network issues (Error: ${sendError.message})\n` +
+                       `• WhatsApp restrictions (e.g., file too large)\n\n`;
+
       await reply(
-        `❌ *Download Failed*\n\n` +
-        `The movie was processed but couldn't be sent. This might be due to:\n` +
-        `• File size too large for WhatsApp (${sizeMB}MB)\n` +
-        `• Network issues\n` +
-        `• WhatsApp restrictions\n\n` +
+        `${errorMessage}` +
         `*Direct Download Link:*\n${shortUrl}\n\n` + // <-- Now uses the shortened URL
         `_Link expires in 24 hours. Use a browser to download._`
       );
-      // --- END MODIFIED SECTION ---
+      // --- *** END: Simpler error message *** ---
     }
   }
 }
+
 
 async function handleMovieStats(reply, downloader) {
   const stats = await downloader.getStats();
@@ -1601,8 +1667,8 @@ async function handleMovieFavorites(reply, downloader, sender, action, movieIdOr
 
 export default {
   name: 'Movie Downloader',
-  version: '3.0.0',
-  author: 'Alex Macksyn',
+  version: '3.0.3', // Incremented version
+  author: 'Alex Macksyn (with bypass fix)',
   description: 'Search and download movies and TV shows with numbered selection',
   category: 'media',
 
@@ -1614,7 +1680,7 @@ export default {
     await movieDownloader.initialize();
 
     const settings = movieDownloader.getSettings();
-    logger.info('✅ Movie Downloader V3 initialized');
+    logger.info('✅ Movie Downloader V3.0.3 (Bypass Fix) initialized');
     logger.info(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`);
     logger.info(`Qualities: ${settings.allowedQualities.join(', ')}`);
     logger.info(`Movies: ${settings.allowMovies ? '✅' : '❌'} | TV Shows: ${settings.allowTvShows ? '✅' : '❌'}`);
@@ -1747,3 +1813,4 @@ export default {
     }
   }
 };
+
