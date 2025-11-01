@@ -1330,7 +1330,6 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
 }
 
 // Replace the handleMovieDownload function with this version
-// Replace the handleMovieDownload function with this version
 async function handleMovieDownload(reply, downloader, config, sock, m, sender, isGroup, args) {
   const settings = downloader.getSettings();
   let movieIdOrNumber = args[0];
@@ -1490,10 +1489,24 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
 
       // Use the download URL directly from API (no extraction needed)
       const downloadUrl = result.downloadUrl;
-      console.log(chalk.cyan(`🎬 Streaming ${sizeMB}MB file as ${sendMethod} from API source`));
+      console.log(chalk.cyan(`🎬 Downloading ${sizeMB}MB file to temp storage...`));
 
       // Get video as stream with extended timeout for large files
       const timeoutMs = fileSizeMB > 500 ? 900000 : 600000; // 15 min for >500MB, 10 min otherwise
+
+      // Download to temp file first (more reliable than direct streaming)
+      const fs = require('fs');
+      const path = require('path');
+      const { pipeline } = require('stream');
+      const { promisify } = require('util');
+      const pipelineAsync = promisify(pipeline);
+
+      // Create temp file path
+      const tempDir = '/tmp';
+      const tempFileName = `movie_${Date.now()}_${sender.split('@')[0]}.mp4`;
+      const tempFilePath = path.join(tempDir, tempFileName);
+
+      console.log(chalk.cyan(`📂 Temp file: ${tempFilePath}`));
 
       // Full Chrome browser headers to bypass bot detection
       const streamResponse = await axios.get(downloadUrl, {
@@ -1502,6 +1515,7 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
         maxRedirects: 10,
+        validateStatus: () => true, // Accept any status code
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -1522,30 +1536,90 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
         }
       });
 
-      console.log(chalk.green(`✅ Stream established, uploading to WhatsApp...`));
+      // Check response status
+      if (streamResponse.status !== 200) {
+        throw new Error(`Server returned status ${streamResponse.status}: ${streamResponse.statusText}`);
+      }
+
+      console.log(chalk.green(`✅ Stream established (${streamResponse.status}), downloading to disk...`));
+
+      // Track download progress
+      const totalSize = parseInt(streamResponse.headers['content-length'] || '0', 10);
+      let downloadedSize = 0;
+      let lastProgress = 0;
+
+      streamResponse.data.on('data', (chunk) => {
+        downloadedSize += chunk.length;
+        if (totalSize > 0) {
+          const progress = Math.floor((downloadedSize / totalSize) * 100);
+          if (progress - lastProgress >= 10) { // Log every 10%
+            console.log(chalk.cyan(`📥 Progress: ${progress}% (${(downloadedSize / 1024 / 1024).toFixed(1)}MB / ${sizeMB}MB)`));
+            lastProgress = progress;
+          }
+        }
+      });
+
+      // Download file to disk
+      const fileWriter = fs.createWriteStream(tempFilePath);
+      await pipelineAsync(streamResponse.data, fileWriter);
+
+      console.log(chalk.green(`✅ File downloaded to disk, preparing to send to WhatsApp...`));
+
+      // Check file size on disk to confirm download
+      const fileStats = fs.statSync(tempFilePath);
+      const actualSizeMB = (fileStats.size / 1024 / 1024).toFixed(2);
+      console.log(chalk.cyan(`📊 File size on disk: ${actualSizeMB}MB`));
+
+      // Verify file is not empty or corrupted
+      if (fileStats.size < 1000) {
+        throw new Error(`Downloaded file is too small (${fileStats.size} bytes), likely corrupted`);
+      }
 
       const fileName = `${result.movieData.title}${result.isTvShow ? ` S${String(result.season).padStart(2, '0')}E${String(result.episode).padStart(2, '0')}` : ''} [${result.qualityLabel}].mp4`;
 
+      // Read file in chunks to avoid memory issues
+      console.log(chalk.cyan(`📤 Uploading to WhatsApp...`));
+
       if (canSendAsVideo) {
         // Send as video (≤ 64MB) - plays directly in chat
-        await sock.sendMessage(m.from, {
-          video: streamResponse.data,
-          caption: caption,
-          mimetype: 'video/mp4',
-          fileName: fileName
-        }, { quoted: m });
+        try {
+          await sock.sendMessage(m.from, {
+            video: { url: tempFilePath }, // Send from file path instead of buffer
+            caption: caption,
+            mimetype: 'video/mp4',
+            fileName: fileName
+          }, { quoted: m });
 
-        console.log(chalk.green(`✅ Video sent successfully! (${sizeMB}MB)`));
+          console.log(chalk.green(`✅ Video sent successfully! (${actualSizeMB}MB)`));
+        } catch (videoError) {
+          console.error(chalk.red('❌ Video send failed, trying as document...'), videoError.message);
+          // Fallback to document
+          await sock.sendMessage(m.from, {
+            document: { url: tempFilePath },
+            caption: caption,
+            mimetype: 'video/mp4',
+            fileName: fileName
+          }, { quoted: m });
+          console.log(chalk.green(`✅ Sent as document instead (${actualSizeMB}MB)`));
+        }
       } else {
         // Send as document (64MB - 2GB) - user downloads then watches
         await sock.sendMessage(m.from, {
-          document: streamResponse.data,
+          document: { url: tempFilePath }, // Send from file path instead of buffer
           caption: caption,
           mimetype: 'video/mp4',
           fileName: fileName
         }, { quoted: m });
 
-        console.log(chalk.green(`✅ Document sent successfully! (${sizeMB}MB)`));
+        console.log(chalk.green(`✅ Document sent successfully! (${actualSizeMB}MB)`));
+      }
+
+      // Clean up temp file
+      try {
+        fs.unlinkSync(tempFilePath);
+        console.log(chalk.cyan(`🗑️ Cleaned up temp file`));
+      } catch (cleanupError) {
+        console.error(chalk.yellow(`⚠️ Could not delete temp file: ${cleanupError.message}`));
       }
 
       await sock.sendMessage(m.from, { react: { text: '✅', key: m.key } });
