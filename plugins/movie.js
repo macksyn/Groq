@@ -9,6 +9,8 @@ const FAVORITES_COLLECTION = 'movie_favorites';
 const SEARCH_CACHE_COLLECTION = 'movie_search_cache';
 const USER_SESSIONS_COLLECTION = 'movie_user_sessions';
 
+// --- Removed the SAFE_SEND_LIMIT_MB, as we will now try to stream all files ---
+
 const DEFAULT_SETTINGS = {
   premiumEnabled: false,
   downloadCost: 100,
@@ -1338,7 +1340,7 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
   }
 }
 
-// --- *** MODIFIED FUNCTION *** ---
+// --- *** MODIFIED FUNCTION (Now uses streaming) *** ---
 async function handleMovieDownload(reply, downloader, config, sock, m, sender, isGroup, args) {
   const settings = downloader.getSettings();
   let movieIdOrNumber = args[0]; // May be undefined, '1', or 'S01'
@@ -1461,14 +1463,14 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     caption += `\n✅ *Download Complete!*\n_⚡ Powered by Groq_`;
 
     try {
-      // --- *** START: MODIFIED SECTION *** ---
+      // --- *** START: MODIFIED STREAMING SECTION *** ---
 
       // 1. Add a reaction while we resolve the link
       await sock.sendMessage(m.from, {
         react: { text: '🔗', key: m.key }
       });
 
-      // 2. Call our new helper to get the REAL MP4 link
+      // 2. Call our helper to get the REAL MP4 link
       // We use downloader._resolveRedirect because it's part of the class instance
       const directMp4Url = await downloader._resolveRedirect(result.downloadUrl);
 
@@ -1477,16 +1479,22 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
         react: { text: '', key: m.key }
       });
 
-      // 4. Send the video using the new directMp4Url
-      // Send as video for better WhatsApp compatibility
+      // 4. Get the file as a STREAM
+      console.log(chalk.cyan(`🛰️  Attempting to stream from: ${directMp4Url}`));
+      const streamResponse = await axios.get(directMp4Url, {
+        responseType: 'stream',
+        timeout: API_CONFIG.timeout // Use the long timeout
+      });
+
+      // 5. Send the stream to WhatsApp
       await sock.sendMessage(m.from, {
-        video: { url: directMp4Url }, // <-- USE THE NEW, RESOLVED URL
+        video: streamResponse.data, // Pass the stream directly
         caption: caption,
         mimetype: 'video/mp4',
         fileName: `${result.movieData.title}${result.isTvShow ? ` S${String(result.season).padStart(2, '0')}E${String(result.episode).padStart(2, '0')}` : ''} [${result.qualityLabel}].mp4`
       }, { quoted: m });
 
-      // --- *** END: MODIFIED SECTION *** ---
+      // --- *** END: MODIFIED STREAMING SECTION *** ---
 
       await sock.sendMessage(m.from, {
         react: { text: '✅', key: m.key }
@@ -1506,16 +1514,18 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       const shortUrl = await _shortenLink(result.downloadUrl);
       await sock.sendMessage(m.from, { react: { text: '', key: m.key } }); // Clear reaction
 
+      // --- *** MODIFIED: Simpler error message *** ---
+      let errorMessage = `❌ *Download Failed*\n\n` +
+                       `The movie was processed but couldn't be sent. This might be due to:\n` +
+                       `• Network issues (Error: ${sendError.message})\n` +
+                       `• WhatsApp restrictions (e.g., file too large)\n\n`;
+
       await reply(
-        `❌ *Download Failed*\n\n` +
-        `The movie was processed but couldn't be sent. This might be due to:\n` +
-        `• File size too large for WhatsApp (${sizeMB}MB)\n` +
-        `• Network issues (Error: ${sendError.message})\n` +
-        `• WhatsApp restrictions\n\n` +
+        `${errorMessage}` +
         `*Direct Download Link:*\n${shortUrl}\n\n` + // <-- Now uses the shortened URL
         `_Link expires in 24 hours. Use a browser to download._`
       );
-      // --- END MODIFIED SECTION (Error Fallback) ---
+      // --- *** END: Simpler error message *** ---
     }
   }
 }
@@ -1666,8 +1676,8 @@ async function handleMovieFavorites(reply, downloader, sender, action, movieIdOr
 
 export default {
   name: 'Movie Downloader',
-  version: '3.0.1', // Incremented version
-  author: 'Alex Macksyn (with fix)',
+  version: '3.0.2', // Incremented version
+  author: 'Alex Macksyn (with streaming)',
   description: 'Search and download movies and TV shows with numbered selection',
   category: 'media',
 
@@ -1679,7 +1689,7 @@ export default {
     await movieDownloader.initialize();
 
     const settings = movieDownloader.getSettings();
-    logger.info('✅ Movie Downloader V3.0.1 (Fixed) initialized');
+    logger.info('✅ Movie Downloader V3.0.2 (Streaming) initialized');
     logger.info(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`);
     logger.info(`Qualities: ${settings.allowedQualities.join(', ')}`);
     logger.info(`Movies: ${settings.allowMovies ? '✅' : '❌'} | TV Shows: ${settings.allowTvShows ? '✅' : '❌'}`);
@@ -1812,3 +1822,4 @@ export default {
     }
   }
 };
+
