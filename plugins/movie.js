@@ -1329,12 +1329,12 @@ async function handleMovieInfo(reply, downloader, config, movieIdOrNumber, sende
   }
 }
 
-// Replace the handleMovieDownload function with this improved version
+// Replace the handleMovieDownload function with this version
 async function handleMovieDownload(reply, downloader, config, sock, m, sender, isGroup, args) {
   const settings = downloader.getSettings();
   let movieIdOrNumber = args[0];
 
-  // Quote detection logic (unchanged)
+  // Quote detection logic
   const isMissingNumber = !movieIdOrNumber || /^S\d+$/i.test(movieIdOrNumber);
   if (isMissingNumber && m.quoted) {
     const caption = m.quoted.text;
@@ -1349,15 +1349,15 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     }
   }
 
-  // Help message (unchanged)
+  // Help message
   if (args.length === 0 || !movieIdOrNumber) {
     await reply(
       `*📥 Movie Download*\n\n` +
       `Download movies and TV shows in multiple qualities\n\n` +
       `*Usage (Option 1):*\n` +
       `1. ${config.PREFIX}movie search <name>\n` +
-      `2. Choose your option: ${config.PREFIX}movie number <number>\n` +
-      `3. *Reply* to the info message: ${config.PREFIX}movie download SD\n\n` +
+      `2. Choose option: ${config.PREFIX}movie number <number>\n` +
+      `3. *Reply* to info: ${config.PREFIX}movie download SD\n\n` +
       `*Examples:*\n` +
       `${config.PREFIX}movie dl 1 HD (for movies)\n` +
       `${config.PREFIX}movie dl 3 S01 E08 FHD (for TV)\n` +
@@ -1366,12 +1366,13 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       `${settings.allowedQualities.map(q => {
         const info = QUALITY_INFO[q];
         return `${info.emoji} *${info.label}* - ${info.displayLabel}`;
-      }).join('\n')}\n`
+      }).join('\n')}\n\n` +
+      `💡 *Tip:* SD & HD send as video, FHD sends as document`
     );
     return;
   }
 
-  // Parsing logic (unchanged)
+  // Parsing logic
   let quality = settings.defaultQuality;
   let season = null;
   let episode = null;
@@ -1405,15 +1406,22 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
   if (result.success) {
     const remaining = await downloader.getRemainingDownloads(sender);
     const sizeMB = (parseInt(result.size) / (1024 * 1024)).toFixed(0);
+    const fileSizeMB = parseInt(result.size) / (1024 * 1024);
 
-    // Send initial downloading message
+    // Determine if we should send as video or document
+    // WhatsApp video limit is ~16MB, document limit is ~100MB
+    const VIDEO_LIMIT = 16;
+    const DOCUMENT_LIMIT = 100;
+    const sendAsDocument = fileSizeMB > VIDEO_LIMIT;
+
     await reply(
-      `⏬ *Downloading Movie...*\n\n` +
+      `⏬ *Downloading ${sendAsDocument ? 'File' : 'Video'}...*\n\n` +
       `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n` +
       `${result.season && result.episode ? `Season ${result.season} • Episode ${result.episode}\n` : ''}` +
       `Quality: ${result.qualityLabel} (${result.quality})\n` +
       `Size: ${sizeMB}MB\n\n` +
-      `⏳ _Please wait, streaming video..._\n`
+      `${sendAsDocument ? '📄 *Sending as document (file too large for video)*\n' : ''}` +
+      `⏳ _Please wait, this may take a few minutes..._\n`
     );
 
     let caption = `${result.isTvShow ? '📺' : '🎬'} *${result.movieData.title}*\n\n`;
@@ -1435,17 +1443,21 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     caption += `\n✅ *Download Complete!*\n_⚡ Powered by Groq_`;
 
     try {
-      // IMPROVED: Better video sending logic
       await sock.sendMessage(m.from, { react: { text: '📥', key: m.key } });
 
       // Extract direct URL
       const directMp4Url = downloader._extractDirectUrl(result.downloadUrl);
       console.log(chalk.cyan(`🎬 Streaming from: ${directMp4Url}`));
 
-      // Get video as stream with longer timeout
+      // Check if file is too large even for document
+      if (fileSizeMB > DOCUMENT_LIMIT) {
+        throw new Error(`FILE_TOO_LARGE:${sizeMB}MB`);
+      }
+
+      // Get video as stream
       const streamResponse = await axios.get(directMp4Url, {
         responseType: 'stream',
-        timeout: 300000, // 5 minutes timeout for large files
+        timeout: 300000, // 5 minutes
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
         headers: {
@@ -1453,66 +1465,91 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
         }
       });
 
-      console.log(chalk.green(`✅ Stream obtained, sending to WhatsApp...`));
+      console.log(chalk.green(`✅ Stream obtained, sending to WhatsApp as ${sendAsDocument ? 'document' : 'video'}...`));
 
-      // Send video with proper filename
       const fileName = `${result.movieData.title}${result.isTvShow ? ` S${String(result.season).padStart(2, '0')}E${String(result.episode).padStart(2, '0')}` : ''} [${result.qualityLabel}].mp4`;
 
-      await sock.sendMessage(m.from, {
-        video: streamResponse.data,
-        caption: caption,
-        mimetype: 'video/mp4',
-        fileName: fileName
-      }, { quoted: m });
+      if (sendAsDocument) {
+        // Send as document for files > 16MB
+        await sock.sendMessage(m.from, {
+          document: streamResponse.data,
+          caption: caption,
+          mimetype: 'video/mp4',
+          fileName: fileName
+        }, { quoted: m });
+
+        console.log(chalk.green(`✅ Document sent successfully! (${sizeMB}MB)`));
+      } else {
+        // Send as video for files <= 16MB
+        await sock.sendMessage(m.from, {
+          video: streamResponse.data,
+          caption: caption,
+          mimetype: 'video/mp4',
+          fileName: fileName
+        }, { quoted: m });
+
+        console.log(chalk.green(`✅ Video sent successfully! (${sizeMB}MB)`));
+      }
 
       await sock.sendMessage(m.from, { react: { text: '✅', key: m.key } });
-      console.log(chalk.green(`✅ Video sent successfully!`));
 
     } catch (sendError) {
-      console.error(chalk.red('❌ Video send error:'), sendError.message);
-      console.error(chalk.red('Full error:'), sendError);
+      console.error(chalk.red('❌ Send error:'), sendError.message);
 
       await sock.sendMessage(m.from, { react: { text: '⚠️', key: m.key } });
 
-      // Check file size limit
-      const fileSizeMB = parseInt(result.size) / (1024 * 1024);
-
-      // IMPROVED: Better error handling with specific messages
-      if (fileSizeMB > 100) {
-        // File too large for WhatsApp
+      // Handle specific errors
+      if (sendError.message.includes('FILE_TOO_LARGE')) {
+        const size = sendError.message.split(':')[1];
         await reply(
-          `⚠️ *File Too Large for WhatsApp*\n\n` +
-          `The video (${sizeMB}MB) exceeds WhatsApp's limit.\n\n` +
-          `*Alternative:* Use a lower quality (SD or HD instead of FHD)\n\n` +
-          `Try: ${config.PREFIX}movie dl ${movieIdOrNumber}${result.season ? ` S${String(result.season).padStart(2, '0')} E${String(result.episode).padStart(2, '0')}` : ''} HD`
+          `❌ *File Too Large*\n\n` +
+          `Size: ${size} (WhatsApp limit: ${DOCUMENT_LIMIT}MB)\n\n` +
+          `*Solutions:*\n` +
+          `1. Use lower quality:\n` +
+          `   ${config.PREFIX}movie dl ${movieIdOrNumber}${result.season ? ` S${String(result.season).padStart(2, '0')} E${String(result.episode).padStart(2, '0')}` : ''} SD\n\n` +
+          `2. Or use HD (usually <100MB):\n` +
+          `   ${config.PREFIX}movie dl ${movieIdOrNumber}${result.season ? ` S${String(result.season).padStart(2, '0')} E${String(result.episode).padStart(2, '0')}` : ''} HD`
         );
-      } else if (sendError.message.includes('timeout')) {
-        await reply(
-          `⚠️ *Download Timeout*\n\n` +
-          `The download took too long. This usually happens with:\n` +
-          `• Slow internet connection\n` +
-          `• Server issues\n\n` +
-          `*Try again:* ${config.PREFIX}movie dl ${movieIdOrNumber}${result.season ? ` S${String(result.season).padStart(2, '0')} E${String(result.episode).padStart(2, '0')}` : ''} ${quality}`
-        );
-      } else if (sendError.message.includes('stream')) {
-        await reply(
-          `⚠️ *Streaming Error*\n\n` +
-          `Failed to stream the video. The source might be temporarily unavailable.\n\n` +
-          `*Please try again in a few minutes.*`
-        );
-      } else {
-        // Generic error - provide link as last resort
-        await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
-        const shortUrl = await _shortenLink(result.downloadUrl);
-        await sock.sendMessage(m.from, { react: { text: '', key: m.key } });
-
-        await reply(
-          `⚠️ *Could Not Send Video*\n\n` +
-          `Error: ${sendError.message}\n\n` +
-          `*Direct Download Link:*\n${shortUrl}\n\n` +
-          `_Use a browser to download. Link expires in 24 hours._`
-        );
+        return;
       }
+
+      if (sendError.message.includes('timeout')) {
+        await reply(
+          `⏰ *Download Timeout*\n\n` +
+          `The download took too long. Please try:\n\n` +
+          `1. Try again (server might be slow)\n` +
+          `2. Use lower quality for faster download:\n` +
+          `   ${config.PREFIX}movie dl ${movieIdOrNumber}${result.season ? ` S${String(result.season).padStart(2, '0')} E${String(result.episode).padStart(2, '0')}` : ''} SD`
+        );
+        return;
+      }
+
+      if (sendError.message.includes('stream') || sendError.message.includes('network')) {
+        await reply(
+          `🌐 *Network Error*\n\n` +
+          `Failed to download the video. This could be:\n` +
+          `• Temporary server issue\n` +
+          `• Network connectivity problem\n\n` +
+          `*Please try again in a few moments.*`
+        );
+        return;
+      }
+
+      // Last resort - provide download link
+      await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
+      const shortUrl = await _shortenLink(result.downloadUrl);
+      await sock.sendMessage(m.from, { react: { text: '', key: m.key } });
+
+      await reply(
+        `⚠️ *Could Not Send File*\n\n` +
+        `${caption}\n\n` +
+        `*Direct Download Link:*\n${shortUrl}\n\n` +
+        `📱 *To download:*\n` +
+        `1. Click the link above\n` +
+        `2. Video will download to your device\n` +
+        `3. Watch from your gallery/files\n\n` +
+        `_Link expires in 24 hours_`
+      );
     }
   }
 }
