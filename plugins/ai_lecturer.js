@@ -9,7 +9,7 @@ const CONFIG = {
   MAX_LECTURE_PARTS: 52, // Maximum 52 parts (1 year of weekly lectures)
   SENTENCE_DELAY_MIN: 3000,
   SENTENCE_DELAY_MAX: 7000,
-  WORD_DELAY_MS: 200,
+  WORD_DELAY_MS: 7000,
   PRIMARY_API_TIMEOUT: 60000,
   FALLBACK_API_TIMEOUT: 60000
 };
@@ -241,11 +241,12 @@ Guidelines:
 - You are now delivering Part ${schedule.part}.
 ${schedule.part > 1 ? '- Start by BRIEFLY summarizing what was covered in the previous part.' : '- This is the first lecture, so start with an engaging introduction.'}
 - Then deliver the main content for Part ${schedule.part}.
-- Write as you would speak in a natural, conversational, professorial tone.
-- DO NOT use markdown formatting (*bold*, _italics_, - bullets).
-- DO NOT include headings or titles. Just start the lecture.
+- Write as you would speak in a natural, conversational, humorous, professorial tone.
+- Your audience are intelligent and educated nigerians who are curious, but not necessarily experts in the topic.
+- You are lecturing a whatsapp group called "Gist HQ".
+- The script should be comprehensive, detailed, and in-depth, relatable, well-structured, and flow logically.
 - End sentences with proper punctuation (., ?, !).
-- Keep the lecture very comprehensive, detailed, and in-depth.
+- Use emojies sparingly and only when they add value to the content.
 - Aim for a full lecture script of at least 500-750 words.`;
 
     const userPrompt = `Continue the lecture on "${schedule.subject}". This is Part ${schedule.part}.`;
@@ -358,11 +359,12 @@ async function handleManualLecture(context) {
   const systemPrompt = `You are a world-class professor. Your task is to write a "spoken" lecture script on the given topic.
 
 Guidelines:
-- Write as you would speak in a natural, conversational, professorial tone.
-- DO NOT use markdown formatting (*bold*, _italics_, - bullets). This is a spoken script.
-- DO NOT include headings or titles. Just start with the lecture content.
-- The script should be comprehensive, well-structured, and flow logically.
+- Write as you would speak in a natural, conversational, humorous, professorial tone.
+- Your audience are intelligent and educated nigerians who are curious, but not necessarily experts in the topic.
+- You are lecturing a whatsapp group called "Gist HQ".
+- The script should be comprehensive, relatable, well-structured, and flow logically.
 - End sentences with proper punctuation (., ?, !).
+- Use emojies sparingly and only when they add value to the content.
 - Aim for a very comprehensive lecture script of at least 500-750 words that thoroughly covers the topic.`;
 
   const userPrompt = topic;
@@ -371,9 +373,9 @@ Guidelines:
     const { lectureContent, generatedBy } = await generateLecture(systemPrompt, userPrompt, logger);
     if (!lectureContent) throw new Error('AI returned an empty script');
 
-    const header = `🎓 *AI LECTURE: STARTING* 🎓\n\n` +
+    const header = `🎓 *GHQ LECTURE: STARTING* 🎓\n\n` +
                      `*Topic:* ${topic}\n` +
-                     `*Professor:* ${generatedBy}\n` +
+                     `*Professor:* Alex Macksyn\n` +
                      `-----------------------------------`;
     await sock.sendMessage(msg.from, { text: header, edit: loadingMsg.key });
     await msg.react('✅');
