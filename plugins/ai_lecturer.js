@@ -52,8 +52,10 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
 
   try {
     logger.info('AI Lecturer: Trying primary API (gpt-5)...');
+    // --- FIX: Reverted to GET and used correct 'text' parameter ---
+    // The API reference you provided shows it uses GET with a 'text' param, not POST.
     const response = await axios.get(primaryApiUrl, {
-      params: { prompt: combinedPrompt },
+      params: { text: combinedPrompt }, // Use 'params' for GET and 'text' as the key
       timeout: CONFIG.PRIMARY_API_TIMEOUT
     });
 
@@ -75,7 +77,8 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
       throw new Error('Primary AI failed and fallback AI (Groq) is not configured. Please contact the bot administrator.');
     }
 
-    const groqModel = 'llama-3.1-70b-versatile';
+    // --- FIX 2: Switched to a more standard Groq model name ---
+    const groqModel = 'llama3-70b-8192'; // Was: 'llama-3.1-70b-versatile'
     const groqApiUrl = 'https://api.groq.com/openai/v1/chat/completions';
 
     try {
@@ -242,7 +245,8 @@ ${schedule.part > 1 ? '- Start by BRIEFLY summarizing what was covered in the pr
 - DO NOT use markdown formatting (*bold*, _italics_, - bullets).
 - DO NOT include headings or titles. Just start the lecture.
 - End sentences with proper punctuation (., ?, !).
-- Keep the lecture comprehensive but focused - aim for 10-15 key sentences.`;
+- Keep the lecture very comprehensive, detailed, and in-depth.
+- Aim for a full lecture script of at least 500-750 words.`;
 
     const userPrompt = `Continue the lecture on "${schedule.subject}". This is Part ${schedule.part}.`;
 
@@ -359,7 +363,7 @@ Guidelines:
 - DO NOT include headings or titles. Just start with the lecture content.
 - The script should be comprehensive, well-structured, and flow logically.
 - End sentences with proper punctuation (., ?, !).
-- Aim for 10-15 key sentences that thoroughly cover the topic.`;
+- Aim for a very comprehensive lecture script of at least 500-750 words that thoroughly covers the topic.`;
 
   const userPrompt = topic;
 
