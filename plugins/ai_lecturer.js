@@ -7,9 +7,9 @@ import { PluginHelpers } from '../lib/pluginIntegration.js';
 const CONFIG = {
   DEFAULT_TIMEZONE: 'Africa/Lagos',
   MAX_LECTURE_PARTS: 52, // Maximum 52 parts (1 year of weekly lectures)
-  SENTENCE_DELAY_MIN: 3000,
-  SENTENCE_DELAY_MAX: 7000,
-  WORD_DELAY_MS: 7000,
+  SENTENCE_DELAY_MIN: 8000,
+  SENTENCE_DELAY_MAX: 13000,
+  WORD_DELAY_MS: 200,
   PRIMARY_API_TIMEOUT: 60000,
   FALLBACK_API_TIMEOUT: 60000
 };
