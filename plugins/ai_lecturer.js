@@ -14,7 +14,7 @@ const CONFIG = {
   FALLBACK_API_TIMEOUT: 60000
 };
 
-// --- HELPER FUNCTIONS ---
+// --- HELPER FUNCTIONS (Remain outside the export) ---
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -325,6 +325,341 @@ function getJobId(scheduleId) {
   return `lecture_${scheduleId.toString()}`;
 }
 
+
+// --- COMMAND HANDLERS (MOVED OUTSIDE THE EXPORT) ---
+
+/**
+  * Handles manual `.lecture` command
+  */
+async function handleManualLecture(context) {
+  const { msg, text, sock, config, logger } = context;
+  const topic = text;
+
+  if (!topic) {
+    await msg.reply(
+      `Please provide a topic for the lecture.\n\n` +
+      `*Usage:* ${config.PREFIX}lecture <topic>\n` +
+      `*Example:* ${config.PREFIX}lecture The impact of Afrobeats on global music`
+    );
+    return;
+  }
+
+  await msg.react('🧠');
+  const loadingMsg = await msg.reply(
+    `🧠 *Preparing your lecture...*\n\n` +
+    `*Topic:* ${topic}\n\n` +
+    `_This might take a moment. The AI is writing the full script..._`
+  );
+
+  const systemPrompt = `You are a world-class professor. Your task is to write a "spoken" lecture script on the given topic.
+
+Guidelines:
+- Write as you would speak in a natural, conversational, professorial tone.
+- DO NOT use markdown formatting (*bold*, _italics_, - bullets). This is a spoken script.
+- DO NOT include headings or titles. Just start with the lecture content.
+- The script should be comprehensive, well-structured, and flow logically.
+- End sentences with proper punctuation (., ?, !).
+- Aim for 10-15 key sentences that thoroughly cover the topic.`;
+
+  const userPrompt = topic;
+
+  try {
+    const { lectureContent, generatedBy } = await generateLecture(systemPrompt, userPrompt, logger);
+    if (!lectureContent) throw new Error('AI returned an empty script');
+
+    const header = `🎓 *AI LECTURE: STARTING* 🎓\n\n` +
+                     `*Topic:* ${topic}\n` +
+                     `*Professor:* ${generatedBy}\n` +
+                     `-----------------------------------`;
+    await sock.sendMessage(msg.from, { text: header, edit: loadingMsg.key });
+    await msg.react('✅');
+
+    await deliverLectureScript(sock, msg.from, lectureContent, logger);
+
+    await sock.sendPresenceUpdate('composing', msg.from);
+    await sleep(3000);
+    await sock.sendMessage(msg.from, { 
+      text: `-----------------------------------\n` +
+            `🎓 *AI LECTURE: END* 🎓\n\n` +
+            `_This concludes today's lecture._`
+    });
+    await sock.sendPresenceUpdate('paused', msg.from);
+  } catch (error) {
+    logger.error({ err: error }, 'AI Lecturer plugin failed (manual)');
+    await msg.react('❌');
+    await sock.sendMessage(msg.from, { 
+      text: `❌ *Lecture Failed*\n\n${error.message}`, 
+      edit: loadingMsg.key 
+    });
+  }
+}
+
+/**
+  * Handles `.schedule-lecture <subject> | <day> | <time> | [timezone]`
+  */
+async function handleScheduleLecture(context) {
+  const { msg, text, logger, helpers, sock } = context;
+  const db = await PluginHelpers.getDB();
+
+  try {
+    const parts = text.split('|').map(p => p.trim());
+    if (parts.length < 3) {
+      throw new Error('USAGE_ERROR');
+    }
+
+    const [subject, dayStr, timeStr, tzStr] = parts;
+    if (!subject || !dayStr || !timeStr) {
+      throw new Error('USAGE_ERROR');
+    }
+
+    const { dayOfWeek, time, timezone } = parseSchedule(dayStr, timeStr, tzStr);
+    const cronTime = getCronTime(time, dayOfWeek);
+
+    // Prepare schedule document
+    const newSchedule = {
+      groupId: msg.from,
+      subject: subject,
+      dayOfWeek: dayOfWeek,
+      time: time,
+      timezone: timezone,
+      part: 1,
+      lastDeliveredTimestamp: null,
+      scheduledBy: msg.sender,
+      createdAt: new Date()
+    };
+
+    // Insert into database (will fail if duplicate due to unique index)
+    let insertResult;
+    try {
+      insertResult = await db.collection('lecture_schedules').insertOne(newSchedule);
+    } catch (dbError) {
+      if (dbError.code === 11000) {
+        throw new Error(`A lecture on "${subject}" is already scheduled in this group. Cancel it first to reschedule.`);
+      }
+      throw dbError;
+    }
+
+    const scheduleId = insertResult.insertedId;
+
+    // Register with cron scheduler
+    const jobId = getJobId(scheduleId);
+    try {
+      const success = helpers.registerCronJob(
+        jobId,
+        cronTime,
+        () => runScheduledLecture(scheduleId, sock, logger),
+        timezone
+      );
+
+      if (!success) {
+        throw new Error('Failed to register job with cron scheduler');
+      }
+    } catch (cronError) {
+      // Rollback: delete from database if cron registration fails
+      await db.collection('lecture_schedules').deleteOne({ _id: scheduleId });
+      throw new Error(`Could not schedule lecture: ${cronError.message}`);
+    }
+
+    const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek];
+    await msg.reply(
+      `✅ *Lecture Scheduled Successfully!*\n\n` +
+      `*Subject:* ${subject}\n` +
+      `*Schedule:* Every ${dayName} at ${time}\n` +
+      `*Timezone:* ${timezone}\n` +
+      `*Cron Pattern:* \`${cronTime}\`\n` +
+      `*Job ID:* \`${jobId}\`\n\n` +
+      `Part 1 will be delivered on the next scheduled day.\n` +
+      `_Maximum ${CONFIG.MAX_LECTURE_PARTS} parts will be delivered._`
+    );
+
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to schedule lecture');
+
+    if (error.message === 'USAGE_ERROR') {
+      await msg.reply(
+        `❌ *Invalid Format*\n\n` +
+        `*Usage:* \`.schedule-lecture <Subject> | <Day> | <Time> | [Timezone]\`\n\n` +
+        `*Examples:*\n` +
+        `• \`.schedule-lecture Biology | Monday | 10:00\`\n` +
+        `• \`.schedule-lecture Physics | 1 | 14:30 | Europe/London\`\n\n` +
+        `*Day:* 0-6 (0=Sunday, 6=Saturday) or full name\n` +
+        `*Time:* 24-hour HH:MM format\n` +
+        `*Timezone:* Optional (default: ${CONFIG.DEFAULT_TIMEZONE})`
+      );
+    } else {
+      await msg.reply(`❌ *Schedule Failed*\n\n${error.message}`);
+    }
+  }
+}
+
+/**
+  * Handles `.list-lectures`
+  */
+async function handleListLectures(context) {
+  const { msg, logger } = context;
+  const db = await PluginHelpers.getDB();
+
+  try {
+    const schedules = await db.collection('lecture_schedules')
+      .find({ groupId: msg.from })
+      .sort({ subject: 1 })
+      .toArray();
+
+    if (schedules.length === 0) {
+      await msg.reply(`📚 No lectures are currently scheduled for this group.\n\nUse \`.schedule-lecture\` to create one.`);
+      return;
+    }
+
+    let reply = `📚 *Scheduled Lectures (${schedules.length})*\n`;
+
+    for (const s of schedules) {
+      const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.dayOfWeek];
+      const cronTime = getCronTime(s.time, s.dayOfWeek);
+      const lastRan = s.lastDeliveredTimestamp 
+        ? new Date(s.lastDeliveredTimestamp).toLocaleString('en-GB', { timeZone: s.timezone })
+        : 'Never';
+
+      const progress = `${s.part - 1}/${CONFIG.MAX_LECTURE_PARTS}`;
+
+      reply += `\n-----------------------------------\n` +
+               `*${s.subject}*\n` +
+               `├ Next Part: ${s.part}\n` +
+               `├ Progress: ${progress} completed\n` +
+               `├ Schedule: ${dayName} @ ${s.time}\n` +
+               `├ Timezone: ${s.timezone}\n` +
+               `├ Last Ran: ${lastRan}\n` +
+               `└ Job ID: \`${getJobId(s._id)}\``;
+    }
+
+    await msg.reply(reply);
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to list lectures');
+    await msg.reply(`❌ Could not fetch lecture list.\n\n_Error: ${error.message}_`);
+  }
+}
+
+/**
+  * Handles `.cancel-lecture <subject>`
+  */
+async function handleCancelLecture(context) {
+  const { msg, text, logger, helpers } = context;
+  const db = await PluginHelpers.getDB();
+  const subjectToCancel = text;
+
+  if (!subjectToCancel) {
+    await msg.reply(
+      `Please provide the subject name to cancel.\n\n` +
+      `*Usage:* \`.cancel-lecture <Subject>\`\n` +
+      `*Example:* \`.cancel-lecture Biology\``
+    );
+    return;
+  }
+
+  try {
+    const schedule = await db.collection('lecture_schedules').findOne({
+      groupId: msg.from,
+      subject: { $regex: new RegExp(`^${subjectToCancel}$`, 'i') }
+    });
+
+    if (!schedule) {
+      await msg.reply(`❌ Could not find a lecture named "${subjectToCancel}" in this group.`);
+      return;
+    }
+
+    const jobId = getJobId(schedule._id);
+
+    // Cancel the cron job first
+    const cronCancelled = helpers.cancelCronJob(jobId);
+
+    // Delete from database
+    const dbResult = await db.collection('lecture_schedules').deleteOne({ _id: schedule._id });
+
+    if (dbResult.deletedCount === 0) {
+      logger.warn(`Cron job ${jobId} cancelled but DB delete failed`);
+      await msg.reply(
+        `⚠️ Partially cancelled.\n\n` +
+        `Cron job stopped but database entry remains. Please check logs.`
+      );
+    } else {
+      const partsDelivered = schedule.part - 1;
+      await msg.reply(
+        `✅ *Lecture Series Cancelled*\n\n` +
+        `*Subject:* ${schedule.subject}\n` +
+        `*Parts Delivered:* ${partsDelivered}/${CONFIG.MAX_LECTURE_PARTS}\n` +
+        `*Job ID:* \`${jobId}\`\n\n` +
+        `The scheduled lectures have been permanently removed.`
+      );
+    }
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to cancel lecture');
+    await msg.reply(`❌ *Cancellation Failed*\n\n${error.message}`);
+  }
+}
+
+/**
+  * NEW: Handles `.lecture-history <subject>`
+  */
+async function handleLectureHistory(context) {
+  const { msg, text, logger } = context;
+  const db = await PluginHelpers.getDB();
+  const subject = text;
+
+  if (!subject) {
+    await msg.reply(
+      `Please provide the subject name.\n\n` +
+      `*Usage:* \`.lecture-history <Subject>\`\n` +
+      `*Example:* \`.lecture-history Biology\``
+    );
+    return;
+  }
+
+  try {
+    const schedule = await db.collection('lecture_schedules').findOne({
+      groupId: msg.from,
+      subject: { $regex: new RegExp(`^${subject}$`, 'i') }
+    });
+
+    if (!schedule) {
+      await msg.reply(`❌ No lecture series found for "${subject}" in this group.`);
+      return;
+    }
+
+    const history = await db.collection('lecture_history')
+      .find({ scheduleId: schedule._id })
+      .sort({ deliveredAt: -1 })
+      .limit(10)
+      .toArray();
+
+    if (history.length === 0) {
+      await msg.reply(`📜 No delivery history found for "${subject}".\n\n_The first lecture hasn't been delivered yet._`);
+      return;
+    }
+
+    let reply = `📜 *Lecture History: ${subject}*\n` +
+                `_Showing last ${history.length} deliveries_\n`;
+
+    for (const entry of history) {
+      const status = entry.status === 'success' ? '✅' : '❌';
+      const date = new Date(entry.deliveredAt).toLocaleString('en-GB', { 
+        timeZone: schedule.timezone,
+        dateStyle: 'short',
+        timeStyle: 'short'
+      });
+
+      reply += `\n${status} Part ${entry.part} - ${date}`;
+      if (entry.error) {
+        reply += `\n   └ Error: ${entry.error}`;
+      }
+    }
+
+    await msg.reply(reply);
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to fetch lecture history');
+    await msg.reply(`❌ Could not fetch history.\n\n_Error: ${error.message}_`);
+  }
+}
+
+
 // --- V3 PLUGIN EXPORT ---
 
 export default {
@@ -349,358 +684,28 @@ export default {
   async run(context) {
     const { command } = context;
 
+    // Calls are now direct, without 'this.'
     switch (command) {
       case 'lecture':
       case 'teach':
-        await this.handleManualLecture(context);
+        await handleManualLecture(context);
         break;
       case 'schedule-lecture':
       case 'schedule-class':
-        await this.handleScheduleLecture(context);
+        await handleScheduleLecture(context);
         break;
       case 'list-lectures':
       case 'list-classes':
-        await this.handleListLectures(context);
+        await handleListLectures(context);
         break;
       case 'cancel-lecture':
       case 'cancel-class':
-        await this.handleCancelLecture(context);
+        await handleCancelLecture(context);
         break;
       case 'lecture-history':
       case 'lecture-log':
-        await this.handleLectureHistory(context);
+        await handleLectureHistory(context);
         break;
-    }
-  },
-
-  /**
-    * Handles manual `.lecture` command
-    */
-  async handleManualLecture(context) {
-    const { msg, text, sock, config, logger } = context;
-    const topic = text;
-
-    if (!topic) {
-      await msg.reply(
-        `Please provide a topic for the lecture.\n\n` +
-        `*Usage:* ${config.PREFIX}lecture <topic>\n` +
-        `*Example:* ${config.PREFIX}lecture The impact of Afrobeats on global music`
-      );
-      return;
-    }
-
-    await msg.react('🧠');
-    const loadingMsg = await msg.reply(
-      `🧠 *Preparing your lecture...*\n\n` +
-      `*Topic:* ${topic}\n\n` +
-      `_This might take a moment. The AI is writing the full script..._`
-    );
-
-    const systemPrompt = `You are a world-class professor. Your task is to write a "spoken" lecture script on the given topic.
-
-Guidelines:
-- Write as you would speak in a natural, conversational, professorial tone.
-- DO NOT use markdown formatting (*bold*, _italics_, - bullets). This is a spoken script.
-- DO NOT include headings or titles. Just start with the lecture content.
-- The script should be comprehensive, well-structured, and flow logically.
-- End sentences with proper punctuation (., ?, !).
-- Aim for 10-15 key sentences that thoroughly cover the topic.`;
-
-    const userPrompt = topic;
-
-    try {
-      const { lectureContent, generatedBy } = await generateLecture(systemPrompt, userPrompt, logger);
-      if (!lectureContent) throw new Error('AI returned an empty script');
-
-      const header = `🎓 *AI LECTURE: STARTING* 🎓\n\n` +
-                       `*Topic:* ${topic}\n` +
-                       `*Professor:* ${generatedBy}\n` +
-                       `-----------------------------------`;
-      await sock.sendMessage(msg.from, { text: header, edit: loadingMsg.key });
-      await msg.react('✅');
-
-      await deliverLectureScript(sock, msg.from, lectureContent, logger);
-
-      await sock.sendPresenceUpdate('composing', msg.from);
-      await sleep(3000);
-      await sock.sendMessage(msg.from, { 
-        text: `-----------------------------------\n` +
-              `🎓 *AI LECTURE: END* 🎓\n\n` +
-              `_This concludes today's lecture._`
-      });
-      await sock.sendPresenceUpdate('paused', msg.from);
-    } catch (error) {
-      logger.error({ err: error }, 'AI Lecturer plugin failed (manual)');
-      await msg.react('❌');
-      await sock.sendMessage(msg.from, { 
-        text: `❌ *Lecture Failed*\n\n${error.message}`, 
-        edit: loadingMsg.key 
-      });
-    }
-  },
-
-  /**
-    * Handles `.schedule-lecture <subject> | <day> | <time> | [timezone]`
-    */
-  async handleScheduleLecture(context) {
-    const { msg, text, logger, helpers, sock } = context;
-    const db = await PluginHelpers.getDB();
-
-    try {
-      const parts = text.split('|').map(p => p.trim());
-      if (parts.length < 3) {
-        throw new Error('USAGE_ERROR');
-      }
-
-      const [subject, dayStr, timeStr, tzStr] = parts;
-      if (!subject || !dayStr || !timeStr) {
-        throw new Error('USAGE_ERROR');
-      }
-
-      const { dayOfWeek, time, timezone } = parseSchedule(dayStr, timeStr, tzStr);
-      const cronTime = getCronTime(time, dayOfWeek);
-
-      // Prepare schedule document
-      const newSchedule = {
-        groupId: msg.from,
-        subject: subject,
-        dayOfWeek: dayOfWeek,
-        time: time,
-        timezone: timezone,
-        part: 1,
-        lastDeliveredTimestamp: null,
-        scheduledBy: msg.sender,
-        createdAt: new Date()
-      };
-
-      // Insert into database (will fail if duplicate due to unique index)
-      let insertResult;
-      try {
-        insertResult = await db.collection('lecture_schedules').insertOne(newSchedule);
-      } catch (dbError) {
-        if (dbError.code === 11000) {
-          throw new Error(`A lecture on "${subject}" is already scheduled in this group. Cancel it first to reschedule.`);
-        }
-        throw dbError;
-      }
-
-      const scheduleId = insertResult.insertedId;
-
-      // Register with cron scheduler
-      const jobId = getJobId(scheduleId);
-      try {
-        const success = helpers.registerCronJob(
-          jobId,
-          cronTime,
-          () => runScheduledLecture(scheduleId, sock, logger),
-          timezone
-        );
-
-        if (!success) {
-          throw new Error('Failed to register job with cron scheduler');
-        }
-      } catch (cronError) {
-        // Rollback: delete from database if cron registration fails
-        await db.collection('lecture_schedules').deleteOne({ _id: scheduleId });
-        throw new Error(`Could not schedule lecture: ${cronError.message}`);
-      }
-
-      const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek];
-      await msg.reply(
-        `✅ *Lecture Scheduled Successfully!*\n\n` +
-        `*Subject:* ${subject}\n` +
-        `*Schedule:* Every ${dayName} at ${time}\n` +
-        `*Timezone:* ${timezone}\n` +
-        `*Cron Pattern:* \`${cronTime}\`\n` +
-        `*Job ID:* \`${jobId}\`\n\n` +
-        `Part 1 will be delivered on the next scheduled day.\n` +
-        `_Maximum ${CONFIG.MAX_LECTURE_PARTS} parts will be delivered._`
-      );
-
-    } catch (error) {
-      logger.error({ err: error }, 'Failed to schedule lecture');
-
-      if (error.message === 'USAGE_ERROR') {
-        await msg.reply(
-          `❌ *Invalid Format*\n\n` +
-          `*Usage:* \`.schedule-lecture <Subject> | <Day> | <Time> | [Timezone]\`\n\n` +
-          `*Examples:*\n` +
-          `• \`.schedule-lecture Biology | Monday | 10:00\`\n` +
-          `• \`.schedule-lecture Physics | 1 | 14:30 | Europe/London\`\n\n` +
-          `*Day:* 0-6 (0=Sunday, 6=Saturday) or full name\n` +
-          `*Time:* 24-hour HH:MM format\n` +
-          `*Timezone:* Optional (default: ${CONFIG.DEFAULT_TIMEZONE})`
-        );
-      } else {
-        await msg.reply(`❌ *Schedule Failed*\n\n${error.message}`);
-      }
-    }
-  },
-
-  /**
-    * Handles `.list-lectures`
-    */
-  async handleListLectures(context) {
-    const { msg, logger } = context;
-    const db = await PluginHelpers.getDB();
-
-    try {
-      const schedules = await db.collection('lecture_schedules')
-        .find({ groupId: msg.from })
-        .sort({ subject: 1 })
-        .toArray();
-
-      if (schedules.length === 0) {
-        await msg.reply(`📚 No lectures are currently scheduled for this group.\n\nUse \`.schedule-lecture\` to create one.`);
-        return;
-      }
-
-      let reply = `📚 *Scheduled Lectures (${schedules.length})*\n`;
-
-      for (const s of schedules) {
-        const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.dayOfWeek];
-        const cronTime = getCronTime(s.time, s.dayOfWeek);
-        const lastRan = s.lastDeliveredTimestamp 
-          ? new Date(s.lastDeliveredTimestamp).toLocaleString('en-GB', { timeZone: s.timezone })
-          : 'Never';
-
-        const progress = `${s.part - 1}/${CONFIG.MAX_LECTURE_PARTS}`;
-
-        reply += `\n-----------------------------------\n` +
-                 `*${s.subject}*\n` +
-                 `├ Next Part: ${s.part}\n` +
-                 `├ Progress: ${progress} completed\n` +
-                 `├ Schedule: ${dayName} @ ${s.time}\n` +
-                 `├ Timezone: ${s.timezone}\n` +
-                 `├ Last Ran: ${lastRan}\n` +
-                 `└ Job ID: \`${getJobId(s._id)}\``;
-      }
-
-      await msg.reply(reply);
-    } catch (error) {
-      logger.error({ err: error }, 'Failed to list lectures');
-      await msg.reply(`❌ Could not fetch lecture list.\n\n_Error: ${error.message}_`);
-    }
-  },
-
-  /**
-    * Handles `.cancel-lecture <subject>`
-    */
-  async handleCancelLecture(context) {
-    const { msg, text, logger, helpers } = context;
-    const db = await PluginHelpers.getDB();
-    const subjectToCancel = text;
-
-    if (!subjectToCancel) {
-      await msg.reply(
-        `Please provide the subject name to cancel.\n\n` +
-        `*Usage:* \`.cancel-lecture <Subject>\`\n` +
-        `*Example:* \`.cancel-lecture Biology\``
-      );
-      return;
-    }
-
-    try {
-      const schedule = await db.collection('lecture_schedules').findOne({
-        groupId: msg.from,
-        subject: { $regex: new RegExp(`^${subjectToCancel}$`, 'i') }
-      });
-
-      if (!schedule) {
-        await msg.reply(`❌ Could not find a lecture named "${subjectToCancel}" in this group.`);
-        return;
-      }
-
-      const jobId = getJobId(schedule._id);
-
-      // Cancel the cron job first
-      const cronCancelled = helpers.cancelCronJob(jobId);
-
-      // Delete from database
-      const dbResult = await db.collection('lecture_schedules').deleteOne({ _id: schedule._id });
-
-      if (dbResult.deletedCount === 0) {
-        logger.warn(`Cron job ${jobId} cancelled but DB delete failed`);
-        await msg.reply(
-          `⚠️ Partially cancelled.\n\n` +
-          `Cron job stopped but database entry remains. Please check logs.`
-        );
-      } else {
-        const partsDelivered = schedule.part - 1;
-        await msg.reply(
-          `✅ *Lecture Series Cancelled*\n\n` +
-          `*Subject:* ${schedule.subject}\n` +
-          `*Parts Delivered:* ${partsDelivered}/${CONFIG.MAX_LECTURE_PARTS}\n` +
-          `*Job ID:* \`${jobId}\`\n\n` +
-          `The scheduled lectures have been permanently removed.`
-        );
-      }
-    } catch (error) {
-      logger.error({ err: error }, 'Failed to cancel lecture');
-      await msg.reply(`❌ *Cancellation Failed*\n\n${error.message}`);
-    }
-  },
-
-  /**
-    * NEW: Handles `.lecture-history <subject>`
-    */
-  async handleLectureHistory(context) {
-    const { msg, text, logger } = context;
-    const db = await PluginHelpers.getDB();
-    const subject = text;
-
-    if (!subject) {
-      await msg.reply(
-        `Please provide the subject name.\n\n` +
-        `*Usage:* \`.lecture-history <Subject>\`\n` +
-        `*Example:* \`.lecture-history Biology\``
-      );
-      return;
-    }
-
-    try {
-      const schedule = await db.collection('lecture_schedules').findOne({
-        groupId: msg.from,
-        subject: { $regex: new RegExp(`^${subject}$`, 'i') }
-      });
-
-      if (!schedule) {
-        await msg.reply(`❌ No lecture series found for "${subject}" in this group.`);
-        return;
-      }
-
-      const history = await db.collection('lecture_history')
-        .find({ scheduleId: schedule._id })
-        .sort({ deliveredAt: -1 })
-        .limit(10)
-        .toArray();
-
-      if (history.length === 0) {
-        await msg.reply(`📜 No delivery history found for "${subject}".\n\n_The first lecture hasn't been delivered yet._`);
-        return;
-      }
-
-      let reply = `📜 *Lecture History: ${subject}*\n` +
-                  `_Showing last ${history.length} deliveries_\n`;
-
-      for (const entry of history) {
-        const status = entry.status === 'success' ? '✅' : '❌';
-        const date = new Date(entry.deliveredAt).toLocaleString('en-GB', { 
-          timeZone: schedule.timezone,
-          dateStyle: 'short',
-          timeStyle: 'short'
-        });
-
-        reply += `\n${status} Part ${entry.part} - ${date}`;
-        if (entry.error) {
-          reply += `\n   └ Error: ${entry.error}`;
-        }
-      }
-
-      await msg.reply(reply);
-    } catch (error) {
-      logger.error({ err: error }, 'Failed to fetch lecture history');
-      await msg.reply(`❌ Could not fetch history.\n\n_Error: ${error.message}_`);
     }
   },
 
