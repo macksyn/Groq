@@ -1,7 +1,6 @@
 // plugins/ai_lecturer.js - V3 Plugin (Fixed & Enhanced)
 import axios from 'axios';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
-import { getDB } from '../lib/mongoManager.js';
 
 // --- CONFIGURATION ---
 const CONFIG = {
