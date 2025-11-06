@@ -1,0 +1,808 @@
+// plugins/ai_lecturer.js - V3 Plugin (Fixed & Enhanced)
+import axios from 'axios';
+import { PluginHelpers } from '../lib/pluginIntegration.js';
+import { getDB } from '../lib/mongoManager.js';
+import { ObjectId } from 'mongodb';
+
+// --- CONFIGURATION ---
+const CONFIG = {
+  DEFAULT_TIMEZONE: 'Africa/Lagos',
+  MAX_LECTURE_PARTS: 52, // Maximum 52 parts (1 year of weekly lectures)
+  SENTENCE_DELAY_MIN: 3000,
+  SENTENCE_DELAY_MAX: 7000,
+  WORD_DELAY_MS: 200,
+  PRIMARY_API_TIMEOUT: 60000,
+  FALLBACK_API_TIMEOUT: 60000
+};
+
+// --- HELPER FUNCTIONS ---
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Ensures database indexes are created
+ */
+async function ensureIndexes(db, logger) {
+  try {
+    await db.collection('lecture_schedules').createIndex(
+      { groupId: 1, subject: 1 },
+      { 
+        unique: true, 
+        collation: { locale: 'en', strength: 2 },
+        name: 'unique_group_subject'
+      }
+    );
+    await db.collection('lecture_schedules').createIndex({ groupId: 1 });
+    await db.collection('lecture_history').createIndex({ scheduleId: 1, deliveredAt: -1 });
+    logger.info('AI Lecturer: Database indexes ensured');
+  } catch (error) {
+    logger.warn(error, 'AI Lecturer: Failed to create indexes (may already exist)');
+  }
+}
+
+/**
+ * Generates the lecture content from an AI provider.
+ */
+async function generateLecture(systemPrompt, userPrompt, logger) {
+  let lectureContent = null;
+  let generatedBy = 'AI';
+
+  // --- Try Primary API (GPT-5) ---
+  const primaryApiUrl = 'https://malvin-api.vercel.app/ai/gpt-5';
+  const combinedPrompt = `${systemPrompt}\n\n*Lecture Task:* ${userPrompt}`;
+
+  try {
+    logger.info('AI Lecturer: Trying primary API (gpt-5)...');
+    const response = await axios.get(primaryApiUrl, {
+      params: { prompt: combinedPrompt },
+      timeout: CONFIG.PRIMARY_API_TIMEOUT
+    });
+
+    const result = response.data?.response || response.data?.result || response.data?.answer;
+    if (result && typeof result === 'string' && result.trim().length > 0) {
+      lectureContent = result.trim();
+      generatedBy = 'GPT-5 (Primary)';
+      logger.info('AI Lecturer: Primary API succeeded');
+      return { lectureContent, generatedBy };
+    }
+    throw new Error('Primary API returned invalid or empty response');
+  } catch (primaryError) {
+    logger.warn({ err: primaryError }, 'AI Lecturer: Primary API failed, trying fallback...');
+
+    // --- Try Fallback API (Groq) ---
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) {
+      logger.error('AI Lecturer: GROQ_API_KEY not set for fallback');
+      throw new Error('Primary AI failed and fallback AI (Groq) is not configured. Please contact the bot administrator.');
+    }
+
+    const groqModel = 'llama-3.1-70b-versatile';
+    const groqApiUrl = 'https://api.groq.com/openai/v1/chat/completions';
+
+    try {
+      const groqResponse = await axios.post(
+        groqApiUrl,
+        {
+          model: groqModel,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.7,
+          max_tokens: 3000,
+          top_p: 1.0,
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: CONFIG.FALLBACK_API_TIMEOUT
+        }
+      );
+
+      const groqResult = groqResponse.data?.choices?.[0]?.message?.content?.trim();
+      if (!groqResult || groqResult.length === 0) {
+        throw new Error('Groq fallback returned empty content');
+      }
+
+      lectureContent = groqResult;
+      generatedBy = 'Groq AI (Fallback)';
+      logger.info('AI Lecturer: Fallback API succeeded');
+      return { lectureContent, generatedBy };
+    } catch (fallbackError) {
+      logger.error({ err: fallbackError }, 'AI Lecturer: Both primary and fallback APIs failed');
+      throw new Error('All AI services are currently unavailable. Please try again later.');
+    }
+  }
+}
+
+/**
+ * Delivers the lecture in a "typing" simulation.
+ */
+async function deliverLectureScript(sock, jid, lectureText, logger) {
+  const sentences = lectureText
+    .replace(/(\r\n|\n|\r)/gm, " ")
+    .split(/(?<=[.!?])\s+/)
+    .filter(s => s.trim().length > 0);
+
+  logger.info(`AI Lecturer: Delivering ${sentences.length} sentences to ${jid}`);
+
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i];
+    try {
+      await sock.sendPresenceUpdate('composing', jid);
+      const wordCount = sentence.split(' ').length;
+      const delay = Math.max(
+        CONFIG.SENTENCE_DELAY_MIN,
+        Math.min(wordCount * CONFIG.WORD_DELAY_MS, CONFIG.SENTENCE_DELAY_MAX)
+      );
+      await sleep(delay);
+      await sock.sendMessage(jid, { text: sentence });
+    } catch (error) {
+      logger.error({ err: error, sentence: i + 1 }, 'Failed to send sentence, continuing...');
+    }
+  }
+
+  await sock.sendPresenceUpdate('paused', jid);
+}
+
+/**
+ * Parses and validates schedule parameters.
+ */
+function parseSchedule(dayStr, timeStr, userTz) {
+  const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  let dayOfWeek;
+
+  if (/^\d+$/.test(dayStr)) {
+    dayOfWeek = parseInt(dayStr, 10);
+    if (dayOfWeek < 0 || dayOfWeek > 6) {
+      throw new Error('Invalid day number. Must be 0 (Sunday) to 6 (Saturday).');
+    }
+  } else {
+    dayOfWeek = days.indexOf(dayStr.toLowerCase());
+    if (dayOfWeek === -1) {
+      throw new Error('Invalid day name. Use full day name (e.g., "Monday") or number 0-6.');
+    }
+  }
+
+  if (!/^\d{2}:\d{2}$/.test(timeStr)) {
+    throw new Error('Invalid time format. Use 24-hour HH:MM (e.g., "10:00" or "23:30").');
+  }
+
+  const [hours, minutes] = timeStr.split(':').map(Number);
+  if (hours > 23 || minutes > 59) {
+    throw new Error('Invalid time values. Hours must be 0-23, minutes 0-59.');
+  }
+
+  const timezone = userTz || CONFIG.DEFAULT_TIMEZONE;
+
+  try {
+    new Date().toLocaleString('en-US', { timeZone: timezone });
+  } catch (e) {
+    throw new Error(`Invalid timezone: "${timezone}". Examples: "Africa/Lagos", "Europe/London", "America/New_York".`);
+  }
+
+  return { dayOfWeek, time: timeStr, timezone };
+}
+
+/**
+ * Logs delivery history to database
+ */
+async function logDeliveryHistory(db, scheduleId, part, status, error = null, logger) {
+  try {
+    await db.collection('lecture_history').insertOne({
+      scheduleId: scheduleId,
+      part: part,
+      deliveredAt: new Date(),
+      status: status,
+      error: error ? error.message : null
+    });
+  } catch (err) {
+    logger.error({ err }, 'Failed to log delivery history');
+  }
+}
+
+/**
+ * Runs the automated, scheduled lecture.
+ * NOW FETCHES FRESH DATA FROM DATABASE!
+ */
+async function runScheduledLecture(scheduleId, sock, logger) {
+  const db = getDB();
+
+  try {
+    // CRITICAL FIX: Fetch fresh schedule data from database
+    const schedule = await db.collection('lecture_schedules').findOne({ _id: scheduleId });
+
+    if (!schedule) {
+      logger.error(`Schedule ${scheduleId} not found in database - may have been deleted`);
+      return;
+    }
+
+    // Check if we've reached max parts
+    if (schedule.part > CONFIG.MAX_LECTURE_PARTS) {
+      logger.warn(`Schedule ${schedule.subject} has reached max parts (${CONFIG.MAX_LECTURE_PARTS})`);
+      await sock.sendMessage(schedule.groupId, {
+        text: `🎓 The lecture series "${schedule.subject}" has completed all ${CONFIG.MAX_LECTURE_PARTS} parts.\n\n` +
+              `_This course has automatically concluded. Thank you for attending!_`
+      });
+      return;
+    }
+
+    logger.info(`Running scheduled lecture: ${schedule.subject} (Part ${schedule.part}) in ${schedule.groupId}`);
+
+    // Prepare prompts
+    const systemPrompt = `You are a world-class professor continuing a weekly lecture series. Your task is to write a "spoken" lecture script for the next part of the course.
+
+Guidelines:
+- The topic is "${schedule.subject}".
+- You are now delivering Part ${schedule.part}.
+${schedule.part > 1 ? '- Start by BRIEFLY summarizing what was covered in the previous part.' : '- This is the first lecture, so start with an engaging introduction.'}
+- Then deliver the main content for Part ${schedule.part}.
+- Write as you would speak in a natural, conversational, professorial tone.
+- DO NOT use markdown formatting (*bold*, _italics_, - bullets).
+- DO NOT include headings or titles. Just start the lecture.
+- End sentences with proper punctuation (., ?, !).
+- Keep the lecture comprehensive but focused - aim for 10-15 key sentences.`;
+
+    const userPrompt = `Continue the lecture on "${schedule.subject}". This is Part ${schedule.part}.`;
+
+    // Generate lecture script
+    const { lectureContent, generatedBy } = await generateLecture(systemPrompt, userPrompt, logger);
+    if (!lectureContent) throw new Error('AI returned empty script');
+
+    // Send header
+    const header = `🎓 *AI LECTURE: PART ${schedule.part}* 🎓\n\n` +
+                   `*Topic:* ${schedule.subject}\n` +
+                   `*Professor:* ${generatedBy}\n` +
+                   `-----------------------------------`;
+    await sock.sendMessage(schedule.groupId, { text: header });
+
+    // Deliver script
+    await deliverLectureScript(sock, schedule.groupId, lectureContent, logger);
+
+    // Send footer
+    await sock.sendPresenceUpdate('composing', schedule.groupId);
+    await sleep(3000);
+    const nextPart = schedule.part + 1;
+    const footerMsg = nextPart <= CONFIG.MAX_LECTURE_PARTS
+      ? `_Class dismissed. Part ${nextPart} will be delivered next week at the scheduled time._`
+      : `_This was the final lecture in this series. The course has concluded._`;
+
+    await sock.sendMessage(schedule.groupId, { 
+      text: `-----------------------------------\n` +
+            `🎓 *AI LECTURE: END OF PART ${schedule.part}* 🎓\n\n` +
+            footerMsg
+    });
+    await sock.sendPresenceUpdate('paused', schedule.groupId);
+
+    // Update database for next week
+    await db.collection('lecture_schedules').updateOne(
+      { _id: scheduleId },
+      { 
+        $set: { 
+          part: nextPart,
+          lastDeliveredTimestamp: new Date()
+        } 
+      }
+    );
+
+    // Log success
+    await logDeliveryHistory(db, scheduleId, schedule.part, 'success', null, logger);
+    logger.info(`Successfully delivered lecture ${schedule.subject} Part ${schedule.part}`);
+
+  } catch (error) {
+    logger.error({ err: error, scheduleId }, 'Failed to run scheduled lecture');
+
+    try {
+      const schedule = await db.collection('lecture_schedules').findOne({ _id: scheduleId });
+      if (schedule) {
+        await sock.sendMessage(schedule.groupId, {
+          text: `❌ *Lecture Delivery Failed*\n\n` +
+                `I was scheduled to deliver *Part ${schedule.part} of ${schedule.subject}*, but an error occurred.\n\n` +
+                `_Error: ${error.message}_\n\n` +
+                `The lecture will be attempted again at the next scheduled time.`
+        });
+        await logDeliveryHistory(db, scheduleId, schedule.part, 'failed', error, logger);
+      }
+    } catch (notifyError) {
+      logger.error({ err: notifyError }, 'Failed to send error notification');
+    }
+  }
+}
+
+/**
+ * Converts schedule info into a cron time string.
+ */
+function getCronTime(time, dayOfWeek) {
+  const [hour, minute] = time.split(':');
+  return `${minute} ${hour} * * ${dayOfWeek}`;
+}
+
+/**
+ * Creates a unique, predictable job ID for the scheduler
+ */
+function getJobId(scheduleId) {
+  return `lecture_${scheduleId.toString()}`;
+}
+
+// --- V3 PLUGIN EXPORT ---
+
+export default {
+  name: 'AI Lecturer (v3)',
+  description: 'AI-powered course manager with manual lectures and automated weekly schedules.',
+  category: 'ai',
+  version: '3.1.0',
+  author: 'Gemini + Claude',
+
+  commands: ['lecture', 'teach', 'schedule-lecture', 'list-lectures', 'cancel-lecture', 'lecture-history'],
+  aliases: ['ai-lecture', 'ai-teach', 'schedule-class', 'list-classes', 'cancel-class', 'lecture-log'],
+
+  usage: 'Use .lecture <topic> or .schedule-lecture <subject> | <day> | <time> | [timezone]',
+  example: '.lecture The Benin Empire\n.schedule-lecture History | Monday | 10:00 | Africa/Lagos\n.list-lectures\n.cancel-lecture History\n.lecture-history History',
+
+  adminOnly: true,
+  groupOnly: true,
+
+  /**
+   * Main V3 plugin execution function (Command Router)
+   */
+  async run(context) {
+    const { command } = context;
+
+    switch (command) {
+      case 'lecture':
+      case 'teach':
+        await this.handleManualLecture(context);
+        break;
+      case 'schedule-lecture':
+      case 'schedule-class':
+        await this.handleScheduleLecture(context);
+        break;
+      case 'list-lectures':
+      case 'list-classes':
+        await this.handleListLectures(context);
+        break;
+      case 'cancel-lecture':
+      case 'cancel-class':
+        await this.handleCancelLecture(context);
+        break;
+      case 'lecture-history':
+      case 'lecture-log':
+        await this.handleLectureHistory(context);
+        break;
+    }
+  },
+
+  /**
+   * Handles manual `.lecture` command
+   */
+  async handleManualLecture(context) {
+    const { msg, text, sock, config, logger } = context;
+    const topic = text;
+
+    if (!topic) {
+      await msg.reply(
+        `Please provide a topic for the lecture.\n\n` +
+        `*Usage:* ${config.PREFIX}lecture <topic>\n` +
+        `*Example:* ${config.PREFIX}lecture The impact of Afrobeats on global music`
+      );
+      return;
+    }
+
+    await msg.react('🧠');
+    const loadingMsg = await msg.reply(
+      `🧠 *Preparing your lecture...*\n\n` +
+      `*Topic:* ${topic}\n\n` +
+      `_This might take a moment. The AI is writing the full script..._`
+    );
+
+    const systemPrompt = `You are a world-class professor. Your task is to write a "spoken" lecture script on the given topic.
+
+Guidelines:
+- Write as you would speak in a natural, conversational, professorial tone.
+- DO NOT use markdown formatting (*bold*, _italics_, - bullets). This is a spoken script.
+- DO NOT include headings or titles. Just start with the lecture content.
+- The script should be comprehensive, well-structured, and flow logically.
+- End sentences with proper punctuation (., ?, !).
+- Aim for 10-15 key sentences that thoroughly cover the topic.`;
+
+    const userPrompt = topic;
+
+    try {
+      const { lectureContent, generatedBy } = await generateLecture(systemPrompt, userPrompt, logger);
+      if (!lectureContent) throw new Error('AI returned an empty script');
+
+      const header = `🎓 *AI LECTURE: STARTING* 🎓\n\n` +
+                     `*Topic:* ${topic}\n` +
+                     `*Professor:* ${generatedBy}\n` +
+                     `-----------------------------------`;
+      await sock.sendMessage(msg.from, { text: header, edit: loadingMsg.key });
+      await msg.react('✅');
+
+      await deliverLectureScript(sock, msg.from, lectureContent, logger);
+
+      await sock.sendPresenceUpdate('composing', msg.from);
+      await sleep(3000);
+      await sock.sendMessage(msg.from, { 
+        text: `-----------------------------------\n` +
+              `🎓 *AI LECTURE: END* 🎓\n\n` +
+              `_This concludes today's lecture._`
+      });
+      await sock.sendPresenceUpdate('paused', msg.from);
+    } catch (error) {
+      logger.error({ err: error }, 'AI Lecturer plugin failed (manual)');
+      await msg.react('❌');
+      await sock.sendMessage(msg.from, { 
+        text: `❌ *Lecture Failed*\n\n${error.message}`, 
+        edit: loadingMsg.key 
+      });
+    }
+  },
+
+  /**
+   * Handles `.schedule-lecture <subject> | <day> | <time> | [timezone]`
+   */
+  async handleScheduleLecture(context) {
+    const { msg, text, logger, helpers, sock } = context;
+    const db = getDB();
+
+    try {
+      const parts = text.split('|').map(p => p.trim());
+      if (parts.length < 3) {
+        throw new Error('USAGE_ERROR');
+      }
+
+      const [subject, dayStr, timeStr, tzStr] = parts;
+      if (!subject || !dayStr || !timeStr) {
+        throw new Error('USAGE_ERROR');
+      }
+
+      const { dayOfWeek, time, timezone } = parseSchedule(dayStr, timeStr, tzStr);
+      const cronTime = getCronTime(time, dayOfWeek);
+
+      // Prepare schedule document
+      const newSchedule = {
+        groupId: msg.from,
+        subject: subject,
+        dayOfWeek: dayOfWeek,
+        time: time,
+        timezone: timezone,
+        part: 1,
+        lastDeliveredTimestamp: null,
+        scheduledBy: msg.sender,
+        createdAt: new Date()
+      };
+
+      // Insert into database (will fail if duplicate due to unique index)
+      let insertResult;
+      try {
+        insertResult = await db.collection('lecture_schedules').insertOne(newSchedule);
+      } catch (dbError) {
+        if (dbError.code === 11000) {
+          throw new Error(`A lecture on "${subject}" is already scheduled in this group. Cancel it first to reschedule.`);
+        }
+        throw dbError;
+      }
+
+      const scheduleId = insertResult.insertedId;
+
+      // Register with cron scheduler
+      const jobId = getJobId(scheduleId);
+      try {
+        const success = helpers.registerCronJob(
+          jobId,
+          cronTime,
+          () => runScheduledLecture(scheduleId, sock, logger),
+          timezone
+        );
+
+        if (!success) {
+          throw new Error('Failed to register job with cron scheduler');
+        }
+      } catch (cronError) {
+        // Rollback: delete from database if cron registration fails
+        await db.collection('lecture_schedules').deleteOne({ _id: scheduleId });
+        throw new Error(`Could not schedule lecture: ${cronError.message}`);
+      }
+
+      const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek];
+      await msg.reply(
+        `✅ *Lecture Scheduled Successfully!*\n\n` +
+        `*Subject:* ${subject}\n` +
+        `*Schedule:* Every ${dayName} at ${time}\n` +
+        `*Timezone:* ${timezone}\n` +
+        `*Cron Pattern:* \`${cronTime}\`\n` +
+        `*Job ID:* \`${jobId}\`\n\n` +
+        `Part 1 will be delivered on the next scheduled day.\n` +
+        `_Maximum ${CONFIG.MAX_LECTURE_PARTS} parts will be delivered._`
+      );
+
+    } catch (error) {
+      logger.error({ err: error }, 'Failed to schedule lecture');
+
+      if (error.message === 'USAGE_ERROR') {
+        await msg.reply(
+          `❌ *Invalid Format*\n\n` +
+          `*Usage:* \`.schedule-lecture <Subject> | <Day> | <Time> | [Timezone]\`\n\n` +
+          `*Examples:*\n` +
+          `• \`.schedule-lecture Biology | Monday | 10:00\`\n` +
+          `• \`.schedule-lecture Physics | 1 | 14:30 | Europe/London\`\n\n` +
+          `*Day:* 0-6 (0=Sunday, 6=Saturday) or full name\n` +
+          `*Time:* 24-hour HH:MM format\n` +
+          `*Timezone:* Optional (default: ${CONFIG.DEFAULT_TIMEZONE})`
+        );
+      } else {
+        await msg.reply(`❌ *Schedule Failed*\n\n${error.message}`);
+      }
+    }
+  },
+
+  /**
+   * Handles `.list-lectures`
+   */
+  async handleListLectures(context) {
+    const { msg, logger } = context;
+    const db = getDB();
+
+    try {
+      const schedules = await db.collection('lecture_schedules')
+        .find({ groupId: msg.from })
+        .sort({ subject: 1 })
+        .toArray();
+
+      if (schedules.length === 0) {
+        await msg.reply(`📚 No lectures are currently scheduled for this group.\n\nUse \`.schedule-lecture\` to create one.`);
+        return;
+      }
+
+      let reply = `📚 *Scheduled Lectures (${schedules.length})*\n`;
+
+      for (const s of schedules) {
+        const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.dayOfWeek];
+        const cronTime = getCronTime(s.time, s.dayOfWeek);
+        const lastRan = s.lastDeliveredTimestamp 
+          ? new Date(s.lastDeliveredTimestamp).toLocaleString('en-GB', { timeZone: s.timezone })
+          : 'Never';
+
+        const progress = `${s.part - 1}/${CONFIG.MAX_LECTURE_PARTS}`;
+
+        reply += `\n-----------------------------------\n` +
+                 `*${s.subject}*\n` +
+                 `├ Next Part: ${s.part}\n` +
+                 `├ Progress: ${progress} completed\n` +
+                 `├ Schedule: ${dayName} @ ${s.time}\n` +
+                 `├ Timezone: ${s.timezone}\n` +
+                 `├ Last Ran: ${lastRan}\n` +
+                 `└ Job ID: \`${getJobId(s._id)}\``;
+      }
+
+      await msg.reply(reply);
+    } catch (error) {
+      logger.error({ err: error }, 'Failed to list lectures');
+      await msg.reply(`❌ Could not fetch lecture list.\n\n_Error: ${error.message}_`);
+    }
+  },
+
+  /**
+   * Handles `.cancel-lecture <subject>`
+   */
+  async handleCancelLecture(context) {
+    const { msg, text, logger, helpers } = context;
+    const db = getDB();
+    const subjectToCancel = text;
+
+    if (!subjectToCancel) {
+      await msg.reply(
+        `Please provide the subject name to cancel.\n\n` +
+        `*Usage:* \`.cancel-lecture <Subject>\`\n` +
+        `*Example:* \`.cancel-lecture Biology\``
+      );
+      return;
+    }
+
+    try {
+      const schedule = await db.collection('lecture_schedules').findOne({
+        groupId: msg.from,
+        subject: { $regex: new RegExp(`^${subjectToCancel}$`, 'i') }
+      });
+
+      if (!schedule) {
+        await msg.reply(`❌ Could not find a lecture named "${subjectToCancel}" in this group.`);
+        return;
+      }
+
+      const jobId = getJobId(schedule._id);
+
+      // Cancel the cron job first
+      const cronCancelled = helpers.cancelCronJob(jobId);
+
+      // Delete from database
+      const dbResult = await db.collection('lecture_schedules').deleteOne({ _id: schedule._id });
+
+      if (dbResult.deletedCount === 0) {
+        logger.warn(`Cron job ${jobId} cancelled but DB delete failed`);
+        await msg.reply(
+          `⚠️ Partially cancelled.\n\n` +
+          `Cron job stopped but database entry remains. Please check logs.`
+        );
+      } else {
+        const partsDelivered = schedule.part - 1;
+        await msg.reply(
+          `✅ *Lecture Series Cancelled*\n\n` +
+          `*Subject:* ${schedule.subject}\n` +
+          `*Parts Delivered:* ${partsDelivered}/${CONFIG.MAX_LECTURE_PARTS}\n` +
+          `*Job ID:* \`${jobId}\`\n\n` +
+          `The scheduled lectures have been permanently removed.`
+        );
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'Failed to cancel lecture');
+      await msg.reply(`❌ *Cancellation Failed*\n\n${error.message}`);
+    }
+  },
+
+  /**
+   * NEW: Handles `.lecture-history <subject>`
+   */
+  async handleLectureHistory(context) {
+    const { msg, text, logger } = context;
+    const db = getDB();
+    const subject = text;
+
+    if (!subject) {
+      await msg.reply(
+        `Please provide the subject name.\n\n` +
+        `*Usage:* \`.lecture-history <Subject>\`\n` +
+        `*Example:* \`.lecture-history Biology\``
+      );
+      return;
+    }
+
+    try {
+      const schedule = await db.collection('lecture_schedules').findOne({
+        groupId: msg.from,
+        subject: { $regex: new RegExp(`^${subject}$`, 'i') }
+      });
+
+      if (!schedule) {
+        await msg.reply(`❌ No lecture series found for "${subject}" in this group.`);
+        return;
+      }
+
+      const history = await db.collection('lecture_history')
+        .find({ scheduleId: schedule._id })
+        .sort({ deliveredAt: -1 })
+        .limit(10)
+        .toArray();
+
+      if (history.length === 0) {
+        await msg.reply(`📜 No delivery history found for "${subject}".\n\n_The first lecture hasn't been delivered yet._`);
+        return;
+      }
+
+      let reply = `📜 *Lecture History: ${subject}*\n` +
+                  `_Showing last ${history.length} deliveries_\n`;
+
+      for (const entry of history) {
+        const status = entry.status === 'success' ? '✅' : '❌';
+        const date = new Date(entry.deliveredAt).toLocaleString('en-GB', { 
+          timeZone: schedule.timezone,
+          dateStyle: 'short',
+          timeStyle: 'short'
+        });
+
+        reply += `\n${status} Part ${entry.part} - ${date}`;
+        if (entry.error) {
+          reply += `\n   └ Error: ${entry.error}`;
+        }
+      }
+
+      await msg.reply(reply);
+    } catch (error) {
+      logger.error({ err: error }, 'Failed to fetch lecture history');
+      await msg.reply(`❌ Could not fetch history.\n\n_Error: ${error.message}_`);
+    }
+  },
+
+  /**
+   * V3 LIFECYCLE HOOK: onLoad
+   * Loads all schedules from DB and registers them with node-cron.
+   */
+  async onLoad(context) {
+    const { sock, logger, helpers } = context;
+    const db = getDB();
+
+    logger.info('AI Lecturer (onLoad): Initializing...');
+
+    try {
+      // Ensure database indexes exist
+      await ensureIndexes(db, logger);
+
+      // Fetch all schedules
+      const allSchedules = await db.collection('lecture_schedules').find().toArray();
+
+      if (allSchedules.length === 0) {
+        logger.info('AI Lecturer (onLoad): No schedules found in database');
+        return;
+      }
+
+      logger.info(`AI Lecturer (onLoad): Found ${allSchedules.length} schedule(s) to load`);
+
+      // Track already registered jobs to prevent duplicates
+      const registeredJobs = new Set();
+      let successCount = 0;
+      let skipCount = 0;
+
+      for (const schedule of allSchedules) {
+        const jobId = getJobId(schedule._id);
+
+        // Prevent duplicate registration
+        if (registeredJobs.has(jobId)) {
+          logger.warn(`Job ${jobId} already registered in this load cycle, skipping`);
+          skipCount++;
+          continue;
+        }
+
+        try {
+          // Validate timezone is still valid
+          try {
+            new Date().toLocaleString('en-US', { timeZone: schedule.timezone });
+          } catch (tzError) {
+            logger.error(
+              { scheduleId: schedule._id, timezone: schedule.timezone },
+              'Invalid timezone in stored schedule, skipping'
+            );
+            skipCount++;
+            continue;
+          }
+
+          const cronTime = getCronTime(schedule.time, schedule.dayOfWeek);
+
+          // Register the job with fresh data fetching
+          const success = helpers.registerCronJob(
+            jobId,
+            cronTime,
+            () => runScheduledLecture(schedule._id, sock, logger), // Pass only ID
+            schedule.timezone
+          );
+
+          if (!success) {
+            logger.error({ jobId, scheduleId: schedule._id }, 'Failed to register cron job');
+            skipCount++;
+            continue;
+          }
+
+          registeredJobs.add(jobId);
+          successCount++;
+
+          logger.info({
+            jobId,
+            subject: schedule.subject,
+            groupId: schedule.groupId,
+            cronTime,
+            timezone: schedule.timezone
+          }, 'Successfully registered lecture schedule');
+
+        } catch (error) {
+          logger.error(
+            { err: error, scheduleId: schedule._id, subject: schedule.subject },
+            'Error loading individual schedule'
+          );
+          skipCount++;
+        }
+      }
+
+      logger.info(
+        `AI Lecturer (onLoad): Completed. Success: ${successCount}, Skipped: ${skipCount}, Total: ${allSchedules.length}`
+      );
+
+      if (skipCount > 0) {
+        logger.warn(`${skipCount} schedule(s) failed to load. Check logs for details.`);
+      }
+
+    } catch (error) {
+      logger.error({ err: error }, 'AI Lecturer (onLoad): Critical error during initialization');
+    }
+  }
+};
