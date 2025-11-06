@@ -1586,7 +1586,7 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
           await sock.sendMessage(m.from, {
             video: fs.readFileSync(tempFilePath), // Use buffer for videos
             caption: caption,
-            mimetype: 'video/mp4',
+            mimetype: 'application/octet-stream',
             fileName: fileName
           }, { quoted: m });
 

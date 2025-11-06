@@ -33,8 +33,21 @@ export default async function MessageHandler(messageUpdate, sock, loggerArg, con
     if (messageUpdate.type !== 'notify') return;
     if (!messageUpdate.messages?.[0]) return;
 
-    const m = serializeMessage(messageUpdate.messages[0], sock);
+    // ------------------- MODIFICATION: Added 'await' -------------------
+    const m = await serializeMessage(messageUpdate.messages[0], sock);
     if (!m.message) return;
+
+    // --- CRITICAL BAN CHECK (MOVED UP) ---
+    // This check now runs *before* anything else, using the *correctly resolved* m.sender
+    if (m.sender) {
+      const userPhone = m.sender.split('@')[0];
+      if (await isUserBanned(userPhone)) {
+        logger.info(`🚫 Ignoring message from banned user: ${userPhone} (Resolved JID)`);
+        return; // Banned user is immediately stopped
+      }
+    }
+    // --- END CRITICAL BAN CHECK ---
+
 
     if (m.key.remoteJid === 'status@broadcast') {
       if (config.AUTO_STATUS_SEEN) await sock.readMessages([m.key]);
@@ -79,7 +92,7 @@ export default async function MessageHandler(messageUpdate, sock, loggerArg, con
       return;
     }
 
-    // Ban check
+    // Ban check (This is now a secondary check, the primary one is at the top)
     if (m.sender) {
       const userPhone = m.sender.split('@')[0];
       if (await isUserBanned(userPhone)) {

@@ -1,4 +1,5 @@
 // plugins/birthday.js - V3 Plugin Format with Scheduled Tasks Integration
+// FIXED: Removed globalSock and now uses the 'context' object passed by PluginManager.
 import { PluginHelpers } from '../lib/pluginIntegration.js';
 import moment from 'moment-timezone';
 
@@ -49,31 +50,36 @@ export default {
       name: 'birthday_wishes',
       description: 'Send birthday wishes at midnight',
       schedule: '1 0 * * *', // 00:01 every day
-      handler: async (context) => await scheduledBirthdayWishes(context)
+      // FIXED: Pass the 'context' object to the handler
+      handler: (context) => scheduledBirthdayWishes(context)
     },
     {
       name: 'birthday_reminders_7d',
       description: 'Send 7-day birthday reminders',
       schedule: '0 9 * * *', // 09:00 every day
-      handler: async (context) => await scheduledBirthdayReminders(context, 7)
+      // FIXED: Pass the 'context' object and args
+      handler: (context) => scheduledBirthdayReminders(context, 7)
     },
     {
       name: 'birthday_reminders_3d',
       description: 'Send 3-day birthday reminders',
       schedule: '0 9 * * *', // 09:00 every day
-      handler: async (context) => await scheduledBirthdayReminders(context, 3)
+      // FIXED: Pass the 'context' object and args
+      handler: (context) => scheduledBirthdayReminders(context, 3)
     },
     {
       name: 'birthday_reminders_1d',
       description: 'Send 1-day birthday reminders',
       schedule: '0 9 * * *', // 09:00 every day
-      handler: async (context) => await scheduledBirthdayReminders(context, 1)
+      // FIXED: Pass the 'context' object and args
+      handler: (context) => scheduledBirthdayReminders(context, 1)
     },
     {
       name: 'birthday_cleanup',
       description: 'Clean up old birthday records',
       schedule: '0 2 * * 0', // 02:00 every Sunday
-      handler: async (context) => await scheduledCleanup(context)
+      // FIXED: Pass the 'context' object
+      handler: (context) => scheduledCleanup(context)
     }
   ],
 
@@ -95,13 +101,14 @@ export default {
         if (args.length === 0) {
           await showBirthdayMenu(m, config.PREFIX);
         } else {
-          await handleSubCommand(args[0], args.slice(1), { m, sock, config, logger, helpers });
+          // Pass the full context to sub-handlers
+          await handleSubCommand(args[0], args.slice(1), context);
         }
         break;
 
       case 'mybirthday':
       case 'mybday':
-        await handleMyBirthday({ m, sock, config, logger });
+        await handleMyBirthday(context);
         break;
 
       default:
@@ -192,6 +199,30 @@ function isConnectionHealthy(sock) {
   return sock && sock.user && sock.user.id;
 }
 
+// Helper to get all group participants
+async function getGroupParticipants(sock, groupId, logger) {
+  try {
+    const metadata = await sock.groupMetadata(groupId);
+    if (!metadata || !metadata.participants) return [];
+
+    // Get all participant JIDs
+    const participants = metadata.participants.map(p => p.id);
+
+    // Get the bot's JID (handle potential device ID)
+    const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+
+    // Filter out the bot
+    return participants.filter(jid => jid !== botJid);
+  } catch (error) {
+    if (logger) {
+      logger.error(`❌ Error fetching participants for group ${groupId}:`, error.message);
+    } else {
+      console.error(`❌ Error fetching participants for group ${groupId}:`, error.message);
+    }
+    return []; // Return empty array on failure
+  }
+}
+
 // Get all birthdays
 async function getAllBirthdays() {
   try {
@@ -267,12 +298,15 @@ async function getUpcomingBirthdays(daysAhead) {
 
 // Generate birthday wish message
 function getBirthdayWishMessage(birthdayPerson) {
+  // NEW: Get the user's number for tagging
+  const userTag = `@${birthdayPerson.userId.split('@')[0]}`;
+
   const wishes = [
-    `🎉🎂 HAPPY BIRTHDAY ${birthdayPerson.name}! 🎂🎉\n\nWishing you a day filled with happiness and a year filled with joy! 🎈✨`,
-    `🎊 Happy Birthday to our amazing friend ${birthdayPerson.name}! 🎊\n\nMay your special day be surrounded with happiness, filled with laughter, wrapped with pleasure and painted with fun! 🎨🎁`,
-    `🌟 It's ${birthdayPerson.name}'s Birthday! 🌟\n\n🎂 Another year older, another year wiser, another year more awesome! May all your dreams come true! ✨🎉`,
-    `🎈 BIRTHDAY ALERT! 🎈\n\nIt's ${birthdayPerson.name}'s special day! 🎂 Let's celebrate this wonderful person who brings joy to our group! 🎊🎉`,
-    `🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday dear ${birthdayPerson.name}! 🎵\n🎵 Happy Birthday to you! 🎵\n\n🎂 Hope your day is as special as you are! 🌟`
+    `🎉🎂 HAPPY BIRTHDAY ${userTag}! 🎂🎉\n\nWishing you a day filled with happiness and a year filled with joy! 🎈✨`,
+    `🎊 Happy Birthday to our amazing friend ${userTag}! 🎊\n\nMay your special day be surrounded with happiness, filled with laughter, wrapped with pleasure and painted with fun! 🎨🎁`,
+    `🌟 It's ${userTag}'s Birthday! 🌟\n\n🎂 Another year older, another year wiser, another year more awesome! May all your dreams come true! ✨🎉`,
+    `🎈 BIRTHDAY ALERT! 🎈\n\nIt's ${userTag}'s special day! 🎂 Let's celebrate this wonderful person who brings joy to our group! 🎊🎉`,
+    `🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday dear ${userTag}! 🎵\n🎵 Happy Birthday to you! 🎵\n\n🎂 Hope your day is as special as you are! 🌟`
   ];
 
   const randomWish = wishes[Math.floor(Math.random() * wishes.length)];
@@ -282,7 +316,7 @@ function getBirthdayWishMessage(birthdayPerson) {
     message += `\n\n🎈 Celebrating ${birthdayPerson.birthday.age} wonderful years! 🎈`;
   }
 
-  message += `\n\n👏 From all of us at GIST HQ! 👏`;
+  message += `\n\n👏 From your friends at GIST HQ! 👏`;
 
   return message;
 }
@@ -292,9 +326,9 @@ function getReminderMessage(birthdayPerson, daysUntil) {
   let message;
 
   if (daysUntil === 1) {
-    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 Tomorrow is Someone Specials's birthday!\n\n🎁 Don't forget to wish them well! 🎉`;
+    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 Tomorrow is ${birthdayPerson.name}'s birthday!\n\n🎁 Don't forget to wish them well! 🎉`;
   } else {
-    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 Someone's birthday is in ${daysUntil} days!\n\n🗓️ Save the date: ${birthdayPerson.birthday.displayDate} 🎉`;
+    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 ${birthdayPerson.name}'s birthday is in ${daysUntil} days!\n\n🗓️ Save the date: ${birthdayPerson.birthday.displayDate} 🎉`;
   }
 
   if (birthdayPerson.birthday.age !== undefined) {
@@ -307,7 +341,7 @@ function getReminderMessage(birthdayPerson, daysUntil) {
 
 // ==================== SCHEDULED TASK HANDLERS ====================
 
-// Scheduled birthday wishes handler
+// FIXED: Accept 'context' and destructure 'sock' and 'logger'
 async function scheduledBirthdayWishes(context) {
   const { sock, logger } = context;
 
@@ -360,6 +394,7 @@ async function scheduledBirthdayWishes(context) {
           try {
             const privateMsg = `🎉 *HAPPY BIRTHDAY ${birthdayPerson.name}!* 🎉\n\nToday is your special day! 🎂\n\nWishing you all the happiness in the world! ✨🎈`;
 
+            // FIXED: Use 'sock' from context
             const success = await safeSend(sock, birthdayPerson.userId, { text: privateMsg });
             if (success) {
               successfulSends++;
@@ -378,9 +413,17 @@ async function scheduledBirthdayWishes(context) {
             try {
               if (!isConnectionHealthy(sock)) break;
 
+              // NEW: Get all participants for silent tag
+              const allParticipants = await getGroupParticipants(sock, groupId, logger);
+
+              // Add birthday person to mentions if not already in the list (should be)
+              const mentions = [...new Set([birthdayPerson.userId, ...allParticipants])];
+
+              // FIXED: Use 'sock' from context
               const success = await safeSend(sock, groupId, {
                 text: wishMessage,
-                mentions: [birthdayPerson.userId]
+                // CHANGED: Use all participants for silent mention
+                mentions: mentions
               });
 
               if (success) {
@@ -422,7 +465,7 @@ async function scheduledBirthdayWishes(context) {
   }
 }
 
-// Scheduled birthday reminders handler
+// FIXED: Accept 'context' and destructure 'sock' and 'logger'
 async function scheduledBirthdayReminders(context, daysAhead) {
   const { sock, logger } = context;
 
@@ -468,9 +511,17 @@ async function scheduledBirthdayReminders(context, daysAhead) {
             try {
               if (!isConnectionHealthy(sock)) break;
 
+              // NEW: Get all participants for silent tag
+              const allParticipants = await getGroupParticipants(sock, groupId, logger);
+
+              // Add birthday person to mentions if not already in the list (should be)
+              const mentions = [...new Set([birthdayPerson.userId, ...allParticipants])];
+
+              // FIXED: Use 'sock' from context
               const success = await safeSend(sock, groupId, {
                 text: reminderMessage,
-                mentions: [birthdayPerson.userId]
+                // CHANGED: Use all participants for silent mention
+                mentions: mentions
               });
 
               if (success) {
@@ -505,7 +556,7 @@ async function scheduledBirthdayReminders(context, daysAhead) {
   }
 }
 
-// Scheduled cleanup handler
+// FIXED: Accept 'context' and destructure 'logger'
 async function scheduledCleanup(context) {
   const { logger } = context;
 
@@ -540,6 +591,7 @@ async function scheduledCleanup(context) {
 
 // Handle sub commands
 async function handleSubCommand(subCommand, args, context) {
+  // context is already passed in full, no need to repackage
   switch (subCommand.toLowerCase()) {
     case 'today':
       await handleToday(context);
@@ -566,10 +618,10 @@ async function handleSubCommand(subCommand, args, context) {
       await handleStatus(context);
       break;
     case 'help':
-      await showBirthdayMenu(context.m, context.config.PREFIX);
+      await showBirthdayMenu(context.msg, context.config.PREFIX);
       break;
     default:
-      await context.m.reply(`❓ Unknown birthday command: *${subCommand}*\n\nUse *${context.config.PREFIX}birthday help* to see available commands.`);
+      await context.msg.reply(`❓ Unknown birthday command: *${subCommand}*\n\nUse *${context.config.PREFIX}birthday help* to see available commands.`);
   }
 }
 
@@ -596,14 +648,97 @@ async function showBirthdayMenu(m, prefix) {
   await m.reply(menuText);
 }
 
+// Handle force wishes (admin only)
+async function handleForceWishes(context, args) {
+  const { msg: m, sock, config, logger } = context;
+
+  if (!isAuthorized(m.sender, config)) {
+    await m.reply('🚫 Only admins can force birthday checks.');
+    return;
+  }
+
+  if (args.length === 0) {
+    await m.reply(`🔧 *FORCE COMMANDS*\n\n• *wishes* - Force today's birthday wishes\n• *reminders [days]* - Force reminders for specific days\n• *cleanup* - Force cleanup\n\nUsage: *${config.PREFIX}birthday force [command]*`);
+    return;
+  }
+
+  const forceType = args[0].toLowerCase();
+
+  switch (forceType) {
+    case 'wishes':
+      await m.reply('🔧 Forcing birthday wishes...');
+      // FIXED: Pass the context
+      await scheduledBirthdayWishes({ sock, logger });
+      await m.reply('✅ Forced birthday wishes completed');
+      break;
+    case 'reminders':
+      const days = args[1] ? parseInt(args[1]) : 7;
+      if (isNaN(days)) {
+        await m.reply('❌ Invalid days parameter');
+        return;
+      }
+      await m.reply(`🔧 Forcing ${days}-day reminders...`);
+      // FIXED: Pass the context
+      await scheduledBirthdayReminders({ sock, logger }, days);
+      await m.reply(`✅ Forced ${days}-day reminders completed`);
+      break;
+    case 'cleanup':
+      await m.reply('🔧 Forcing cleanup...');
+      // FIXED: Pass the context
+      await scheduledCleanup({ logger });
+      await m.reply('✅ Forced cleanup completed');
+      break;
+    default:
+      await m.reply(`❓ Unknown force command: *${forceType}*`);
+  }
+}
+
+// Handle status command
+async function handleStatus(context) {
+  const { msg: m, sock } = context;
+
+  try {
+    const todaysBirthdays = await getTodaysBirthdays();
+    const upcoming7 = await getUpcomingBirthdays(7);
+    const upcoming3 = await getUpcomingBirthdays(3);
+    const upcoming1 = await getUpcomingBirthdays(1);
+
+    const now = moment.tz('Africa/Lagos');
+    const connectionStatus = sock && isConnectionHealthy(sock) ? '✅ Healthy' : '❌ Unhealthy';
+
+    let statusText = `📊 *BIRTHDAY SYSTEM STATUS* 📊\n\n`;
+    statusText += `🔌 *Connection:* ${connectionStatus}\n`;
+    statusText += `⏰ *Current Time:* ${now.format('YYYY-MM-DD HH:mm:ss')}\n\n`;
+    statusText += `📅 *Birthday Counts:*\n`;
+    statusText += `• Today: ${todaysBirthdays.length}\n`;
+    statusText += `• Tomorrow: ${upcoming1.length}\n`;
+    statusText += `• Next 3 days: ${upcoming3.length}\n`;
+    statusText += `• Next 7 days: ${upcoming7.length}\n\n`;
+    statusText += `⚙️ *Settings:*\n`;
+    statusText += `• Auto Wishes: ${birthdaySettings.enableAutoWishes ? '✅' : '❌'}\n`;
+    statusText += `• Reminders: ${birthdaySettings.enableReminders ? '✅' : '❌'}\n`;
+    statusText += `• Groups: ${birthdaySettings.reminderGroups.length}\n`;
+    statusText += `• Reminder Days: ${birthdaySettings.reminderDays.join(', ')}\n\n`;
+    statusText += `🤖 *Scheduled Tasks:*\n`;
+    statusText += `• Birthday wishes: Daily at 00:01\n`;
+    statusText += `• Reminders: Daily at 09:00\n`;
+    statusText += `• Cleanup: Weekly on Sundays at 02:00`;
+
+    await m.reply(statusText);
+  } catch (error) {
+    await m.reply('❌ Error getting status information');
+    console.error('Status error:', error);
+  }
+}
+
 // Handle today's birthdays
 async function handleToday(context) {
-  const { m, sock, config } = context;
+  const { sock, msg: m, config } = context;
 
   const todaysBirthdays = await getTodaysBirthdays();
 
   if (todaysBirthdays.length === 0) {
-      await sock.sendMessage(m.from, {
+    await sock.sendMessage(m.from, {
       text: `🎂 *No birthdays today*\n\n📅 Check upcoming birthdays with *${config.PREFIX}birthday upcoming*`
     });
     return;
@@ -630,7 +765,7 @@ async function handleToday(context) {
 
 // Handle upcoming birthdays
 async function handleUpcoming(context, args) {
-  const { m, sock, config } = context;
+  const { sock, msg: m, config } = context;
 
   const days = args.length > 0 ? parseInt(args[0]) : 7;
   if (isNaN(days) || days < 1 || days > 365) {
@@ -665,7 +800,7 @@ async function handleUpcoming(context, args) {
   });
 
   if (upcomingBirthdays.length === 0) {
-      await sock.sendMessage(m.from, {
+    await sock.sendMessage(m.from, {
       text: `📅 *No birthdays in the next ${days} days*\n\nTry checking a longer period or use *${config.PREFIX}birthday thismonth*`
     });
     return;
@@ -703,9 +838,9 @@ async function handleUpcoming(context, args) {
 
 // Handle this month's birthdays
 async function handleThisMonth(context) {
-  const { m, sock, config } = context;
+  const { sock, msg: m, config } = context;
 
-  const currentMonth = moment.tz('Africa/Lagos').month() + 1;
+  const currentMonth = moment.tz('Africa/Lagos').month() + 1; // moment months are 0-indexed
   const allBirthdays = await getAllBirthdays();
   const thisMonthBirthdays = [];
 
@@ -717,12 +852,13 @@ async function handleThisMonth(context) {
 
   if (thisMonthBirthdays.length === 0) {
     const monthName = moment.tz('Africa/Lagos').format('MMMM');
-      await sock.sendMessage(m.from, {
+    await sock.sendMessage(m.from, {
       text: `📅 *No birthdays in ${monthName}*\n\nUse *${config.PREFIX}birthday all* to see all recorded birthdays`
     });
     return;
   }
 
+  // Sort by day
   thisMonthBirthdays.sort((a, b) => a.birthday.day - b.birthday.day);
 
   const monthName = moment.tz('Africa/Lagos').format('MMMM YYYY');
@@ -737,6 +873,7 @@ async function handleThisMonth(context) {
       message += ` (${person.birthday.age} years old)`;
     }
 
+    // Check if birthday has passed this month
     const today = moment.tz('Africa/Lagos');
     if (person.birthday.month === today.month() + 1) {
       if (person.birthday.day === today.date()) {
@@ -760,7 +897,7 @@ async function handleThisMonth(context) {
 
 // Handle all birthdays (admin only)
 async function handleAll(context) {
-  const { m, sock, config } = context;
+  const { sock, msg: m, config } = context;
 
   if (!isAuthorized(m.sender, config)) {
     await sock.sendMessage(m.from, {
@@ -779,6 +916,7 @@ async function handleAll(context) {
     return;
   }
 
+  // Sort by month and day
   birthdayEntries.sort((a, b) => {
     if (a.birthday.month !== b.birthday.month) {
       return a.birthday.month - b.birthday.month;
@@ -794,6 +932,7 @@ async function handleAll(context) {
   birthdayEntries.forEach(person => {
     mentions.push(person.userId);
 
+    // Add month header
     if (currentMonth !== person.birthday.month) {
       currentMonth = person.birthday.month;
       message += `\n📅 *${person.birthday.monthName.toUpperCase()}*\n`;
@@ -816,7 +955,7 @@ async function handleAll(context) {
 
 // Handle my birthday command
 async function handleMyBirthday(context) {
-  const { m, config } = context;
+  const { msg: m, config } = context;
 
   try {
     const birthdayData = await getBirthdayData(m.sender);
@@ -843,6 +982,7 @@ async function handleMyBirthday(context) {
 
     message += `💾 Last Updated: ${new Date(birthdayData.lastUpdated).toLocaleString()}\n`;
 
+    // Calculate days until next birthday
     const today = new Date();
     const thisYear = today.getFullYear();
     const nextBirthday = new Date(thisYear, birthday.month - 1, birthday.day);
@@ -873,7 +1013,7 @@ async function handleMyBirthday(context) {
 
 // Handle settings command (admin only)
 async function handleSettings(context, args) {
-  const { m, config } = context;
+  const { msg: m, config } = context;
 
   if (!isAuthorized(m.sender, config)) {
     await m.reply('🚫 Only admins can modify birthday settings.');
@@ -1126,89 +1266,9 @@ async function reloadSettings(m, config) {
   }
 }
 
-// Handle force wishes (admin only)
-async function handleForceWishes(context, args) {
-  const { m, sock, config, logger } = context;
-
-  if (!isAuthorized(m.sender, config)) {
-    await m.reply('🚫 Only admins can force birthday checks.');
-    return;
-  }
-
-  if (args.length === 0) {
-    await m.reply(`🔧 *FORCE COMMANDS*\n\n• *wishes* - Force today's birthday wishes\n• *reminders [days]* - Force reminders for specific days\n• *cleanup* - Force cleanup\n\nUsage: *${config.PREFIX}birthday force [command]*`);
-    return;
-  }
-
-  const forceType = args[0].toLowerCase();
-
-  switch (forceType) {
-    case 'wishes':
-      await m.reply('🔧 Forcing birthday wishes...');
-      await scheduledBirthdayWishes({ sock, logger });
-      await m.reply('✅ Forced birthday wishes completed');
-      break;
-    case 'reminders':
-      const days = args[1] ? parseInt(args[1]) : 7;
-      if (isNaN(days)) {
-        await m.reply('❌ Invalid days parameter');
-        return;
-      }
-      await m.reply(`🔧 Forcing ${days}-day reminders...`);
-      await scheduledBirthdayReminders({ sock, logger }, days);
-      await m.reply(`✅ Forced ${days}-day reminders completed`);
-      break;
-    case 'cleanup':
-      await m.reply('🔧 Forcing cleanup...');
-      await scheduledCleanup({ logger });
-      await m.reply('✅ Forced cleanup completed');
-      break;
-    default:
-      await m.reply(`❓ Unknown force command: *${forceType}*`);
-  }
-}
-
-// Handle status command
-async function handleStatus(context) {
-  const { m, sock } = context;
-
-  try {
-    const todaysBirthdays = await getTodaysBirthdays();
-    const upcoming7 = await getUpcomingBirthdays(7);
-    const upcoming3 = await getUpcomingBirthdays(3);
-    const upcoming1 = await getUpcomingBirthdays(1);
-
-    const now = moment.tz('Africa/Lagos');
-    const connectionStatus = sock && isConnectionHealthy(sock) ? '✅ Healthy' : '❌ Unhealthy';
-
-    let statusText = `📊 *BIRTHDAY SYSTEM STATUS* 📊\n\n`;
-    statusText += `🔌 *Connection:* ${connectionStatus}\n`;
-    statusText += `⏰ *Current Time:* ${now.format('YYYY-MM-DD HH:mm:ss')}\n\n`;
-    statusText += `📅 *Birthday Counts:*\n`;
-    statusText += `• Today: ${todaysBirthdays.length}\n`;
-    statusText += `• Tomorrow: ${upcoming1.length}\n`;
-    statusText += `• Next 3 days: ${upcoming3.length}\n`;
-    statusText += `• Next 7 days: ${upcoming7.length}\n\n`;
-    statusText += `⚙️ *Settings:*\n`;
-    statusText += `• Auto Wishes: ${birthdaySettings.enableAutoWishes ? '✅' : '❌'}\n`;
-    statusText += `• Reminders: ${birthdaySettings.enableReminders ? '✅' : '❌'}\n`;
-    statusText += `• Groups: ${birthdaySettings.reminderGroups.length}\n`;
-    statusText += `• Reminder Days: ${birthdaySettings.reminderDays.join(', ')}\n\n`;
-    statusText += `🤖 *Scheduled Tasks:*\n`;
-    statusText += `• Birthday wishes: Daily at 00:01\n`;
-    statusText += `• Reminders: Daily at 09:00\n`;
-    statusText += `• Cleanup: Weekly on Sundays at 02:00`;
-
-    await m.reply(statusText);
-  } catch (error) {
-    await m.reply('❌ Error getting status information');
-    console.error('Status error:', error);
-  }
-}
-
 // Handle groups command (admin only)
 async function handleGroups(context, args) {
-  const { m, sock, config } = context;
+  const { msg: m, config } = context;
 
   if (!isAuthorized(m.sender, config)) {
     await m.reply('🚫 Only admins can manage birthday groups.');
@@ -1270,7 +1330,7 @@ async function showGroups(m, config) {
 }
 
 async function addGroup(m, config) {
-  const groupId = m.chat;
+  const groupId = m.from;
 
   if (!groupId.includes('@g.us')) {
     await m.reply('⚠️ This command can only be used in groups.');
@@ -1332,8 +1392,5 @@ export {
   getBirthdayData,
   getTodaysBirthdays,
   getUpcomingBirthdays,
-  birthdaySettings,
-  scheduledBirthdayWishes,
-  scheduledBirthdayReminders,
-  scheduledCleanup
-}
+  birthdaySettings
+};
