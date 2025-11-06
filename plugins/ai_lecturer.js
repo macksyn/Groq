@@ -1,6 +1,7 @@
 // plugins/ai_lecturer.js - V3 Plugin (Fixed & Enhanced)
 import axios from 'axios';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
+import { getDB } from '../lib/mongoManager.js';
 
 // --- CONFIGURATION ---
 const CONFIG = {
@@ -206,7 +207,7 @@ async function logDeliveryHistory(db, scheduleId, part, status, error = null, lo
  * NOW FETCHES FRESH DATA FROM DATABASE!
  */
 async function runScheduledLecture(scheduleId, sock, logger) {
-  const db = PluginHelpers.getDB();
+  const db = await PluginHelpers.getDB();
 
   try {
     // CRITICAL FIX: Fetch fresh schedule data from database
@@ -443,7 +444,7 @@ Guidelines:
    */
   async handleScheduleLecture(context) {
     const { msg, text, logger, helpers, sock } = context;
-    const db = PluginHelpers.getDB();
+    const db = await PluginHelpers.getDB();
 
     try {
       const parts = text.split('|').map(p => p.trim());
@@ -541,7 +542,7 @@ Guidelines:
    */
   async handleListLectures(context) {
     const { msg, logger } = context;
-    const db = PluginHelpers.getDB();
+    const db = await PluginHelpers.getDB();
 
     try {
       const schedules = await db.collection('lecture_schedules')
@@ -587,7 +588,7 @@ Guidelines:
    */
   async handleCancelLecture(context) {
     const { msg, text, logger, helpers } = context;
-    const db = PluginHelpers.getDB();
+    const db = await PluginHelpers.getDB();
     const subjectToCancel = text;
 
     if (!subjectToCancel) {
@@ -645,7 +646,7 @@ Guidelines:
    */
   async handleLectureHistory(context) {
     const { msg, text, logger } = context;
-    const db = PluginHelpers.getDB();
+    const db = await PluginHelpers.getDB();
     const subject = text;
 
     if (!subject) {
@@ -709,7 +710,7 @@ Guidelines:
    */
   async onLoad(context) {
     const { sock, logger, helpers } = context;
-    const db = PluginHelpers.getDB();
+    const db = await PluginHelpers.getDB();
 
     logger.info('AI Lecturer (onLoad): Initializing...');
 
