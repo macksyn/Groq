@@ -1,7 +1,7 @@
 // plugins/ai_lecturer.js - V3 Plugin (Fixed & Enhanced)
 import axios from 'axios';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
-import { getDB } from '../lib/mongoManager.js';
+// Removed unused getDB import, as PluginHelpers.getDB() is used.
 
 // --- CONFIGURATION ---
 const CONFIG = {
@@ -19,8 +19,8 @@ const CONFIG = {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Ensures database indexes are created
- */
+  * Ensures database indexes are created
+  */
 async function ensureIndexes(db, logger) {
   try {
     await db.collection('lecture_schedules').createIndex(
@@ -40,8 +40,8 @@ async function ensureIndexes(db, logger) {
 }
 
 /**
- * Generates the lecture content from an AI provider.
- */
+  * Generates the lecture content from an AI provider.
+  */
 async function generateLecture(systemPrompt, userPrompt, logger) {
   let lectureContent = null;
   let generatedBy = 'AI';
@@ -117,8 +117,8 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
 }
 
 /**
- * Delivers the lecture in a "typing" simulation.
- */
+  * Delivers the lecture in a "typing" simulation.
+  */
 async function deliverLectureScript(sock, jid, lectureText, logger) {
   const sentences = lectureText
     .replace(/(\r\n|\n|\r)/gm, " ")
@@ -147,8 +147,8 @@ async function deliverLectureScript(sock, jid, lectureText, logger) {
 }
 
 /**
- * Parses and validates schedule parameters.
- */
+  * Parses and validates schedule parameters.
+  */
 function parseSchedule(dayStr, timeStr, userTz) {
   const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
   let dayOfWeek;
@@ -186,8 +186,8 @@ function parseSchedule(dayStr, timeStr, userTz) {
 }
 
 /**
- * Logs delivery history to database
- */
+  * Logs delivery history to database
+  */
 async function logDeliveryHistory(db, scheduleId, part, status, error = null, logger) {
   try {
     await db.collection('lecture_history').insertOne({
@@ -203,9 +203,9 @@ async function logDeliveryHistory(db, scheduleId, part, status, error = null, lo
 }
 
 /**
- * Runs the automated, scheduled lecture.
- * NOW FETCHES FRESH DATA FROM DATABASE!
- */
+  * Runs the automated, scheduled lecture.
+  * NOW FETCHES FRESH DATA FROM DATABASE!
+  */
 async function runScheduledLecture(scheduleId, sock, logger) {
   const db = await PluginHelpers.getDB();
 
@@ -311,16 +311,16 @@ ${schedule.part > 1 ? '- Start by BRIEFLY summarizing what was covered in the pr
 }
 
 /**
- * Converts schedule info into a cron time string.
- */
+  * Converts schedule info into a cron time string.
+  */
 function getCronTime(time, dayOfWeek) {
   const [hour, minute] = time.split(':');
   return `${minute} ${hour} * * ${dayOfWeek}`;
 }
 
 /**
- * Creates a unique, predictable job ID for the scheduler
- */
+  * Creates a unique, predictable job ID for the scheduler
+  */
 function getJobId(scheduleId) {
   return `lecture_${scheduleId.toString()}`;
 }
@@ -344,8 +344,8 @@ export default {
   groupOnly: true,
 
   /**
-   * Main V3 plugin execution function (Command Router)
-   */
+    * Main V3 plugin execution function (Command Router)
+    */
   async run(context) {
     const { command } = context;
 
@@ -374,8 +374,8 @@ export default {
   },
 
   /**
-   * Handles manual `.lecture` command
-   */
+    * Handles manual `.lecture` command
+    */
   async handleManualLecture(context) {
     const { msg, text, sock, config, logger } = context;
     const topic = text;
@@ -413,9 +413,9 @@ Guidelines:
       if (!lectureContent) throw new Error('AI returned an empty script');
 
       const header = `🎓 *AI LECTURE: STARTING* 🎓\n\n` +
-                     `*Topic:* ${topic}\n` +
-                     `*Professor:* ${generatedBy}\n` +
-                     `-----------------------------------`;
+                       `*Topic:* ${topic}\n` +
+                       `*Professor:* ${generatedBy}\n` +
+                       `-----------------------------------`;
       await sock.sendMessage(msg.from, { text: header, edit: loadingMsg.key });
       await msg.react('✅');
 
@@ -440,8 +440,8 @@ Guidelines:
   },
 
   /**
-   * Handles `.schedule-lecture <subject> | <day> | <time> | [timezone]`
-   */
+    * Handles `.schedule-lecture <subject> | <day> | <time> | [timezone]`
+    */
   async handleScheduleLecture(context) {
     const { msg, text, logger, helpers, sock } = context;
     const db = await PluginHelpers.getDB();
@@ -538,8 +538,8 @@ Guidelines:
   },
 
   /**
-   * Handles `.list-lectures`
-   */
+    * Handles `.list-lectures`
+    */
   async handleListLectures(context) {
     const { msg, logger } = context;
     const db = await PluginHelpers.getDB();
@@ -584,8 +584,8 @@ Guidelines:
   },
 
   /**
-   * Handles `.cancel-lecture <subject>`
-   */
+    * Handles `.cancel-lecture <subject>`
+    */
   async handleCancelLecture(context) {
     const { msg, text, logger, helpers } = context;
     const db = await PluginHelpers.getDB();
@@ -642,8 +642,8 @@ Guidelines:
   },
 
   /**
-   * NEW: Handles `.lecture-history <subject>`
-   */
+    * NEW: Handles `.lecture-history <subject>`
+    */
   async handleLectureHistory(context) {
     const { msg, text, logger } = context;
     const db = await PluginHelpers.getDB();
@@ -705,9 +705,9 @@ Guidelines:
   },
 
   /**
-   * V3 LIFECYCLE HOOK: onLoad
-   * Loads all schedules from DB and registers them with node-cron.
-   */
+    * V3 LIFECYCLE HOOK: onLoad
+    * Loads all schedules from DB and registers them with node-cron.
+    */
   async onLoad(context) {
     const { sock, logger, helpers } = context;
     const db = await PluginHelpers.getDB();
