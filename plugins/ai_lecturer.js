@@ -15,7 +15,9 @@ const CONFIG = {
   PAUSE_BETWEEN_SENTENCES_MAX: 3000, // 3s pause after sentence
 
   PRIMARY_API_TIMEOUT: 60000,
-  FALLBACK_API_TIMEOUT: 60000
+  FALLBACK_API_TIMEOUT: 60000,
+
+  MAX_GET_URL_LENGTH: 6000 // Conservative limit for URL length
 };
 
 // --- HELPER FUNCTIONS ---
@@ -55,72 +57,228 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
   let lectureContent = null;
   let generatedBy = 'AI';
 
-  // --- Try Primary API (GPT-5) ---
+  // --- Try Primary API (GPT-5) with GET request ---
   const primaryApiUrl = 'https://malvin-api.vercel.app/ai/gpt-5';
-  const combinedPrompt = `${systemPrompt}\n\n*Lecture Task:* ${userPrompt}`;
 
   try {
     logger.info('AI Lecturer: Trying primary API (gpt-5)...');
+
+    // CRITICAL FIX: Shorten prompt for GET request URL limits
+    // GET requests have URL length limits (typically 2048-8192 chars)
+    const combinedPrompt = `${systemPrompt}\n\n*Lecture Task:* ${userPrompt}`;
+
+    // Calculate URL length (base URL + parameter encoding)
+    const estimatedUrlLength = primaryApiUrl.length + 
+                               encodeURIComponent(combinedPrompt).length + 
+                               10; // extra buffer for param name
+
+    let finalPrompt = combinedPrompt;
+
+    if (estimatedUrlLength > CONFIG.MAX_GET_URL_LENGTH) {
+      logger.warn(`Prompt too long for GET request (${estimatedUrlLength} chars), truncating...`);
+
+      // Calculate how much we can safely send
+      const maxPromptLength = CONFIG.MAX_GET_URL_LENGTH - primaryApiUrl.length - 200; // safety margin
+
+      // Create a simplified prompt
+      finalPrompt = `You are Dr. Adebayo "Prof AB" Okonkwo, a charismatic Nigerian professor.
+
+Write an engaging lecture on: ${userPrompt}
+
+Structure:
+🎯 Hook (2-3 sentences) - Start with something surprising
+📚 Setup (3-4 sentences) - Define concept, why it matters, Nigerian example
+💡 Main Content (3 key points with Nigerian examples)
+🔧 Application (2-3 sentences) - Practical takeaway
+🎬 Closer (1-2 sentences) - Memorable summary
+
+Style: Conversational, educational, 2-3 Nigerian-specific examples, 500-600 words.`;
+    }
+
     const response = await axios.get(primaryApiUrl, {
-      params: { text: combinedPrompt },
-      timeout: CONFIG.PRIMARY_API_TIMEOUT
+      params: { text: finalPrompt },
+      timeout: CONFIG.PRIMARY_API_TIMEOUT,
+      validateStatus: (status) => status < 500,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity
     });
 
-    const result = response.data?.response || response.data?.result || response.data?.answer;
-    if (result && typeof result === 'string' && result.trim().length > 0) {
+    // Enhanced error handling
+    if (response.status === 400) {
+      logger.error({
+        status: response.status,
+        data: response.data,
+        promptLength: finalPrompt.length,
+        urlLength: estimatedUrlLength
+      }, 'Primary API returned 400 Bad Request');
+      throw new Error(`Primary API validation error (Status 400)`);
+    }
+
+    if (response.status === 429) {
+      logger.warn('Primary API rate limit exceeded');
+      throw new Error('Primary API rate limited');
+    }
+
+    if (response.status >= 500) {
+      logger.error(`Primary API server error: ${response.status}`);
+      throw new Error(`Primary API server error: ${response.status}`);
+    }
+
+    // Try multiple possible response formats
+    const result = response.data?.response || 
+                   response.data?.result || 
+                   response.data?.answer || 
+                   response.data?.text ||
+                   response.data?.content ||
+                   (typeof response.data === 'string' ? response.data : null);
+
+    if (result && typeof result === 'string' && result.trim().length > 100) {
       lectureContent = result.trim();
       generatedBy = 'GPT-5 (Primary)';
-      logger.info('AI Lecturer: Primary API succeeded');
+      logger.info({
+        responseLength: lectureContent.length
+      }, 'AI Lecturer: Primary API succeeded');
       return { lectureContent, generatedBy };
     }
-    throw new Error('Primary API returned invalid or empty response');
-  } catch (primaryError) {
-    logger.warn({ err: primaryError }, 'AI Lecturer: Primary API failed, trying fallback...');
 
-    // --- Try Fallback API (Groq) ---
+    logger.warn({
+      responseKeys: Object.keys(response.data || {}),
+      dataType: typeof response.data,
+      dataPreview: JSON.stringify(response.data).substring(0, 200)
+    }, 'Primary API returned unexpected format');
+
+    throw new Error('Primary API returned invalid or empty response');
+
+  } catch (primaryError) {
+    logger.warn({ 
+      err: primaryError.message,
+      code: primaryError.code,
+      responseStatus: primaryError.response?.status,
+      responseData: JSON.stringify(primaryError.response?.data).substring(0, 300)
+    }, 'AI Lecturer: Primary API failed, trying fallback...');
+
+    // --- Try Fallback API (Groq) with POST request ---
     const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) {
-      logger.error('AI Lecturer: GROQ_API_KEY not set for fallback');
-      throw new Error('Primary AI failed and fallback AI (Groq) is not configured. Please contact the bot administrator.');
+
+    if (!apiKey || apiKey === 'your_groq_api_key_here' || apiKey.length < 20) {
+      logger.error('AI Lecturer: GROQ_API_KEY not set, invalid, or is placeholder');
+      throw new Error('Primary AI failed and fallback AI (Groq) is not configured properly. Please set a valid GROQ_API_KEY environment variable.');
     }
 
-    const groqModel = 'llama3-70b-8192';
+    // FIXED: Updated model name (check https://console.groq.com/docs/models)
+    const groqModel = 'llama-3.1-70b-versatile'; // Updated from llama3-70b-8192
     const groqApiUrl = 'https://api.groq.com/openai/v1/chat/completions';
 
     try {
+      logger.info({
+        model: groqModel,
+        apiKeyPrefix: apiKey.substring(0, 10) + '...'
+      }, 'AI Lecturer: Attempting Groq fallback...');
+
+      // Use a more concise prompt for fallback
+      const conciseSystemPrompt = `You are Dr. Adebayo "Prof AB" Okonkwo, a charismatic Nigerian professor.
+
+Lecture Structure:
+🎯 Hook (2-3 sentences)
+📚 Setup (3-4 sentences with Nigerian context)
+💡 3 Key Points (with Nigerian examples)
+🔧 Application (2-3 sentences)
+🎬 Closer (1-2 sentences)
+
+Style: Educational, conversational, 2+ Nigerian examples, 500-600 words.`;
+
       const groqResponse = await axios.post(
         groqApiUrl,
         {
           model: groqModel,
           messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
+            { role: 'system', content: conciseSystemPrompt },
+            { role: 'user', content: `Write a comprehensive lecture on: ${userPrompt}` }
           ],
           temperature: 0.7,
-          max_tokens: 3000,
-          top_p: 1.0,
+          max_tokens: 2500,
+          top_p: 0.9,
         },
         {
           headers: {
             'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json'
           },
-          timeout: CONFIG.FALLBACK_API_TIMEOUT
+          timeout: CONFIG.FALLBACK_API_TIMEOUT,
+          validateStatus: (status) => status < 500
         }
       );
 
+      // Enhanced Groq error handling
+      if (groqResponse.status === 400) {
+        logger.error({
+          status: groqResponse.status,
+          error: groqResponse.data?.error,
+          message: groqResponse.data?.error?.message
+        }, 'Groq API returned 400 Bad Request');
+
+        const errorMsg = groqResponse.data?.error?.message || 'Invalid request';
+        throw new Error(`Groq API validation error: ${errorMsg}`);
+      }
+
+      if (groqResponse.status === 401) {
+        logger.error('Groq API authentication failed - invalid API key');
+        throw new Error('Groq API authentication failed. Please verify GROQ_API_KEY is correct.');
+      }
+
+      if (groqResponse.status === 429) {
+        logger.warn({
+          retryAfter: groqResponse.headers['retry-after']
+        }, 'Groq API rate limit exceeded');
+        throw new Error('Groq API rate limited. Please try again in a few minutes.');
+      }
+
       const groqResult = groqResponse.data?.choices?.[0]?.message?.content?.trim();
+
       if (!groqResult || groqResult.length === 0) {
+        logger.error({
+          choices: groqResponse.data?.choices?.length,
+          hasMessage: !!groqResponse.data?.choices?.[0]?.message,
+          dataKeys: Object.keys(groqResponse.data || {})
+        }, 'Groq returned unexpected format');
         throw new Error('Groq fallback returned empty content');
       }
 
       lectureContent = groqResult;
       generatedBy = 'Groq AI (Fallback)';
-      logger.info('AI Lecturer: Fallback API succeeded');
+      logger.info({
+        responseLength: lectureContent.length,
+        model: groqModel
+      }, 'AI Lecturer: Fallback API succeeded');
       return { lectureContent, generatedBy };
+
     } catch (fallbackError) {
-      logger.error({ err: fallbackError }, 'AI Lecturer: Both primary and fallback APIs failed');
-      throw new Error('All AI services are currently unavailable. Please try again later.');
+      logger.error({ 
+        err: fallbackError.message,
+        code: fallbackError.code,
+        responseStatus: fallbackError.response?.status,
+        responseData: fallbackError.response?.data,
+        apiKeySet: !!apiKey,
+        apiKeyLength: apiKey?.length
+      }, 'AI Lecturer: Both primary and fallback APIs failed');
+
+      // Provide specific, actionable error message
+      let errorMessage = 'All AI services are currently unavailable. Please try again later.';
+
+      if (fallbackError.response?.status === 401) {
+        errorMessage = '🔑 AI authentication failed. Admin: Please verify your GROQ_API_KEY is valid at https://console.groq.com/keys';
+      } else if (fallbackError.response?.status === 429) {
+        errorMessage = '⏳ AI rate limit reached. Please try again in 5 minutes.';
+      } else if (fallbackError.response?.status === 400) {
+        const apiError = fallbackError.response?.data?.error?.message;
+        errorMessage = `❌ AI rejected request: ${apiError || 'Invalid format'}. Please try a shorter topic.`;
+      } else if (fallbackError.code === 'ECONNABORTED') {
+        errorMessage = '⏱️ AI request timed out. The service may be overloaded. Try again.';
+      } else if (fallbackError.code === 'ENOTFOUND' || fallbackError.code === 'ECONNREFUSED') {
+        errorMessage = '🌐 Cannot reach AI services. Check your internet connection.';
+      }
+
+      throw new Error(errorMessage);
     }
   }
 }
