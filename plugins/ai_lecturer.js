@@ -1,7 +1,7 @@
-// plugins/ai_lecturer.js - V3 Plugin (Enhanced with Improved Prompts & Natural Typing)
-// FIX: Patched 'generateLecture' function to use POST for the primary API.
+// plugins/ai_lecturer.js - V3 Plugin (Fixed & Enhanced)
 import axios from 'axios';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
+// Removed unused getDB import, as PluginHelpers.getDB() is used.
 
 // --- CONFIGURATION ---
 const CONFIG = {
@@ -19,13 +19,13 @@ const CONFIG = {
   FALLBACK_API_TIMEOUT: 60000
 };
 
-// --- HELPER FUNCTIONS ---
+// --- HELPER FUNCTIONS (Remain outside the export) ---
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Ensures database indexes are created
- */
+  * Ensures database indexes are created
+  */
 async function ensureIndexes(db, logger) {
   try {
     await db.collection('lecture_schedules').createIndex(
@@ -38,11 +38,6 @@ async function ensureIndexes(db, logger) {
     );
     await db.collection('lecture_schedules').createIndex({ groupId: 1 });
     await db.collection('lecture_history').createIndex({ scheduleId: 1, deliveredAt: -1 });
-
-    // NEW: Indexes for lecture summaries and engagement
-    await db.collection('lecture_summaries').createIndex({ scheduleId: 1, part: 1 });
-    await db.collection('lecture_engagement').createIndex({ scheduleId: 1 });
-
     logger.info('AI Lecturer: Database indexes ensured');
   } catch (error) {
     logger.warn(error, 'AI Lecturer: Failed to create indexes (may already exist)');
@@ -50,14 +45,8 @@ async function ensureIndexes(db, logger) {
 }
 
 /**
- * Generates the lecture content from an AI provider.
- *
- * --- PATCHED (Nov 7, 2025) ---
- * Changed Primary API call from axios.get() to axios.post()
- * to prevent "400 Bad Request" errors caused by overly long
- * prompts being put into the URL.
- * -------------------------------
- */
+  * Generates the lecture content from an AI provider.
+  */
 async function generateLecture(systemPrompt, userPrompt, logger) {
   let lectureContent = null;
   let generatedBy = 'AI';
@@ -68,34 +57,12 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
 
   try {
     logger.info('AI Lecturer: Trying primary API (gpt-5)...');
-
-    // === PROBLEM WAS HERE ===
-    // Using axios.get() put the entire 'combinedPrompt' into the URL,
-    // which caused a "400 Bad Request" because the URL was too long.
-    /*
+    // --- FIX: Reverted to GET and used correct 'text' parameter ---
+    // The API reference you provided shows it uses GET with a 'text' param, not POST.
     const response = await axios.get(primaryApiUrl, {
-      params: { text: combinedPrompt }, // <--- This was the issue
+      params: { text: combinedPrompt }, // Use 'params' for GET and 'text' as the key
       timeout: CONFIG.PRIMARY_API_TIMEOUT
     });
-    */
-
-    // === THE FIX ===
-    // Use axios.post() to send the prompt in the request body,
-    // just like you correctly do for the Groq fallback.
-    const response = await axios.post(
-      primaryApiUrl,
-      {
-        // NOTE: You may need to confirm what body format this API expects.
-        // I am guessing it's { "text": ... } based on your old 'params'.
-        // It might also be { "prompt": ... } or something else.
-        "text": combinedPrompt
-      },
-      {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: CONFIG.PRIMARY_API_TIMEOUT
-      }
-    );
-    // === END OF FIX ===
 
     const result = response.data?.response || response.data?.result || response.data?.answer;
     if (result && typeof result === 'string' && result.trim().length > 0) {
@@ -115,7 +82,8 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
       throw new Error('Primary AI failed and fallback AI (Groq) is not configured. Please contact the bot administrator.');
     }
 
-    const groqModel = 'llama3-70b-8192';
+    // --- FIX 2: Switched to a more standard Groq model name ---
+    const groqModel = 'llama3-70b-8192'; // Was: 'llama-3.1-70b-versatile'
     const groqApiUrl = 'https://api.groq.com/openai/v1/chat/completions';
 
     try {
@@ -182,7 +150,8 @@ async function simulateTyping(sock, jid, durationMs, logger) {
         }
       }
     }
-  } catch (error) {
+  } 
+    catch (error) {
     logger.error({ err: error }, 'Error during typing simulation');
   }
 }
@@ -269,8 +238,8 @@ async function deliverLectureScript(sock, jid, lectureText, logger) {
 }
 
 /**
- * Parses and validates schedule parameters.
- */
+  * Parses and validates schedule parameters.
+  */
 function parseSchedule(dayStr, timeStr, userTz) {
   const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
   let dayOfWeek;
@@ -308,8 +277,8 @@ function parseSchedule(dayStr, timeStr, userTz) {
 }
 
 /**
- * Logs delivery history to database
- */
+  * Logs delivery history to database
+  */
 async function logDeliveryHistory(db, scheduleId, part, status, error = null, logger) {
   try {
     await db.collection('lecture_history').insertOne({
@@ -325,320 +294,14 @@ async function logDeliveryHistory(db, scheduleId, part, status, error = null, lo
 }
 
 /**
- * Extract key points from lecture content (simple extraction)
- */
-function extractKeyPoints(lectureContent) {
-  const sentences = lectureContent
-    .split(/[.!?]/)
-    .map(s => s.trim())
-    .filter(s => s.length > 30 && s.length < 150); // Reasonable length sentences
-
-  // Take first 3 substantial sentences as key points
-  return sentences.slice(0, 3);
-}
-
-/**
- * Save lecture summary for future context
- */
-async function saveLectureSummary(db, scheduleId, part, subject, lectureContent, logger) {
-  try {
-    const keyPoints = extractKeyPoints(lectureContent);
-    const summary = lectureContent.substring(0, 250).trim() + '...';
-
-    await db.collection('lecture_summaries').insertOne({
-      scheduleId: scheduleId,
-      part: part,
-      subject: subject,
-      summary: summary,
-      keyPoints: keyPoints,
-      createdAt: new Date()
-    });
-
-    logger.info(`Saved summary for ${subject} Part ${part}`);
-  } catch (err) {
-    logger.error({ err }, 'Failed to save lecture summary');
-  }
-}
-
-/**
- * Get previous lecture context
- */
-async function getPreviousContext(db, scheduleId, currentPart) {
-  try {
-    if (currentPart === 1) {
-      return {
-        hasPrevious: false,
-        summary: null,
-        keyPoints: []
-      };
-    }
-
-    const previousLecture = await db.collection('lecture_summaries').findOne({
-      scheduleId: scheduleId,
-      part: currentPart - 1
-    });
-
-    if (!previousLecture) {
-      return {
-        hasPrevious: true,
-        summary: "Previous lecture content not available",
-        keyPoints: []
-      };
-    }
-
-    return {
-      hasPrevious: true,
-      summary: previousLecture.summary,
-      keyPoints: previousLecture.keyPoints || []
-    };
-  } catch (err) {
-    return {
-      hasPrevious: currentPart > 1,
-      summary: "Unable to retrieve previous lecture",
-      keyPoints: []
-    };
-  }
-}
-
-/**
- * Track engagement metrics
- */
-async function trackEngagement(db, scheduleId, wasSuccessful, logger) {
-  try {
-    const engagement = await db.collection('lecture_engagement').findOne({ scheduleId });
-
-    if (!engagement) {
-      // Initialize engagement tracking
-      await db.collection('lecture_engagement').insertOne({
-        scheduleId: scheduleId,
-        totalDeliveries: 1,
-        successfulDeliveries: wasSuccessful ? 1 : 0,
-        failureCount: wasSuccessful ? 0 : 1,
-        lastUpdated: new Date()
-      });
-    } else {
-      // Update engagement
-      await db.collection('lecture_engagement').updateOne(
-        { scheduleId },
-        {
-          $inc: {
-            totalDeliveries: 1,
-            successfulDeliveries: wasSuccessful ? 1 : 0,
-            failureCount: wasSuccessful ? 0 : 1
-          },
-          $set: { lastUpdated: new Date() }
-        }
-      );
-    }
-  } catch (err) {
-    logger.error({ err }, 'Failed to track engagement');
-  }
-}
-
-/**
- * Get engagement level
- */
-async function getEngagementLevel(db, scheduleId) {
-  try {
-    const engagement = await db.collection('lecture_engagement').findOne({ scheduleId });
-
-    if (!engagement || engagement.totalDeliveries < 3) {
-      return 'standard'; // Not enough data
-    }
-
-    const successRate = engagement.successfulDeliveries / engagement.totalDeliveries;
-
-    if (successRate > 0.85) return 'high';
-    if (successRate < 0.5) return 'low';
-    return 'standard';
-  } catch (err) {
-    return 'standard';
-  }
-}
-
-/**
- * Build improved system prompt for manual lectures
- */
-function buildManualLecturePrompt(topic) {
-  return `You are Dr. Adebayo "Prof AB" Okonkwo, a charismatic Nigerian professor known for making complex topics fun and accessible. You're lecturing "Gist HQ" - smart Nigerian professionals who want to learn, not be bored.
-
-STRUCTURE YOUR LECTURE EXACTLY LIKE THIS:
-
-🎯 **THE HOOK** (2-3 sentences)
-Start with something surprising, provocative, or relatable that grabs attention immediately.
-
-📚 **THE SETUP** (3-4 sentences)
-- Define the core concept simply
-- Why it matters to them personally
-- One Nigerian context example
-
-💡 **THE BREAKDOWN** (Main Content - Split into 3 sections)
-
-**1. [First Key Point]**
-Explain the concept → Give Nigerian example → Show why it matters
-
-**2. [Second Key Point]**
-Build on Point 1 → Contrasting example → Common mistake to avoid
-
-**3. [Advanced Insight]**
-The deeper layer → Expert perspective → Future implications
-
-🔧 **THE APPLICATION** (2-3 sentences)
-- One thing they can use today
-- One question to think about
-
-🎬 **THE CLOSER** (1-2 sentences)
-Memorable summary + encouragement
-
-STYLE RULES:
-✓ Break every 2-3 sentences with a line break
-✓ Use *bold* for key terms, _italic_ for emphasis
-✓ 5-7 emojis total, placed strategically
-✓ Include 2-3 questions to maintain engagement
-✓ Nigerian context: traffic, NEPA, naira, jollof, lagos hustle, etc.
-✓ Conversational: "abi?", "sha", but don't overdo it
-✓ No paragraph over 3 sentences
-✓ Explain like you're chatting over drinks, not lecturing a hall
-
-TONE: 60% educational, 25% conversational, 15% entertaining
-
-MUST INCLUDE:
-- At least 2 Nigerian-specific examples
-- Something they didn't know before
-- A clear takeaway they can remember
-
-LENGTH: Aim for 500-600 words that feel like 300 because of formatting.
-
-Now write the full lecture on: ${topic}`;
-}
-
-/**
- * Build improved system prompt for scheduled series
- */
-function buildSeriesLecturePrompt(schedule, context) {
-  const isFirstLecture = schedule.part === 1;
-  const previousSummary = context.hasPrevious ? context.summary : "None - this is the first lecture";
-  const engagementLevel = context.engagement || 'standard';
-
-  let prompt = `You are Dr. Adebayo "Prof AB" Okonkwo delivering Part ${schedule.part} of your weekly "${schedule.subject}" series to Gist HQ.
-
-SERIES CONTEXT:
-- This is Part ${schedule.part} of up to ${CONFIG.MAX_LECTURE_PARTS} parts
-- Previous coverage: ${previousSummary}
-- Audience engagement: ${engagementLevel}
-${context.keyPoints.length > 0 ? `- Key points from last lecture: ${context.keyPoints.join('; ')}` : ''}
-
-`;
-
-  if (isFirstLecture) {
-    prompt += `PART 1 STRUCTURE:
-🎓 **WELCOME** (20-30 words)
-Exciting intro to the series - what they'll learn over the coming weeks
-
-`;
-  } else {
-    prompt += `CONTINUITY:
-🔄 **QUICK RECAP** (25-30 words)
-"Last week: [X]. Today: [Y]. Let's go deeper..."
-Reference at least one specific concept from previous lecture.
-
-`;
-  }
-
-  prompt += `🎯 **TODAY'S FOCUS** (30-40 words)
-What this specific lecture covers + why it matters
-
-📚 **CORE TEACHING** (400-450 words - Use this exact pattern)
-
-**Section 1: [Primary Concept]**
-EXPLAIN: Clear definition (40 words)
-EXAMPLE: Nigerian scenario demonstrating it
-EXPAND: The deeper insight
-
-**Section 2: [Secondary Concept]**
-EXPLAIN: How it connects to Section 1
-EXAMPLE: Different angle or application
-EXPAND: Common misconception debunked
-
-**Section 3: [Synthesis]**
-EXPLAIN: How it all fits together
-EXAMPLE: Real-world Nigerian application
-EXPAND: What experts know
-
-💭 **DISCUSSION PROMPT** (30 words)
-Thought-provoking question relevant to Nigerian context
-
-🔮 **NEXT WEEK PREVIEW** (30 words)
-Tease Part ${schedule.part + 1} - make them want to come back
-
-🎓 **TAKEAWAY** (20 words)
-One memorable sentence capturing the core lesson
-
-STYLE FOR SERIES:
-✓ Each lecture stands alone BUT rewards loyal attendees
-✓ Reference previous parts when relevant: "Remember in Part ${schedule.part - 1}..."
-✓ Build complexity gradually
-✓ Maintain enthusiasm - this is Episode ${schedule.part} of your show
-✓ Create anticipation for next week
-✓ Break every 2-3 sentences with line breaks
-✓ Use *bold* for key terms, _italic_ for emphasis
-✓ 5-8 emojis total, strategically placed
-✓ Nigerian context: traffic, NEPA, naira, jollof, etc.
-✓ Conversational: "abi?", "sha", natural slang
-
-`;
-
-  // Add engagement-based adaptations
-  if (engagementLevel === 'low') {
-    prompt += `BOOST ENGAGEMENT (Previous lectures had issues):
-- Start with bigger, more exciting hook
-- Use more concrete examples
-- Simplify complex concepts
-- Add more rhetorical questions
-- Show immediate practical value
-
-`;
-  } else if (engagementLevel === 'high') {
-    prompt += `LEVEL UP (Audience is engaged):
-- Go deeper faster
-- Introduce advanced concepts
-- Challenge their thinking
-- Add expert insights
-- Reward their attention with surprising connections
-
-`;
-  }
-
-  // Add progression guidance
-  if (schedule.part <= 3) {
-    prompt += `FOUNDATION PHASE: Accessible, encouraging, build confidence. This is still early days.\n\n`;
-  } else if (schedule.part <= 7) {
-    prompt += `GROWTH PHASE: Introduce complexity, deeper analysis. They're ready for more.\n\n`;
-  } else {
-    prompt += `MASTERY PHASE: Advanced synthesis, expert insights. Treat them like advanced learners.\n\n`;
-  }
-
-  prompt += `QUALITY CHECK:
-[ ] Someone who missed last week can still follow
-[ ] Loyal attendees feel rewarded for consistency
-[ ] Clearly advances beyond previous lectures
-[ ] Creates anticipation for next week
-[ ] Includes 2+ Nigerian-specific examples
-[ ] Ends with clear, memorable takeaway
-
-Write Part ${schedule.part} of "${schedule.subject}" following this structure exactly.`;
-
-  return prompt;
-}
-
-/**
- * Runs the automated, scheduled lecture with improved prompts
- */
+  * Runs the automated, scheduled lecture.
+  * NOW FETCHES FRESH DATA FROM DATABASE!
+  */
 async function runScheduledLecture(scheduleId, sock, logger) {
   const db = await PluginHelpers.getDB();
 
   try {
-    // Fetch fresh schedule data from database
+    // CRITICAL FIX: Fetch fresh schedule data from database
     const schedule = await db.collection('lecture_schedules').findOne({ _id: scheduleId });
 
     if (!schedule) {
@@ -658,18 +321,23 @@ async function runScheduledLecture(scheduleId, sock, logger) {
 
     logger.info(`Running scheduled lecture: ${schedule.subject} (Part ${schedule.part}) in ${schedule.groupId}`);
 
-    // Get previous context and engagement level
-    const previousContext = await getPreviousContext(db, scheduleId, schedule.part);
-    const engagementLevel = await getEngagementLevel(db, scheduleId);
+    // Prepare prompts
+    const systemPrompt = `You are a world-class professor continuing a weekly lecture series. Your task is to write a "spoken" lecture script for the next part of the course.
 
-    const context = {
-      ...previousContext,
-      engagement: engagementLevel
-    };
+Guidelines:
+- The topic is "${schedule.subject}".
+- You are now delivering Part ${schedule.part}.
+${schedule.part > 1 ? '- Start by BRIEFLY summarizing what was covered in the previous part.' : '- This is the first lecture, so start with an engaging introduction.'}
+- Then deliver the main content for Part ${schedule.part}.
+- Write as you would speak in a natural, conversational, humorous, professorial tone.
+- Your audience are intelligent and educated nigerians who are curious, but not necessarily experts in the topic.
+- You are lecturing a whatsapp group called "Gist HQ".
+- The script should be comprehensive, detailed, and in-depth, relatable, well-structured, and flow logically.
+- End sentences with proper punctuation (., ?, !).
+- Use emojies sparingly and only when they add value to the content.
+- Aim for a full lecture script of at least 500-750 words.`;
 
-    // Build improved prompt with context
-    const systemPrompt = buildSeriesLecturePrompt(schedule, context);
-    const userPrompt = `Write Part ${schedule.part} of the ${schedule.subject} lecture series.`;
+    const userPrompt = `Continue the lecture on "${schedule.subject}". This is Part ${schedule.part}.`;
 
     // Generate lecture script
     const { lectureContent, generatedBy } = await generateLecture(systemPrompt, userPrompt, logger);
@@ -678,27 +346,24 @@ async function runScheduledLecture(scheduleId, sock, logger) {
     // Send header
     const header = `🎓 *AI LECTURE: PART ${schedule.part}* 🎓\n\n` +
                    `*Topic:* ${schedule.subject}\n` +
-                   `*Professor:* Prof AB\n` +
+                   `*Professor:* ${generatedBy}\n` +
                    `-----------------------------------`;
     await sock.sendMessage(schedule.groupId, { text: header });
 
-    // Deliver script with realistic typing
+    // Deliver script
     await deliverLectureScript(sock, schedule.groupId, lectureContent, logger);
-
-    // Save lecture summary for next time
-    await saveLectureSummary(db, scheduleId, schedule.part, schedule.subject, lectureContent, logger);
 
     // Send footer
     await sock.sendPresenceUpdate('composing', schedule.groupId);
     await sleep(3000);
     const nextPart = schedule.part + 1;
     const footerMsg = nextPart <= CONFIG.MAX_LECTURE_PARTS
-      ? `_Class dismissed. Part ${nextPart} will be delivered next week._`
-      : `_This was the final lecture. Course concluded!_`;
+      ? `_Class dismissed. Part ${nextPart} will be delivered next week at the scheduled time._`
+      : `_This was the final lecture in this series. The course has concluded._`;
 
     await sock.sendMessage(schedule.groupId, { 
       text: `-----------------------------------\n` +
-            `🎓 *END OF PART ${schedule.part}* 🎓\n\n` +
+            `🎓 *AI LECTURE: END OF PART ${schedule.part}* 🎓\n\n` +
             footerMsg
     });
     await sock.sendPresenceUpdate('paused', schedule.groupId);
@@ -713,9 +378,6 @@ async function runScheduledLecture(scheduleId, sock, logger) {
         } 
       }
     );
-
-    // Track successful engagement
-    await trackEngagement(db, scheduleId, true, logger);
 
     // Log success
     await logDeliveryHistory(db, scheduleId, schedule.part, 'success', null, logger);
@@ -733,9 +395,6 @@ async function runScheduledLecture(scheduleId, sock, logger) {
                 `_Error: ${error.message}_\n\n` +
                 `The lecture will be attempted again at the next scheduled time.`
         });
-
-        // Track failed engagement
-        await trackEngagement(db, scheduleId, false, logger);
         await logDeliveryHistory(db, scheduleId, schedule.part, 'failed', error, logger);
       }
     } catch (notifyError) {
@@ -745,25 +404,26 @@ async function runScheduledLecture(scheduleId, sock, logger) {
 }
 
 /**
- * Converts schedule info into a cron time string.
- */
+  * Converts schedule info into a cron time string.
+  */
 function getCronTime(time, dayOfWeek) {
   const [hour, minute] = time.split(':');
   return `${minute} ${hour} * * ${dayOfWeek}`;
 }
 
 /**
- * Creates a unique, predictable job ID for the scheduler
- */
+  * Creates a unique, predictable job ID for the scheduler
+  */
 function getJobId(scheduleId) {
   return `lecture_${scheduleId.toString()}`;
 }
 
-// --- COMMAND HANDLERS ---
+
+// --- COMMAND HANDLERS (MOVED OUTSIDE THE EXPORT) ---
 
 /**
- * Handles manual `.lecture` command with improved prompt
- */
+  * Handles manual `.lecture` command
+  */
 async function handleManualLecture(context) {
   const { msg, text, sock, config, logger } = context;
   const topic = text;
@@ -781,21 +441,30 @@ async function handleManualLecture(context) {
   const loadingMsg = await msg.reply(
     `🧠 *Preparing your lecture...*\n\n` +
     `*Topic:* ${topic}\n\n` +
-    `_This might take a moment. Prof AB is writing the full script..._`
+    `_This might take a moment. The AI is writing the full script..._`
   );
 
-  // Use improved prompt
-  const systemPrompt = buildManualLecturePrompt(topic);
-  const userPrompt = `Write a comprehensive lecture on: ${topic}`;
+  const systemPrompt = `You are a world-class professor. Your task is to write a "spoken" lecture script on the given topic.
+
+Guidelines:
+- Write as you would speak in a natural, conversational, humorous, professorial tone.
+- Your audience are intelligent and educated nigerians who are curious, but not necessarily experts in the topic.
+- You are lecturing a whatsapp group called "Gist HQ".
+- The script should be comprehensive, relatable, well-structured, and flow logically.
+- End sentences with proper punctuation (., ?, !).
+- Use emojies sparingly and only when they add value to the content.
+- Aim for a very comprehensive lecture script of at least 500-750 words that thoroughly covers the topic.`;
+
+  const userPrompt = topic;
 
   try {
     const { lectureContent, generatedBy } = await generateLecture(systemPrompt, userPrompt, logger);
     if (!lectureContent) throw new Error('AI returned an empty script');
 
     const header = `🎓 *GHQ LECTURE: STARTING* 🎓\n\n` +
-                       `*Topic:* ${topic}\n` +
-                       `*Professor:* Prof AB\n` +
-                       `-----------------------------------`;
+                     `*Topic:* ${topic}\n` +
+                     `*Professor:* Alex Macksyn\n` +
+                     `-----------------------------------`;
     await sock.sendMessage(msg.from, { text: header, edit: loadingMsg.key });
     await msg.react('✅');
 
@@ -820,8 +489,8 @@ async function handleManualLecture(context) {
 }
 
 /**
- * Handles `.schedule-lecture <subject> | <day> | <time> | [timezone]`
- */
+  * Handles `.schedule-lecture <subject> | <day> | <time> | [timezone]`
+  */
 async function handleScheduleLecture(context) {
   const { msg, text, logger, helpers, sock } = context;
   const db = await PluginHelpers.getDB();
@@ -918,8 +587,8 @@ async function handleScheduleLecture(context) {
 }
 
 /**
- * Handles `.list-lectures`
- */
+  * Handles `.list-lectures`
+  */
 async function handleListLectures(context) {
   const { msg, logger } = context;
   const db = await PluginHelpers.getDB();
@@ -939,6 +608,7 @@ async function handleListLectures(context) {
 
     for (const s of schedules) {
       const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.dayOfWeek];
+      const cronTime = getCronTime(s.time, s.dayOfWeek);
       const lastRan = s.lastDeliveredTimestamp 
         ? new Date(s.lastDeliveredTimestamp).toLocaleString('en-GB', { timeZone: s.timezone })
         : 'Never';
@@ -963,8 +633,8 @@ async function handleListLectures(context) {
 }
 
 /**
- * Handles `.cancel-lecture <subject>`
- */
+  * Handles `.cancel-lecture <subject>`
+  */
 async function handleCancelLecture(context) {
   const { msg, text, logger, helpers } = context;
   const db = await PluginHelpers.getDB();
@@ -1021,8 +691,8 @@ async function handleCancelLecture(context) {
 }
 
 /**
- * Handles `.lecture-history <subject>`
- */
+  * NEW: Handles `.lecture-history <subject>`
+  */
 async function handleLectureHistory(context) {
   const { msg, text, logger } = context;
   const db = await PluginHelpers.getDB();
@@ -1072,7 +742,7 @@ async function handleLectureHistory(context) {
 
       reply += `\n${status} Part ${entry.part} - ${date}`;
       if (entry.error) {
-        reply += `\n  └ Error: ${entry.error}`;
+        reply += `\n   └ Error: ${entry.error}`;
       }
     }
 
@@ -1083,13 +753,14 @@ async function handleLectureHistory(context) {
   }
 }
 
+
 // --- V3 PLUGIN EXPORT ---
 
 export default {
   name: 'AI Lecturer (v3)',
   description: 'AI-powered course manager with manual lectures and automated weekly schedules.',
   category: 'ai',
-  version: '3.2.0',
+  version: '3.1.0',
   author: 'Gemini + Claude',
 
   commands: ['lecture', 'teach', 'schedule-lecture', 'list-lectures', 'cancel-lecture', 'lecture-history'],
@@ -1102,11 +773,12 @@ export default {
   groupOnly: true,
 
   /**
-   * Main V3 plugin execution function (Command Router)
-   */
+    * Main V3 plugin execution function (Command Router)
+    */
   async run(context) {
     const { command } = context;
 
+    // Calls are now direct, without 'this.'
     switch (command) {
       case 'lecture':
       case 'teach':
@@ -1132,9 +804,9 @@ export default {
   },
 
   /**
-   * V3 LIFECYCLE HOOK: onLoad
-   * Loads all schedules from DB and registers them with node-cron.
-   */
+    * V3 LIFECYCLE HOOK: onLoad
+    * Loads all schedules from DB and registers them with node-cron.
+    */
   async onLoad(context) {
     const { sock, logger, helpers } = context;
     const db = await PluginHelpers.getDB();
@@ -1189,7 +861,7 @@ export default {
           const success = helpers.registerCronJob(
             jobId,
             cronTime,
-            () => runScheduledLecture(schedule._id, sock, logger),
+            () => runScheduledLecture(schedule._id, sock, logger), // Pass only ID
             schedule.timezone
           );
 
