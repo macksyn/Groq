@@ -464,9 +464,9 @@ STRUCTURE:
 🔧 Application (what they can use today)
 🎬 Closer (memorable takeaway)
 
-STYLE: Conversational professor. Break text every 2-3 sentences. Use Nigerian context (NEPA, traffic, naira, jollof). Include 2+ local examples. 5-7 emojis. *Bold* key terms. Ask 2-3 questions. "Abi?" "Sha" naturally.
+STYLE: Conversational professor. Break text every 2-3 sentences. Use Nigerian context (NEPA, traffic, naira, jollof, Tinubu, village people, e don cast, japa, gbese, shey you dey whine ni?, big man mentality, sapa, soft life, hustle, street, posh, breakfast). Include 2+ local examples. 5-7 emojis. *Bold* key terms. Ask 2-3 questions. "Abi?" "Isn't it?" "Sha" "omo" "abi no bi so?" naturally.
 
-500-600 words. Educational but fun, like chatting over drinks.`;
+700-800 words. Educational but fun, like chatting over drinks.`;
 }
 
 /**
