@@ -1,4 +1,4 @@
-// plugins/ai_lecturer.js - V3 Plugin (Enhanced with Improved Prompts & Natural Typing)
+// plugins/ai_lecturer.js - V3.3 Plugin (Multi-Persona, Improved Prompts & Natural Typing)
 import axios from 'axios';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
 
@@ -15,12 +15,66 @@ const CONFIG = {
   PAUSE_BETWEEN_SENTENCES_MAX: 3000, // 3s pause after sentence
 
   PRIMARY_API_TIMEOUT: 60000,
-  FALLBACK_API_TIMEOUT: 60000
+  FALLBACK_API_TIMEOUT: 60000,
+
+  // --- NEW: LECTURER PERSONAS ---
+  LECTURERS: [
+    {
+      name: "Prof. AB",
+      style: "The fun, accessible OG professor. Makes complex topics fun with Nigerian examples, slang (omo, abi, sha), and a conversational, engaging tone. The default 'Gist HQ' style."
+    },
+    {
+      name: "Dr. Evelyn Hayes",
+      style: "A sharp, insightful, slightly formal British academic. Loves data and clear examples. Speaks with precision. Uses phrases like 'Right then, let's unpack this,' and 'Quite interesting, isn't it?'"
+    },
+    {
+      name: "Uncle Tunde",
+      style: "The wise, storytelling elder. Uses proverbs and real-life Nigerian parables. Very warm and patient. Uses phrases like 'My children, let me tell you...' and 'You see, it is like the tortoise who...'"
+    },
+    {
+      name: "Ada 'The Coder' Eze",
+      style: "A young, fast-talking tech sis. Energetic, uses modern slang (it's giving, periodt, bet), and relates everything to tech, startups, and 'the new new'. Very forward-thinking."
+    },
+    {
+      name: "Mr. Garba",
+      style: "A calm, patient, and methodical teacher from the North. Very clear, step-by-step, and encouraging. Uses simple language and ensures everyone is following. 'Slowly, slowly. We will understand it together.'"
+    },
+    {
+      name: "Dr. Funke Alabi",
+      style: "The 'Lagos Big Aunty.' Sophisticated, sharp, and no-nonsense, but also very caring. Expects the best. Uses phrases like 'My dear, you must sit up!' and 'This is not play. Focus.'"
+    },
+    {
+      name: "Chike 'The Analyst'",
+      style: "A data-driven, straight-to-the-point guy. Loves numbers, charts, and practical, actionable insights. No fluff. Uses phrases like 'The data says...' and 'Let's look at the bottom line.'"
+    },
+    {
+      name: "Prof. (Mrs.) Okon",
+      style: "The classic, stern, highly-respected 'Mama' professor. Encyclopedic knowledge. Authoritative and formal. You don't mess around in her class. 'Open your notes. We begin.' 'Is that clear?'"
+    },
+    {
+      name: "Bros Jide",
+      style: "The relatable 'street-smart' lecturer. Connects complex topics to everyday hustle, business, and street sense. Very practical. Uses pidgin naturally. 'See ehn, e get as e be. Make I burst your brain...'"
+    },
+    {
+      name: "Sister Grace",
+      style: "A very calm, almost philosophical lecturer. Speaks softly, uses metaphors, and encourages deep thinking and reflection. 'Now, let's pause and reflect on that.' 'What if we look at it from another perspective?'"
+    }
+  ]
 };
 
 // --- HELPER FUNCTIONS ---
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * NEW: Selects a random lecturer from the CONFIG list
+ */
+function getRandomLecturer() {
+  const lecturers = CONFIG.LECTURERS;
+  const randomIndex = Math.floor(Math.random() * lecturers.length);
+  return lecturers[randomIndex];
+}
+
 
 /**
  * Ensures database indexes are created
@@ -29,8 +83,8 @@ async function ensureIndexes(db, logger) {
   try {
     await db.collection('lecture_schedules').createIndex(
       { groupId: 1, subject: 1 },
-      { 
-        unique: true, 
+      {
+        unique: true,
         collation: { locale: 'en', strength: 2 },
         name: 'unique_group_subject'
       }
@@ -139,6 +193,11 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
 function cleanAIResponse(text) {
   if (!text) return text;
 
+  // Dynamically build lecturer name patterns
+  const lecturerNames = CONFIG.LECTURERS.map(l => l.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const lecturerPatterns = lecturerNames.map(name => new RegExp(`(in the style of|as) ${name}[:\\s]*`, 'gi'));
+
+
   // Remove common AI meta-phrases (case-insensitive)
   const metaPhrases = [
     /here is the lecture in the style you requested for[:\s]*/gi,
@@ -152,10 +211,9 @@ function cleanAIResponse(text) {
     /shall i continue[:\s?\n]*/gi,
     /is there anything else[:\s?\n]*/gi,
     /let me know if you need[:\s]*/gi,
-    /in the style of prof ab[:\s]*/gi,
-    /as prof ab[:\s]*/gi,
     /\*\*note:?\*\*[^\n]*/gi,
-    /\*\*disclaimer:?\*\*[^\n]*/gi
+    /\*\*disclaimer:?\*\*[^\n]*/gi,
+    ...lecturerPatterns // Add the new dynamic patterns
   ];
 
   let cleaned = text;
@@ -228,7 +286,7 @@ function calculateTypingDuration(sentence) {
   const charCount = sentence.length;
 
   // Random typing speed between min and max (ms per character)
-  const typingSpeed = CONFIG.TYPING_SPEED_MIN + 
+  const typingSpeed = CONFIG.TYPING_SPEED_MIN +
     Math.random() * (CONFIG.TYPING_SPEED_MAX - CONFIG.TYPING_SPEED_MIN);
 
   // Base typing time
@@ -493,22 +551,30 @@ async function getEngagementLevel(db, scheduleId) {
 /**
  * Build SHORT prompt for GET API (under 800 chars)
  */
-function buildManualLecturePrompt(topic) {
-  return `You're Prof AB, a Nigerian professor teaching smart professionals in "Gist HQ" WhatsApp group.
+function buildManualLecturePrompt(topic, lecturer) {
+  // Use Prof. AB as a fallback if no lecturer is provided
+  if (!lecturer) {
+    lecturer = CONFIG.LECTURERS[0]; // Prof. AB
+  }
+
+  return `You are ${lecturer.name}, a world-class professor lecturing "Gist HQ" - smart Nigerian professionals.
+
+YOUR STYLE: ${lecturer.style}
 
 Write a lecture on: ${topic}
 
 STRUCTURE:
-🎯 Hook (2 sentences - grab attention)
+🎯 Hook (2-3 sentences - grab attention)
 📚 Setup (define concept + why it matters + Nigerian example)
 💡 3 Main Points (each: explain → example → insight)
 🔧 Practical Application (what they can use today)
 🎬 Conclusion (memorable takeaway)
 
-STYLE: Conversational professor. Break text every 2-3 sentences. Use Nigerian context (NEPA, traffic, naira, jollof, Tinubu, village people, e don cast, japa, gbese, shey you dey whine ni?, big man mentality, sapa, soft life, hustle, street, posh, breakfast). Include 2+ local examples. 5-7 emojis. *Bold* key terms. Ask 2-3 questions. "Abi?" "Isn't it?" "Sha" "omo" "abi no bi so?" naturally.
+STYLE: Conversational. Break text every 2-3 sentences. Use Nigerian context (your mind go dey, everwhere go first blur, you gonna learn the hard way, traffic, naira, jollof, Tinubu, village people, e don cast, japa, gbese, shey you dey whine me ni?, big man mentality, sapa, soft life, hustle, street, posh, breakfast). Include 2+ local examples. 5-7 emojis. Bold key terms. Ask 2-3 questions. "Abi?" "Isn't it?" "Sha" "omo" "abi no bi so?" naturally.
 
-700-800 words. Educational but fun, like chatting over drinks.`;
+700-800 words. Educational but engaging, according to YOUR style.`;
 }
+
 
 /**
  * Build SHORT prompt for series lectures (GET API compatible)
@@ -518,13 +584,38 @@ function buildSeriesLecturePrompt(schedule, context) {
   const prevSummary = context.hasPrevious ? context.summary.substring(0, 100) : "First lecture";
   const engagement = context.engagement || 'standard';
 
-  let prompt = `You're Prof AB delivering Part ${schedule.part} of "${schedule.subject}" to Gist HQ WhatsApp group.
+  // --- NEW: Get lecturer from schedule, fallback to Prof. AB ---
+  const lecturer = schedule.lecturer || CONFIG.LECTURERS[0];
+  // ---
 
-${isFirstLecture ? 
-  `🎓 WELCOME (20 words): Exciting intro to the series` : 
-  `🔄 RECAP (25 words): Last week - ${prevSummary}. Today's focus...`}
+  let prompt = `You are ${lecturer.name} delivering Part ${schedule.part} of "${schedule.subject}" to Gist HQ WhatsApp group.
 
-🎯 TODAY'S FOCUS (30 words): What Part ${schedule.part} covers
+YOUR STYLE: ${lecturer.style}
+
+SERIES CONTEXT:
+- This is Part ${schedule.part} of up to ${CONFIG.MAX_LECTURE_PARTS} parts
+- Previous coverage: ${prevSummary}
+- Audience engagement: ${engagementLevel}
+${context.keyPoints.length > 0 ? `- Key points from last lecture: ${context.keyPoints.join('; ')}` : ''}
+
+`;
+
+  if (isFirstLecture) {
+    prompt += `PART 1 STRUCTURE:
+  🎓 **WELCOME** (20-30 words)
+  Exciting intro to the series - what they'll learn over the coming weeks
+
+  `;
+  } else {
+    prompt += `CONTINUITY:
+  🔄 **QUICK RECAP** (25-30 words)
+  "Last week: [X]. Today: [Y]. Let's go deeper..."
+  Reference at least one specific concept from previous lecture.
+
+  `;
+  }
+
+`🎯 TODAY'S FOCUS (30 words): What Part ${schedule.part} covers
 
 📚 TEACHING (400 words in 3 sections):
 1. Primary Concept (explain → Nigerian example → insight)
@@ -552,6 +643,16 @@ STYLE: Break every 2-3 sentences. Nigerian context (NEPA, traffic, naira). 5-8 e
   } else {
     prompt += ` Mastery phase - advanced insights.`;
   }
+
+    prompt += `QUALITY CHECK:
+  [ ] Someone who missed last week can still follow
+  [ ] Loyal attendees feel rewarded for consistency
+  [ ] Clearly advances beyond previous lectures
+  [ ] Creates anticipation for next week
+  [ ] Includes 2+ Nigerian-specific examples
+  [ ] Ends with clear, memorable takeaway
+
+  Write Part ${schedule.part} of "${schedule.subject}" following this structure exactly.`;
 
   return prompt;
 }
@@ -600,10 +701,13 @@ async function runScheduledLecture(scheduleId, sock, logger) {
     const { lectureContent, generatedBy } = await generateLecture(systemPrompt, userPrompt, logger);
     if (!lectureContent) throw new Error('AI returned empty script');
 
+    // --- NEW: Get lecturer name for header ---
+    const lecturerName = schedule.lecturer?.name || "Prof. AB"; // Fallback
+
     // Send header
     const header = `🎓 *AI LECTURE: PART ${schedule.part}* 🎓\n\n` +
                    `*Topic:* ${schedule.subject}\n` +
-                   `*Professor:* Prof AB\n` +
+                   `*Professor:* ${lecturerName}\n` +
                    `-----------------------------------`;
     await sock.sendMessage(schedule.groupId, { text: header });
 
@@ -621,7 +725,7 @@ async function runScheduledLecture(scheduleId, sock, logger) {
       ? `_Class dismissed. Part ${nextPart} will be delivered next week._`
       : `_This was the final lecture. Course concluded!_`;
 
-    await sock.sendMessage(schedule.groupId, { 
+    await sock.sendMessage(schedule.groupId, {
       text: `-----------------------------------\n` +
             `🎓 *END OF PART ${schedule.part}* 🎓\n\n` +
             footerMsg
@@ -631,11 +735,11 @@ async function runScheduledLecture(scheduleId, sock, logger) {
     // Update database for next week
     await db.collection('lecture_schedules').updateOne(
       { _id: scheduleId },
-      { 
-        $set: { 
+      {
+        $set: {
           part: nextPart,
           lastDeliveredTimestamp: new Date()
-        } 
+        }
       }
     );
 
@@ -702,15 +806,19 @@ async function handleManualLecture(context) {
     return;
   }
 
+  // --- NEW: Get random lecturer ---
+  const lecturer = getRandomLecturer();
+  // ---
+
   await msg.react('🧠');
   const loadingMsg = await msg.reply(
     `🧠 *Preparing your lecture...*\n\n` +
     `*Topic:* ${topic}\n\n` +
-    `_This might take a moment. Prof AB is writing the full script..._`
+    `*Professor:* ${lecturer.name} is writing the full script..._` // Updated
   );
 
-  // Use improved prompt
-  const systemPrompt = buildManualLecturePrompt(topic);
+  // Use improved prompt with the selected lecturer
+  const systemPrompt = buildManualLecturePrompt(topic, lecturer); // Updated
   const userPrompt = `Write a comprehensive lecture on: ${topic}`;
 
   try {
@@ -719,7 +827,7 @@ async function handleManualLecture(context) {
 
     const header = `🎓 *GHQ LECTURE: STARTING* 🎓\n\n` +
                      `*Topic:* ${topic}\n` +
-                     `*Professor:* Prof AB\n` +
+                     `*Professor:* ${lecturer.name}\n` + // Updated
                      `-----------------------------------`;
     await sock.sendMessage(msg.from, { text: header, edit: loadingMsg.key });
     await msg.react('✅');
@@ -728,7 +836,7 @@ async function handleManualLecture(context) {
 
     await sock.sendPresenceUpdate('composing', msg.from);
     await sleep(3000);
-    await sock.sendMessage(msg.from, { 
+    await sock.sendMessage(msg.from, {
       text: `-----------------------------------\n` +
             `🎓 *AI LECTURE: END* 🎓\n\n` +
             `_This concludes today's lecture._`
@@ -737,9 +845,9 @@ async function handleManualLecture(context) {
   } catch (error) {
     logger.error({ err: error }, 'AI Lecturer plugin failed (manual)');
     await msg.react('❌');
-    await sock.sendMessage(msg.from, { 
-      text: `❌ *Lecture Failed*\n\n${error.message}`, 
-      edit: loadingMsg.key 
+    await sock.sendMessage(msg.from, {
+      text: `❌ *Lecture Failed*\n\n${error.message}`,
+      edit: loadingMsg.key
     });
   }
 }
@@ -765,6 +873,10 @@ async function handleScheduleLecture(context) {
     const { dayOfWeek, time, timezone } = parseSchedule(dayStr, timeStr, tzStr);
     const cronTime = getCronTime(time, dayOfWeek);
 
+    // --- NEW: Assign a random lecturer for the entire series ---
+    const seriesLecturer = getRandomLecturer();
+    // ---
+
     // Prepare schedule document
     const newSchedule = {
       groupId: msg.from,
@@ -773,6 +885,7 @@ async function handleScheduleLecture(context) {
       time: time,
       timezone: timezone,
       part: 1,
+      lecturer: seriesLecturer, // NEW: Store the lecturer
       lastDeliveredTimestamp: null,
       scheduledBy: msg.sender,
       createdAt: new Date()
@@ -814,6 +927,7 @@ async function handleScheduleLecture(context) {
     await msg.reply(
       `✅ *Lecture Scheduled Successfully!*\n\n` +
       `*Subject:* ${subject}\n` +
+      `*Professor:* ${seriesLecturer.name}\n` + // NEW: Announce the professor
       `*Schedule:* Every ${dayName} at ${time}\n` +
       `*Timezone:* ${timezone}\n` +
       `*Cron Pattern:* \`${cronTime}\`\n` +
@@ -864,14 +978,16 @@ async function handleListLectures(context) {
 
     for (const s of schedules) {
       const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.dayOfWeek];
-      const lastRan = s.lastDeliveredTimestamp 
+      const lastRan = s.lastDeliveredTimestamp
         ? new Date(s.lastDeliveredTimestamp).toLocaleString('en-GB', { timeZone: s.timezone })
         : 'Never';
 
+      const lecturerName = s.lecturer?.name || "Prof. AB"; // Show lecturer
       const progress = `${s.part - 1}/${CONFIG.MAX_LECTURE_PARTS}`;
 
       reply += `\n-----------------------------------\n` +
                `*${s.subject}*\n` +
+               `├ Professor: ${lecturerName}\n` + // Added
                `├ Next Part: ${s.part}\n` +
                `├ Progress: ${progress} completed\n` +
                `├ Schedule: ${dayName} @ ${s.time}\n` +
@@ -923,6 +1039,12 @@ async function handleCancelLecture(context) {
     // Delete from database
     const dbResult = await db.collection('lecture_schedules').deleteOne({ _id: schedule._id });
 
+    // NEW: Clean up related data (history, summaries, engagement)
+    await db.collection('lecture_history').deleteMany({ scheduleId: schedule._id });
+    await db.collection('lecture_summaries').deleteMany({ scheduleId: schedule._id });
+    await db.collection('lecture_engagement').deleteOne({ scheduleId: schedule._id });
+    // ---
+
     if (dbResult.deletedCount === 0) {
       logger.warn(`Cron job ${jobId} cancelled but DB delete failed`);
       await msg.reply(
@@ -936,7 +1058,7 @@ async function handleCancelLecture(context) {
         `*Subject:* ${schedule.subject}\n` +
         `*Parts Delivered:* ${partsDelivered}/${CONFIG.MAX_LECTURE_PARTS}\n` +
         `*Job ID:* \`${jobId}\`\n\n` +
-        `The scheduled lectures have been permanently removed.`
+        `The scheduled lectures and all related history have been permanently removed.`
       );
     }
   } catch (error) {
@@ -984,12 +1106,15 @@ async function handleLectureHistory(context) {
       return;
     }
 
+    const lecturerName = schedule.lecturer?.name || "Prof. AB";
+
     let reply = `📜 *Lecture History: ${subject}*\n` +
+                `*Professor:* ${lecturerName}\n` +
                 `_Showing last ${history.length} deliveries_\n`;
 
     for (const entry of history) {
       const status = entry.status === 'success' ? '✅' : '❌';
-      const date = new Date(entry.deliveredAt).toLocaleString('en-GB', { 
+      const date = new Date(entry.deliveredAt).toLocaleString('en-GB', {
         timeZone: schedule.timezone,
         dateStyle: 'short',
         timeStyle: 'short'
@@ -1014,8 +1139,8 @@ export default {
   name: 'AI Lecturer (v3)',
   description: 'AI-powered course manager with manual lectures and automated weekly schedules.',
   category: 'ai',
-  version: '3.2.0',
-  author: 'Gemini + Claude',
+  version: '3.3.0', // Updated version
+  author: 'Gemini + Claude + Malvin', // Updated author
 
   commands: ['lecture', 'teach', 'schedule-lecture', 'list-lectures', 'cancel-lecture', 'lecture-history'],
   aliases: ['ai-lecture', 'ai-teach', 'schedule-class', 'list-classes', 'cancel-class', 'lecture-log'],
@@ -1127,9 +1252,12 @@ export default {
           registeredJobs.add(jobId);
           successCount++;
 
+          const lecturerName = schedule.lecturer?.name || "Prof. AB";
+
           logger.info({
             jobId,
             subject: schedule.subject,
+            professor: lecturerName, // Added
             groupId: schedule.groupId,
             cronTime,
             timezone: schedule.timezone
