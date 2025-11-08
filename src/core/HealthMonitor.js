@@ -60,7 +60,7 @@ export class HealthMonitor {
       
       if (global.gc) {
         logger.safeLog('info', '🗑️ Running garbage collection...');
-        global.gc();
+       // global.gc();
         
         const newMemUsage = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
         logger.safeLog('info', `✅ Memory after GC: ${newMemUsage}MB (freed ${memUsedMB - newMemUsage}MB)`);

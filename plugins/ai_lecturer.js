@@ -505,138 +505,53 @@ STRUCTURE:
 🔧 Practical Application (what they can use today)
 🎬 Conclusion (memorable takeaway)
 
-NIGERIAN CONTEXT EXAMPLES:
-- NEPA/PHCN experiences, traffic, naira economy
-- Jollof rice debates, owambe culture
-- Sapa (broke), soft life (luxury), japa (migrate)
-- Village people, "e don cast", "shey you dey whine ni?"
-- Big man mentality, gbese (debt), hustle culture
-- Lagos island vs mainland, Abuja lifestyle
-- Tinubu's policies, fuel subsidy removal
-- Street wisdom vs book knowledge
+STYLE: Conversational professor. Break text every 2-3 sentences. Use Nigerian context (NEPA, traffic, naira, jollof, Tinubu, village people, e don cast, japa, gbese, shey you dey whine ni?, big man mentality, sapa, soft life, hustle, street, posh, breakfast). Include 2+ local examples. 5-7 emojis. *Bold* key terms. Ask 2-3 questions. "Abi?" "Isn't it?" "Sha" "omo" "abi no bi so?" naturally.
 
-WRITING STYLE:
-✓ Break text every 2-3 sentences (WhatsApp readability)
-✓ Use 5-8 emojis strategically (not every line)
-✓ Bold key terms with *asterisks*
-✓ Include 2-3 rhetorical questions naturally
-✓ Add Nigerian pidgin touches: "Abi?", "Sha", "Omo"
-✓ Conversational tone - like chatting over drinks
-✓ Balance education with entertainment
-
-LENGTH: 700-900 words
-TONE: Smart but relatable, professor having drinks with friends
-
-BEGIN LECTURE NOW:`;
+700-800 words. Educational but fun, like chatting over drinks.`;
 }
 
-// 4️⃣ IMPROVEMENT: Better series lecture prompts with progression
+/**
+ * Build SHORT prompt for series lectures (GET API compatible)
+ */
 function buildSeriesLecturePrompt(schedule, context) {
   const isFirstLecture = schedule.part === 1;
-  const prevSummary = context.hasPrevious ? context.summary.substring(0, 120) : "";
+  const prevSummary = context.hasPrevious ? context.summary.substring(0, 100) : "First lecture";
   const engagement = context.engagement || 'standard';
-  const progress = schedule.part / CONFIG.MAX_LECTURE_PARTS;
 
-  let prompt = `You are Prof AB delivering Part ${schedule.part} of the "${schedule.subject}" series to Gist HQ WhatsApp group.
+  let prompt = `You're Prof AB delivering Part ${schedule.part} of "${schedule.subject}" to Gist HQ WhatsApp group.
 
-COURSE PROGRESS: ${schedule.part}/${CONFIG.MAX_LECTURE_PARTS} (${Math.round(progress * 100)}%)
+${isFirstLecture ? 
+  `🎓 WELCOME (20 words): Exciting intro to the series` : 
+  `🔄 RECAP (25 words): Last week - ${prevSummary}. Today's focus...`}
 
-`;
+🎯 TODAY'S FOCUS (30 words): What Part ${schedule.part} covers
 
-  // Dynamic introduction based on part number
-  if (isFirstLecture) {
-    prompt += `OPENING (30 words):
-🎓 Welcome message - excitement about starting this journey
-📚 Course overview - what students will master by end
+📚 TEACHING (400 words in 3 sections):
+1. Primary Concept (explain → Nigerian example → insight)
+2. Secondary Concept (connects to #1 → different example)
+3. Synthesis (how it fits → real application)
 
-`;
-  } else {
-    prompt += `OPENING (35 words):
-🔄 Quick recap: "${prevSummary}"
-🎯 Today's focus: What Part ${schedule.part} specifically covers
-🔗 Connection: How today builds on last week
+💭 DISCUSSION (30 words): Thought question
+🔮 PREVIEW (30 words): Tease Part ${schedule.part + 1}
+🎓 TAKEAWAY (20 words): Memorable summary
 
-`;
-  }
+STYLE: Break every 2-3 sentences. Nigerian context (NEPA, traffic, naira). 5-8 emojis. *Bold* key terms. "Abi?" "Sha" naturally.`;
 
-  // Core teaching section
-  prompt += `CORE TEACHING (450 words structured in 3 acts):
-
-ACT 1 - PRIMARY CONCEPT (150 words)
-• Define the main concept clearly
-• Explain WHY it matters (Nigerian context)
-• Give concrete example from Nigerian life
-• Key insight or "aha moment"
-
-ACT 2 - SECONDARY CONCEPT (150 words)  
-• Introduce supporting concept
-• Show how it connects to primary concept
-• Different Nigerian example (variety is key)
-• Address common misconception
-
-ACT 3 - SYNTHESIS (150 words)
-• How both concepts work together
-• Real-world application in Nigeria
-• Potential pitfalls to avoid
-• Bridge to next week's topic
-
-`;
-
-  // Engagement-based adjustments
+  // Add engagement adjustments
   if (engagement === 'low') {
-    prompt += `⚠️ ENGAGEMENT BOOST NEEDED:
-- Bigger, more dramatic hook
-- Extra Nigerian examples (at least 3)
-- Simpler language, shorter sentences
-- More questions to audience
-- Personal story or anecdote
-
-`;
+    prompt += `\n\nBOOST: Bigger hook, more examples, simpler concepts.`;
   } else if (engagement === 'high') {
-    prompt += `🔥 HIGH ENGAGEMENT - LEVEL UP:
-- Go deeper into advanced concepts
-- Add nuance and complexity
-- Challenge their thinking
-- Introduce contrarian perspectives
-- Reference earlier parts of series
-
-`;
+    prompt += `\n\nLEVEL UP: Go deeper, add advanced concepts.`;
   }
 
-  // Phase-based approach
+  // Add progression
   if (schedule.part <= 3) {
-    prompt += `📍 FOUNDATION PHASE: Build fundamentals, be patient, explain thoroughly\n`;
-  } else if (schedule.part <= 8) {
-    prompt += `📍 GROWTH PHASE: Increase complexity, connect concepts, build on foundation\n`;
-  } else if (schedule.part <= 15) {
-    prompt += `📍 MASTERY PHASE: Advanced concepts, real-world complexity, expert insights\n`;
+    prompt += ` Foundation phase - accessible.`;
+  } else if (schedule.part <= 7) {
+    prompt += ` Growth phase - more complexity.`;
   } else {
-    prompt += `📍 SPECIALIZATION PHASE: Deep expertise, cutting-edge ideas, professional level\n`;
+    prompt += ` Mastery phase - advanced insights.`;
   }
-
-  // Closing section
-  prompt += `
-CLOSING (50 words):
-💭 Discussion prompt - thought-provoking question
-🔮 Next week teaser - create anticipation for Part ${schedule.part + 1}
-🎓 Key takeaway - one memorable sentence they'll remember
-
-NIGERIAN CONTEXT (Use 2-3):
-NEPA, traffic, naira, jollof, owambe, sapa, soft life, japa, village people, e don cast, 
-big man mentality, gbese, hustle, Lagos/Abuja life, fuel prices, Tinubu, 419, Yahoo boys
-
-STYLE RULES:
-✓ Break every 2-3 sentences (WhatsApp readability)
-✓ Use 6-10 emojis total (strategic placement)
-✓ Bold key terms: *term*
-✓ Natural pidgin: "Abi?", "Sha", "Omo", "Abi no bi so?"
-✓ 2-4 rhetorical questions
-✓ Conversational but intellectual
-
-LENGTH: 550-650 words total
-TONE: Smart friend who happens to be a professor
-
-BEGIN PART ${schedule.part} NOW:`;
 
   return prompt;
 }
