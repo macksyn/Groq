@@ -20,17 +20,17 @@ export class HealthMonitor {
     }, 20 * 60 * 1000);
     this.intervals.add(memoryInterval);
 
-    // Connection health every 10 minutes
+    // Connection health every 30 minutes
     const connectionInterval = setInterval(() => {
       this.monitorConnection();
-    }, 10 * 60 * 1000);
+    }, 30 * 60 * 1000);
     this.intervals.add(connectionInterval);
 
-    // Database health every 5 minutes (if available)
+    // Database health every 20 minutes (if available)
     if (this.config.MONGODB_URI) {
       const dbInterval = setInterval(() => {
         this.monitorDatabase();
-      }, 5 * 60 * 1000);
+      }, 20 * 60 * 1000);
       this.intervals.add(dbInterval);
     }
 
@@ -60,7 +60,7 @@ export class HealthMonitor {
       
       if (global.gc) {
         logger.safeLog('info', '🗑️ Running garbage collection...');
-       // global.gc();
+        global.gc();
         
         const newMemUsage = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
         logger.safeLog('info', `✅ Memory after GC: ${newMemUsage}MB (freed ${memUsedMB - newMemUsage}MB)`);

@@ -81,7 +81,7 @@ export default {
     },
     {
       name: 'two_hour_reminder_check',
-      schedule: '*/10 * * * *', // Every 10 minutes
+      schedule: '0 */2 * * *', // Every 2 hours
       description: 'Check and send 2-hour advance reminders',
       handler: async (context) => await checkTwoHourReminders(context)
     },
