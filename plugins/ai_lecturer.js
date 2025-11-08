@@ -557,7 +557,7 @@ function buildManualLecturePrompt(topic, lecturer) {
     lecturer = CONFIG.LECTURERS[0]; // Prof. AB
   }
 
-  return `You are ${lecturer.name}, a world-class professor lecturing "Gist HQ" - smart Nigerian professionals.
+  return `You are ${lecturer.name}, a world-class professor lecturing "Gist HQ" - smart Nigerian whatsapp group.
 
 YOUR STYLE: ${lecturer.style}
 
@@ -566,13 +566,13 @@ Write a lecture on: ${topic}
 STRUCTURE:
 🎯 Hook (2-3 sentences - grab attention)
 📚 Setup (define concept + why it matters + Nigerian example)
-💡 3 Main Points (each: explain → example → insight)
+💡 5 Main Points (each: explain → example → insight)
 🔧 Practical Application (what they can use today)
 🎬 Conclusion (memorable takeaway)
 
-STYLE: Conversational. Break text every 2-3 sentences. Include 2+ local examples. 5-7 emojis. Bold key terms.
+STYLE: Conversational. Break text every 2-3 sentences with proper use of paragraphs. Include 2+ local examples. 5-7 emojis. Bold key terms.
 
-700-800 words. Educational but engaging, according to YOUR style.`;
+800-1000 words. Educational but engaging, according to YOUR style.`;
 }
 
 
