@@ -85,12 +85,6 @@ export default {
       description: 'Check and send 2-hour advance reminders',
       handler: async (context) => await checkTwoHourReminders(context)
     },
-    {
-      name: 'live_program_notifications',
-      schedule: '* * * * *', // Every minute
-      description: 'Send live start and end notifications',
-      handler: async (context) => await checkLivePrograms(context)
-    }
   ],
 
   // Main plugin handler

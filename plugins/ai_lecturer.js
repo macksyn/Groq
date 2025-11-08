@@ -73,7 +73,7 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
 
     const result = response.data?.response || response.data?.result || response.data?.answer;
     if (result && typeof result === 'string' && result.trim().length > 0) {
-      lectureContent = result.trim();
+      lectureContent = cleanAIResponse(result.trim()); // ✅ CLEAN THE RESPONSE
       generatedBy = 'GPT-5 (Primary)';
       logger.info('AI Lecturer: Primary API succeeded');
       return { lectureContent, generatedBy };
@@ -101,7 +101,7 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
         {
           model: groqModel,
           messages: [
-            { role: 'system', content: detailedSystemPrompt },
+            { role: 'system', content: detailedSystemPrompt + '\n\nIMPORTANT: Start immediately with the lecture content. Do NOT include any meta-commentary like "Here is the lecture" or "I can also provide". Just write the lecture.'},
             { role: 'user', content: userPrompt }
           ],
           temperature: 0.7,
@@ -122,7 +122,7 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
         throw new Error('Groq fallback returned empty content');
       }
 
-      lectureContent = groqResult;
+      lectureContent = cleanAIResponse(groqResult); // ✅ CLEAN THE RESPONSE
       generatedBy = 'Groq AI (Fallback)';
       logger.info('AI Lecturer: Fallback API succeeded');
       return { lectureContent, generatedBy };
@@ -131,6 +131,47 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
       throw new Error('All AI services are currently unavailable. Please try again later.');
     }
   }
+}
+
+/**
+ * Clean AI response to remove meta-commentary and instructions
+ */
+function cleanAIResponse(text) {
+  if (!text) return text;
+
+  // Remove common AI meta-phrases (case-insensitive)
+  const metaPhrases = [
+    /here is the lecture in the style you requested for[:\s]*/gi,
+    /here's the lecture[:\s]*/gi,
+    /here is a lecture[:\s]*/gi,
+    /i'll deliver this lecture[:\s]*/gi,
+    /let me deliver[:\s]*/gi,
+    /now i can also craft[:\s]*/gi,
+    /i can also provide[:\s]*/gi,
+    /would you like me to[:\s]*/gi,
+    /shall i continue[:\s?\n]*/gi,
+    /is there anything else[:\s?\n]*/gi,
+    /let me know if you need[:\s]*/gi,
+    /in the style of prof ab[:\s]*/gi,
+    /as prof ab[:\s]*/gi,
+    /\*\*note:?\*\*[^\n]*/gi,
+    /\*\*disclaimer:?\*\*[^\n]*/gi
+  ];
+
+  let cleaned = text;
+
+  // Remove meta-phrases
+  metaPhrases.forEach(pattern => {
+    cleaned = cleaned.replace(pattern, '');
+  });
+
+  // Remove empty lines at start/end
+  cleaned = cleaned.trim();
+
+  // Remove multiple consecutive line breaks (more than 2)
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+  return cleaned;
 }
 
 /**
@@ -461,56 +502,141 @@ STRUCTURE:
 🎯 Hook (2 sentences - grab attention)
 📚 Setup (define concept + why it matters + Nigerian example)
 💡 3 Main Points (each: explain → example → insight)
-🔧 Application (what they can use today)
-🎬 Closer (memorable takeaway)
+🔧 Practical Application (what they can use today)
+🎬 Conclusion (memorable takeaway)
 
-STYLE: Conversational professor. Break text every 2-3 sentences. Use Nigerian context (NEPA, traffic, naira, jollof, Tinubu, village people, e don cast, japa, gbese, shey you dey whine ni?, big man mentality, sapa, soft life, hustle, street, posh, breakfast). Include 2+ local examples. 5-7 emojis. *Bold* key terms. Ask 2-3 questions. "Abi?" "Isn't it?" "Sha" "omo" "abi no bi so?" naturally.
+NIGERIAN CONTEXT EXAMPLES:
+- NEPA/PHCN experiences, traffic, naira economy
+- Jollof rice debates, owambe culture
+- Sapa (broke), soft life (luxury), japa (migrate)
+- Village people, "e don cast", "shey you dey whine ni?"
+- Big man mentality, gbese (debt), hustle culture
+- Lagos island vs mainland, Abuja lifestyle
+- Tinubu's policies, fuel subsidy removal
+- Street wisdom vs book knowledge
 
-700-800 words. Educational but fun, like chatting over drinks.`;
+WRITING STYLE:
+✓ Break text every 2-3 sentences (WhatsApp readability)
+✓ Use 5-8 emojis strategically (not every line)
+✓ Bold key terms with *asterisks*
+✓ Include 2-3 rhetorical questions naturally
+✓ Add Nigerian pidgin touches: "Abi?", "Sha", "Omo"
+✓ Conversational tone - like chatting over drinks
+✓ Balance education with entertainment
+
+LENGTH: 700-900 words
+TONE: Smart but relatable, professor having drinks with friends
+
+BEGIN LECTURE NOW:`;
 }
 
-/**
- * Build SHORT prompt for series lectures (GET API compatible)
- */
+// 4️⃣ IMPROVEMENT: Better series lecture prompts with progression
 function buildSeriesLecturePrompt(schedule, context) {
   const isFirstLecture = schedule.part === 1;
-  const prevSummary = context.hasPrevious ? context.summary.substring(0, 100) : "First lecture";
+  const prevSummary = context.hasPrevious ? context.summary.substring(0, 120) : "";
   const engagement = context.engagement || 'standard';
+  const progress = schedule.part / CONFIG.MAX_LECTURE_PARTS;
 
-  let prompt = `You're Prof AB delivering Part ${schedule.part} of "${schedule.subject}" to Gist HQ WhatsApp group.
+  let prompt = `You are Prof AB delivering Part ${schedule.part} of the "${schedule.subject}" series to Gist HQ WhatsApp group.
 
-${isFirstLecture ? 
-  `🎓 WELCOME (20 words): Exciting intro to the series` : 
-  `🔄 RECAP (25 words): Last week - ${prevSummary}. Today's focus...`}
+COURSE PROGRESS: ${schedule.part}/${CONFIG.MAX_LECTURE_PARTS} (${Math.round(progress * 100)}%)
 
-🎯 TODAY'S FOCUS (30 words): What Part ${schedule.part} covers
+`;
 
-📚 TEACHING (400 words in 3 sections):
-1. Primary Concept (explain → Nigerian example → insight)
-2. Secondary Concept (connects to #1 → different example)
-3. Synthesis (how it fits → real application)
+  // Dynamic introduction based on part number
+  if (isFirstLecture) {
+    prompt += `OPENING (30 words):
+🎓 Welcome message - excitement about starting this journey
+📚 Course overview - what students will master by end
 
-💭 DISCUSSION (30 words): Thought question
-🔮 PREVIEW (30 words): Tease Part ${schedule.part + 1}
-🎓 TAKEAWAY (20 words): Memorable summary
-
-STYLE: Break every 2-3 sentences. Nigerian context (NEPA, traffic, naira). 5-8 emojis. *Bold* key terms. "Abi?" "Sha" naturally.`;
-
-  // Add engagement adjustments
-  if (engagement === 'low') {
-    prompt += `\n\nBOOST: Bigger hook, more examples, simpler concepts.`;
-  } else if (engagement === 'high') {
-    prompt += `\n\nLEVEL UP: Go deeper, add advanced concepts.`;
-  }
-
-  // Add progression
-  if (schedule.part <= 3) {
-    prompt += ` Foundation phase - accessible.`;
-  } else if (schedule.part <= 7) {
-    prompt += ` Growth phase - more complexity.`;
+`;
   } else {
-    prompt += ` Mastery phase - advanced insights.`;
+    prompt += `OPENING (35 words):
+🔄 Quick recap: "${prevSummary}"
+🎯 Today's focus: What Part ${schedule.part} specifically covers
+🔗 Connection: How today builds on last week
+
+`;
   }
+
+  // Core teaching section
+  prompt += `CORE TEACHING (450 words structured in 3 acts):
+
+ACT 1 - PRIMARY CONCEPT (150 words)
+• Define the main concept clearly
+• Explain WHY it matters (Nigerian context)
+• Give concrete example from Nigerian life
+• Key insight or "aha moment"
+
+ACT 2 - SECONDARY CONCEPT (150 words)  
+• Introduce supporting concept
+• Show how it connects to primary concept
+• Different Nigerian example (variety is key)
+• Address common misconception
+
+ACT 3 - SYNTHESIS (150 words)
+• How both concepts work together
+• Real-world application in Nigeria
+• Potential pitfalls to avoid
+• Bridge to next week's topic
+
+`;
+
+  // Engagement-based adjustments
+  if (engagement === 'low') {
+    prompt += `⚠️ ENGAGEMENT BOOST NEEDED:
+- Bigger, more dramatic hook
+- Extra Nigerian examples (at least 3)
+- Simpler language, shorter sentences
+- More questions to audience
+- Personal story or anecdote
+
+`;
+  } else if (engagement === 'high') {
+    prompt += `🔥 HIGH ENGAGEMENT - LEVEL UP:
+- Go deeper into advanced concepts
+- Add nuance and complexity
+- Challenge their thinking
+- Introduce contrarian perspectives
+- Reference earlier parts of series
+
+`;
+  }
+
+  // Phase-based approach
+  if (schedule.part <= 3) {
+    prompt += `📍 FOUNDATION PHASE: Build fundamentals, be patient, explain thoroughly\n`;
+  } else if (schedule.part <= 8) {
+    prompt += `📍 GROWTH PHASE: Increase complexity, connect concepts, build on foundation\n`;
+  } else if (schedule.part <= 15) {
+    prompt += `📍 MASTERY PHASE: Advanced concepts, real-world complexity, expert insights\n`;
+  } else {
+    prompt += `📍 SPECIALIZATION PHASE: Deep expertise, cutting-edge ideas, professional level\n`;
+  }
+
+  // Closing section
+  prompt += `
+CLOSING (50 words):
+💭 Discussion prompt - thought-provoking question
+🔮 Next week teaser - create anticipation for Part ${schedule.part + 1}
+🎓 Key takeaway - one memorable sentence they'll remember
+
+NIGERIAN CONTEXT (Use 2-3):
+NEPA, traffic, naira, jollof, owambe, sapa, soft life, japa, village people, e don cast, 
+big man mentality, gbese, hustle, Lagos/Abuja life, fuel prices, Tinubu, 419, Yahoo boys
+
+STYLE RULES:
+✓ Break every 2-3 sentences (WhatsApp readability)
+✓ Use 6-10 emojis total (strategic placement)
+✓ Bold key terms: *term*
+✓ Natural pidgin: "Abi?", "Sha", "Omo", "Abi no bi so?"
+✓ 2-4 rhetorical questions
+✓ Conversational but intellectual
+
+LENGTH: 550-650 words total
+TONE: Smart friend who happens to be a professor
+
+BEGIN PART ${schedule.part} NOW:`;
 
   return prompt;
 }

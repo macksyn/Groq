@@ -1,4 +1,4 @@
-// src/core/WhatsAppBot.js (FIXED - Add plugin references)
+// src/core/WhatsAppBot.js - FIXED VERSION
 import { EventEmitter } from 'events';
 import moment from 'moment-timezone';
 import logger from '../utils/logger.js';
@@ -8,6 +8,7 @@ import { SocketManager } from './SocketManager.js';
 import { WebServer } from './WebServer.js';
 import { SessionManager } from './SessionManager.js';
 import { HealthMonitor } from './HealthMonitor.js';
+import { ConnectionMonitor } from './ConnectionMonitor.js';
 import MessageHandler from '../../handlers/messageHandler.js';
 import CallHandler from '../../handlers/callHandler.js';
 import GroupHandler from '../../handlers/groupHandler.js';
@@ -24,6 +25,7 @@ export class WhatsAppBot extends EventEmitter {
     this.socketManager = null;
     this.webServer = null;
     this.healthMonitor = null;
+    this.connectionMonitor = null; // ✅ Added
     this.bioUpdateCount = 0;
     this.lastSuccessfulConnection = Date.now();
   }
@@ -53,9 +55,11 @@ export class WhatsAppBot extends EventEmitter {
       this.status = 'running';
       logger.info('🎉 Bot started successfully!');
       this.emit('started');
+
       this.on('shutdown', () => {
         this.stop().then(() => process.exit(0));
       });
+
       this.on('restart', () => {
         this.restart();
       });
@@ -80,10 +84,14 @@ export class WhatsAppBot extends EventEmitter {
     try {
       logger.info('🛑 Stopping bot...');
       this.status = 'stopping';
+
+      // ✅ FIXED: Stop all monitors in correct order
+      if (this.connectionMonitor) this.connectionMonitor.stop();
       if (this.healthMonitor) await this.healthMonitor.stop();
       if (this.socketManager) await this.socketManager.disconnect();
       if (this.webServer) await this.webServer.stop();
       if (this.mongoManager) await this.mongoManager.close();
+
       this.status = 'stopped';
       logger.info('✅ Bot stopped');
       this.emit('stopped');
@@ -138,38 +146,57 @@ export class WhatsAppBot extends EventEmitter {
 
   async connectWhatsApp() {
     logger.info('📱 Connecting to WhatsApp...');
+
+    // Create socket manager
     this.socketManager = new SocketManager(
       this.sessionManager, 
       this.pluginManager, 
       this.mongoManager
     );
+
+    // ✅ Create connection monitor BEFORE connecting
+    this.connectionMonitor = new ConnectionMonitor(this.socketManager);
+
+    // ✅ Listen to health warnings
+    this.connectionMonitor.on('healthWarning', (data) => {
+      logger.warn(`⚠️ Connection health warning: ${data.failedChecks} failed checks`);
+    });
+
+    // Setup event handlers
     this.socketManager.on('message', async (data) => {
       try {
         await MessageHandler(data.messageUpdate, data.socket, logger, this.config, this);
       } catch (err) {
         const msg = err && err.message ? err.message : String(err);
         if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt')) {
-          logger.warn('⚠️ Dropped message from %s due to decryption failure: %s', data.messageUpdate?.key?.remoteJid || 'unknown', msg);
+          logger.warn('⚠️ Dropped message from %s due to decryption failure: %s', 
+            data.messageUpdate?.key?.remoteJid || 'unknown', msg);
         } else {
           logger.error(err, '❌ Message handler error:');
         }
       }
     });
+
     this.socketManager.on('call', async (data) => {
       await CallHandler(data.callUpdate, data.socket, this.config, logger);
     });
+
     this.socketManager.on('groupUpdate', async (data) => {
       await GroupHandler(data.socket, data.groupUpdate, this.config, logger);
     });
+
     this.socketManager.on('statusChange', (status) => {
       this.handleStatusChange(status);
     });
+
+    // Connect to WhatsApp
     await this.socketManager.connect();
   }
 
   async startMonitoring() {
     this.healthMonitor = new HealthMonitor(this, this.config);
     await this.healthMonitor.start();
+
     if (this.config.AUTO_BIO) {
       this.startBioUpdates();
     }
@@ -179,38 +206,52 @@ export class WhatsAppBot extends EventEmitter {
     setInterval(async () => {
       try {
         if (this.bioUpdateCount >= 3) return; 
+
         const socket = this.socketManager?.getSocket();
         if (!socket || !socket.user?.id) return;
+
         const time = moment().tz(this.config.TIMEZONE).format('HH:mm:ss');
         const date = moment().tz(this.config.TIMEZONE).format('DD/MM/YYYY');
         const dbStatus = this.mongoManager.isConnected ? '🔗' : '⚠️';
+
         const bioText = `🤖 ${this.config.BOT_NAME}\n📅 ${date} | ⏰ ${time}\n${dbStatus} Database ${this.mongoManager.isConnected ? 'Online' : 'Offline'}`;
+
         await socket.updateProfileStatus(bioText);
         this.bioUpdateCount++;
+
         logger.info(`📝 Bio updated: ${bioText.replace(/\n/g, ' | ')}`);
       } catch (error) {
         logger.warn(error, '⚠️ Bio update failed');
       }
     }, 20 * 60 * 1000); 
+
     setInterval(() => {
       this.bioUpdateCount = 0;
     }, 60 * 60 * 1000);
   }
 
+  // ✅ FIXED: Clean handleStatusChange method
   handleStatusChange(status) {
     this.status = status;
     this.emit('statusChange', status);
+
     if (status === 'connected') {
       this.lastSuccessfulConnection = Date.now();
 
-      // ✅ CRITICAL FIX: Set plugin manager references after connection
+      // Set plugin references for scheduled tasks
       this.setPluginReferences();
 
+      // Send startup notification
       this.sendStartupNotification();
+
+      // ✅ Start connection monitoring (only once, with internal 45s delay)
+      if (this.connectionMonitor && !this.connectionMonitor.isMonitoring) {
+        this.connectionMonitor.start();
+      }
     }
   }
 
-  // ✅ NEW METHOD: Set references for scheduled tasks
+  // ✅ Set references for scheduled tasks
   setPluginReferences() {
     try {
       const socket = this.socketManager?.getSocket();
@@ -227,8 +268,10 @@ export class WhatsAppBot extends EventEmitter {
   async sendStartupNotification() {
     try {
       if (!this.config.OWNER_NUMBER) return;
+
       const socket = this.socketManager?.getSocket();
       if (!socket || !socket.user?.id) return;
+
       setTimeout(async () => {
         try {
           const message = this.buildStartupMessage();
@@ -248,8 +291,6 @@ export class WhatsAppBot extends EventEmitter {
   buildStartupMessage() {
     const pluginStats = this.pluginManager.getPluginStats();
     const dbStatus = this.mongoManager.isConnected ? '✅ Connected' : '❌ Offline';
-
-    // ✅ Add scheduled tasks info
     const scheduledTasksInfo = this.pluginManager.getScheduledTasksInfo();
 
     return `🤖 *${this.config.BOT_NAME} Online!*
@@ -275,14 +316,42 @@ ${this.config.REJECT_CALL ? '✅' : '❌'} Call Rejection
   }
 
   // Getters for external access
-  getStatus() { return this.status; }
-  getUptime() { return Date.now() - this.startTime; }
-  getSocket() { return this.socketManager?.getSocket(); }
-  getDatabase() { return this.mongoManager; }
-  getPluginManager() { return this.pluginManager; }
+  getStatus() { 
+    return this.status; 
+  }
+
+  getUptime() { 
+    return Date.now() - this.startTime; 
+  }
+
+  getSocket() { 
+    return this.socketManager?.getSocket(); 
+  }
+
+  getDatabase() { 
+    return this.mongoManager; 
+  }
+
+  getPluginManager() { 
+    return this.pluginManager; 
+  }
 
   getStats() {
     const memUsage = process.memoryUsage();
+    const socket = this.socketManager?.getSocket();
+
+    // Add detailed socket diagnostics
+    const socketDiagnostics = socket ? {
+      hasSocket: true,
+      hasUser: !!socket.user?.id,
+      userId: socket.user?.id || null,
+      hasWebSocket: !!socket.ws,
+      wsReadyState: socket.ws?.readyState,
+      wsReadyStateText: this.getWebSocketStateText(socket.ws?.readyState)
+    } : {
+      hasSocket: false
+    };
+
     return {
       status: this.status,
       uptime: this.getUptime(),
@@ -295,6 +364,8 @@ ${this.config.REJECT_CALL ? '✅' : '❌'} Call Rejection
       scheduledTasks: this.pluginManager.getScheduledTasksInfo(),
       database: this.mongoManager.getStats ? this.mongoManager.getStats() : {},
       lastConnection: new Date(this.lastSuccessfulConnection).toISOString(),
+      connection: this.connectionMonitor ? this.connectionMonitor.getStats() : null,
+      socketDiagnostics: socketDiagnostics,
       features: {
         AUTO_READ: this.config.AUTO_READ,
         AUTO_REACT: this.config.AUTO_REACT,
@@ -304,5 +375,16 @@ ${this.config.REJECT_CALL ? '✅' : '❌'} Call Rejection
         AUTO_BIO: this.config.AUTO_BIO
       }
     };
+  }
+
+  getWebSocketStateText(state) {
+    if (state === undefined || state === null) return 'UNDEFINED';
+    const states = {
+      0: 'CONNECTING',
+      1: 'OPEN',
+      2: 'CLOSING',
+      3: 'CLOSED'
+    };
+    return states[state] || `UNKNOWN(${state})`;
   }
 }
