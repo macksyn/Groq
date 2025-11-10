@@ -28,7 +28,7 @@ const CONFIG = {
       style: "A sharp, insightful, slightly formal British academic. Loves data and clear examples. Speaks with fancy english and precision. Uses phrases like 'Right then, let's unpack this,' and 'Quite interesting, isn't it?'"
     },
     {
-      name: "Uncle Tunde",
+      name: "Sir M.A Adegoke",
       style: "The wise, storytelling elder. Uses proverbs and real-life Nigerian parables. Very warm and patient. Uses phrases like 'My children, let me tell you...' and 'You see, it is like the tortoise who...'"
     },
     {
@@ -567,12 +567,10 @@ STRUCTURE:
 🎯 Hook (2-3 sentences - grab attention)
 📚 Setup (define concept + why it matters + Nigerian example)
 💡 5 Main Points (each: explain → example → insight)
-🔧 Practical Application (what they can use today)
+🔧 Practical Application (How they can apply the knowledge)
 🎬 Conclusion (memorable takeaway)
 
-STYLE: Conversational. Break text every 2-3 sentences with proper use of paragraphs. Include 2+ local examples. 5-7 emojis. Bold key terms.
-
-800-1000 words. Educational but engaging, according to YOUR style.`;
+STYLE: Break text every 2-3 sentences with proper use of paragraphs, Include 2+ local examples. 5-7 emojis. Bold key terms. 800-900 words. Start the lecture *immediately*. Do not write "Here is the lecture" or any other intro phrase. Just begin with the first sentence of the lecture content.`;
 }
 
 

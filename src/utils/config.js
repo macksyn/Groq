@@ -40,8 +40,15 @@ export function validateConfig() {
   }
   
   if (errors.length > 0) {
-    logger.safeError(error, '❌ Configuration errors:');
-    errors.forEach(error => logger.safeError(error, `  • ${error}`));
+    // 1. Log the main error header
+    logger.safeLog('error', '❌ Configuration errors:');
+
+    // 2. Loop through the 'errors' array and log each message
+    errors.forEach(errMessage => {
+      logger.safeLog('error', `  • ${errMessage}`);
+    });
+
+    // 3. Exit
     process.exit(1);
   }
   
