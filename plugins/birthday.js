@@ -36,7 +36,7 @@ let birthdaySettings = { ...defaultSettings };
 export default {
   name: 'Birthday System',
   version: '3.0.0',
-  author: 'Bot Developer',
+  author: 'Alex Macksyn',
   description: 'Advanced birthday system with automatic reminders and wishes using scheduled tasks',
   category: 'social',
 

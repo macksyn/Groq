@@ -103,7 +103,7 @@ export default {
             return; // Stop execution if not in the allowed group
         }
         // --- END GROUP CHECK ---
-        
+
 
       // Run plugin startup logic
       await loadSettings();
@@ -284,24 +284,24 @@ const defaultSettings = {
   startingBankBalance: 0,
   currency: '₦',
   timezone: 'Africa/Lagos',
-  maxWalletBalance: 100000,
-  maxBankBalance: 1000000,
+  maxWalletBalance: 1000000,
+  maxBankBalance: 10000000,
 
   // Daily System
-  dailyMinAmount: 1,
-  dailyMaxAmount: 4,
-  dailyStreakBonus: 1, // Per day streak
+  dailyMinAmount: 500,
+  dailyMaxAmount: 1500,
+  dailyStreakBonus: 100, // Per day streak
 
   // Work System
   workCooldownMinutes: 45,
   workJobs: [
-    { name: 'Uber Driver', min: 1, max: 6, cooldown: 60 },
-    { name: 'Food Delivery', min: 1, max: 3, cooldown: 45 },
-    { name: 'Freelancer', min: 1, max: 4, cooldown: 90 },
-    { name: 'Teacher', min: 1, max: 5, cooldown: 75 },
-    { name: 'Doctor', min: 2, max: 8, cooldown: 120 },
-    { name: 'Engineer', min: 2, max: 7, cooldown: 105 },
-    { name: 'Trader', min: 1, max: 6, cooldown: 60 } // High risk/reward
+    { name: 'Uber Driver', min: 300, max: 1000, cooldown: 60 },
+    { name: 'Food Delivery', min: 200, max: 800, cooldown: 45 },
+    { name: 'Freelancer', min: 500, max: 1500, cooldown: 90 },
+    { name: 'Teacher', min: 400, max: 1200, cooldown: 75 },
+    { name: 'Doctor', min: 800, max: 2000, cooldown: 120 },
+    { name: 'Engineer', min: 600, max: 1800, cooldown: 105 },
+    { name: 'Trader', min: 100, max: 3000, cooldown: 60 } // High risk/reward
   ],
 
   // Robbery System
@@ -310,8 +310,8 @@ const defaultSettings = {
   robMaxStealPercent: 0.25,
   robMinTargetBalance: 200,
   robMinRobberBalance: 150,
-  robMinSteal: 1,
-  robFailPenalty: 10,
+  robMinSteal: 20,
+  robFailPenalty: 200,
 
   // Investment System
   investmentsEnabled: true,
@@ -329,11 +329,11 @@ const defaultSettings = {
 
   // Achievement Settings
   achievementRewards: {
-    firstDaily: 10,
-    firstWork: 5,
-    firstRob: 2,
-    millionaire: 5000,
-    robKing: 2500
+    firstDaily: 1000,
+    firstWork: 500,
+    firstRob: 2000,
+    millionaire: 50000,
+    robKing: 25000
   },
 
   // Event Settings
@@ -488,9 +488,9 @@ async function initUser(userId) {
 // Shop Items Database with items removed (UNCHANGED)
 const SHOP_ITEMS = {
   // Consumable Items
-  workBoost: {
+workBoost: {
     name: "Work Boost",
-    price: 30,
+    price: 3000,
     description: "Double work earnings for 24 hours",
     type: "consumable",
     effect: "workBoost",
@@ -498,7 +498,7 @@ const SHOP_ITEMS = {
   },
   robProtection: {
     name: "Bodyguard",
-    price: 20,
+    price: 8000,
     description: "Hire a bodyguard to prevent robberies for 48 hours",
     type: "consumable", 
     effect: "robProtection",
@@ -506,7 +506,7 @@ const SHOP_ITEMS = {
   },
   dailyBoost: {
     name: "Lucky Charm",
-    price: 5,
+    price: 2500,
     description: "Increases daily reward by 50% for 7 days",
     type: "consumable",
     effect: "dailyBoost",
@@ -516,7 +516,7 @@ const SHOP_ITEMS = {
   // Permanent Upgrades
   vipStatus: {
     name: "VIP Status",
-    price: 1000,
+    price: 100000,
     description: "Permanent 25% bonus to all earnings",
     type: "permanent",
     effect: "vipBonus",
@@ -526,7 +526,7 @@ const SHOP_ITEMS = {
   // Tools & Equipment
   lockpicks: {
     name: "Professional Lockpicks",
-    price: 50,
+    price: 1200,
     description: "Increases robbery success rate by 20%",
     type: "tool",
     effect: "robberyBoost",
@@ -535,7 +535,7 @@ const SHOP_ITEMS = {
   },
   businessSuit: {
     name: "Designer Business Suit",
-    price: 45,
+    price: 4500,
     description: "Increases work earnings by 35%",
     type: "equipment",
     effect: "workBonus",
@@ -545,7 +545,7 @@ const SHOP_ITEMS = {
   // Cosmetic Items
   goldenCrown: {
     name: "Golden Crown",
-    price: 250,
+    price: 250000,
     description: "Shows 👑 next to your name in leaderboards",
     type: "cosmetic",
     effect: "crown",
@@ -553,7 +553,7 @@ const SHOP_ITEMS = {
   },
   customTitle: {
     name: "Custom Title",
-    price: 300,
+    price: 25000,
     description: "Set a custom rank title",
     type: "cosmetic",
     effect: "customTitle",
@@ -563,7 +563,7 @@ const SHOP_ITEMS = {
   // Special Items
   marketTip: {
     name: "Market Insider Info",
-    price: 300,
+    price: 10000,
     description: "Guarantees profitable investment for 1 trade",
     type: "consumable",
     effect: "marketTip",
@@ -590,26 +590,26 @@ function getItemId(inputId) {
 
 // MODIFIED: Cryptocurrency system with price fluctuation properties
 let cryptoData = {
-  BTC: { name: "Bitcoin", price: 3000, volatility: 0.65, trend: 0.001, history: [], lastChange: 'stable' },
-  ETH: { name: "Ethereum", price: 1200, volatility: 0.6, trend: -0.002, history: [], lastChange: 'stable' },
-  SOL: { name: "Solana", price: 490, volatility: 0.60, trend: -0.005, history: [], lastChange: 'stable' },
-  SHIB: { name: "Shiba Inu", price: 99, volatility: 0.55, trend: 0.01, history: [], lastChange: 'stable' },
-  GROQ: { name: "Groq Coin", price: 11, volatility: 0.69, trend: -0.003, history: [], lastChange: 'stable' },
-  ADA: { name: "Cardano", price: 1.1, volatility: 0.58, trend: 0.002, history: [], lastChange: 'stable' },
-  DOT: { name: "Polkadot", price: 14, volatility: 0.48, trend: 0.001, history: [], lastChange: 'stable' },
-  MATIC: { name: "Polygon", price: 12, volatility: 0.51, trend: -0.001, history: [], lastChange: 'stable' }
+BTC: { name: "Bitcoin", price: 45000, volatility: 0.05, trend: 0.001, history: [], lastChange: 'stable' },
+  ETH: { name: "Ethereum", price: 3200, volatility: 0.06, trend: -0.002, history: [], lastChange: 'stable' },
+  SOL: { name: "Solana", price: 120, volatility: 0.08, trend: 0.005, history: [], lastChange: 'stable' },
+  SHIB: { name: "Shiba Inu", price: 0.00002, volatility: 0.12, trend: 0.01, history: [], lastChange: 'stable' },
+  GROQ: { name: "Groq Coin", price: 15, volatility: 0.10, trend: -0.003, history: [], lastChange: 'stable' },
+  ADA: { name: "Cardano", price: 0.8, volatility: 0.07, trend: 0.002, history: [], lastChange: 'stable' },
+  DOT: { name: "Polkadot", price: 25, volatility: 0.08, trend: 0.001, history: [], lastChange: 'stable' },
+  MATIC: { name: "Polygon", price: 1.2, volatility: 0.09, trend: -0.001, history: [], lastChange: 'stable' }
 };
 
 // Business system (UNCHANGED)
 let businessData = {
-  restaurant: { name: "Restaurant", price: 1500, roi: 0.12, description: "Earn from food sales" },
+restaurant: { name: "Restaurant", price: 50000, roi: 0.12, description: "Earn from food sales" },
   laundry: { name: "Laundry Service", price: 25000, roi: 0.08, description: "Steady income from washing clothes" },
-  realestate: { name: "Real Estate", price: 5000, roi: 0.06, description: "Rental income from properties" },
-  fillingstation: { name: "Filling Station", price: 10000, roi: 0.10, description: "Fuel sales profit" },
-  pharmacy: { name: "Pharmacy", price: 3500, roi: 0.09, description: "Medicine sales income" },
-  supermarket: { name: "Supermarket", price: 3000, roi: 0.08, description: "Grocery retail profits" },
-  carwash: { name: "Car Wash", price: 1000, roi: 0.07, description: "Vehicle cleaning service" },
-  barbershop: { name: "Barber Shop", price: 800, roi: 0.11, description: "Hair cutting service income" }
+  realestate: { name: "Real Estate", price: 200000, roi: 0.06, description: "Rental income from properties" },
+  fillingstation: { name: "Filling Station", price: 150000, roi: 0.10, description: "Fuel sales profit" },
+  pharmacy: { name: "Pharmacy", price: 75000, roi: 0.09, description: "Medicine sales income" },
+  supermarket: { name: "Supermarket", price: 100000, roi: 0.08, description: "Grocery retail profits" },
+  carwash: { name: "Car Wash", price: 30000, roi: 0.07, description: "Vehicle cleaning service" },
+  barbershop: { name: "Barber Shop", price: 20000, roi: 0.11, description: "Hair cutting service income" }
 };
 
 // ✅ REFACTORED: Auto-update business ROI using safeOperation
@@ -747,43 +747,43 @@ const ACHIEVEMENTS = {
   firstDaily: {
     name: "Daily Grind",
     description: "Claim your first daily reward",
-    reward: 5,
+    reward: 1000,
     emoji: "🌅"
   },
   firstWork: {
     name: "Hard Worker",
     description: "Complete your first work",
-    reward: 5,
+    reward: 500,
     emoji: "💼"
   },
   firstRob: {
     name: "First Heist",
     description: "Successfully rob someone for the first time",
-    reward: 2,
+    reward: 2000,
     emoji: "🦹"
   },
   millionaire: {
     name: "Millionaire",
     description: "Accumulate 1 million in total wealth",
-    reward: 5000,
+    reward: 50000,
     emoji: "💰"
   },
   robKing: {
     name: "Robbery King",
     description: "Successfully rob 50 people",
-    reward: 2500,
+    reward: 25000,
     emoji: "👑"
   },
   streakMaster: {
     name: "Consistency King",
     description: "Maintain a 30-day daily streak",
-    reward: 300,
+    reward: 30000,
     emoji: "🔥"
   },
   businessTycoon: {
     name: "Business Tycoon",
     description: "Own 5 different businesses",
-    reward: 400,
+    reward: 75000,
     emoji: "🏢"
   }
 };

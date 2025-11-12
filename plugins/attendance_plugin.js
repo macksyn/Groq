@@ -16,9 +16,9 @@ moment.tz.setDefault('Africa/Lagos');
 
 // ===== DEFAULT SETTINGS =====
 const defaultSettings = {
-  rewardAmount: 5,
+  rewardAmount: 500,
   requireImage: false,
-  imageRewardBonus: 2,
+  imageRewardBonus: 200,
   minFieldLength: 2,
   enableStreakBonus: true,
   streakBonusMultiplier: 1.5,
