@@ -664,11 +664,6 @@ class Connect4Manager {
 
     return { success: true, game, engine };
   }
-    const settings = this.getSettings();
-
-    if (!settings.enabled) {
-      return { error: '🚫 *Connect Four is currently disabled*' };
-    }
 
     if (isGroup && !settings.allowGroups) {
       return { error: '⚠️ *Group games are currently disabled*' };
