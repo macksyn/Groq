@@ -769,8 +769,7 @@ class Connect4Manager {
 
   findPlayerGame(playerId) {
     for (const game of this.activeGames.values()) {
-      if (game.status === 'active' && 
-          (game.player1.id === playerId || game.player2.id === playerId)) {
+      if (game.status === 'active' && (game.player1.id === playerId || game.player2.id === playerId)) {
         return game;
       }
     }
