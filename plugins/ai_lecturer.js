@@ -1,6 +1,7 @@
-// plugins/ai_lecturer.js - V4.0 Production Ready
+// plugins/ai_lecturer.js - V4.0 Production Ready (Fixed for Your Bot)
 import axios from 'axios';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
+import cron from 'node-cron';
 
 // ============================================================================
 // CONFIGURATION
@@ -10,9 +11,8 @@ const CONFIG = {
   API_URL: 'https://malvin-api.vercel.app/ai/gpt-5',
   API_TIMEOUT: 50000,
   DEFAULT_TIMEZONE: 'Africa/Lagos',
-  MAX_PARTS: 52, // 1 year of weekly lectures
+  MAX_PARTS: 52,
 
-  // Realistic typing simulation
   TYPING: {
     CHAR_MIN: 35,
     CHAR_MAX: 70,
@@ -21,13 +21,12 @@ const CONFIG = {
     REFRESH_INTERVAL: 2800
   },
 
-  // 10 Unique Lecturer Personalities
   LECTURERS: [
     {
       id: 'prof_alex',
       name: 'Prof. Alex Macksyn',
-      style: 'Street-smart Lagos prof',
-      prompt: 'You\'re Prof. Alex - cool Lagos lecturer. Use Nigerian vibes (NEPA, danfo, jollof debates). Fun but smart. Natural flow, 5-7 emojis. Bold key terms.'
+      style: 'Witty Lagos Academic prof',
+      prompt: 'You\'re Prof. Alex - mordern naija intellectual. Makes complex topic relatable with contemporary nigerian realities. Natural flow, 5-7 emojis. Bold key terms.'
     },
     {
       id: 'dr_evelyn',
@@ -87,6 +86,14 @@ const CONFIG = {
 };
 
 // ============================================================================
+// GLOBAL STATE FOR CRON JOBS
+// ============================================================================
+
+const activeCronJobs = new Map();
+let globalSock = null;
+let globalLogger = null;
+
+// ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
 
@@ -100,7 +107,7 @@ function calculateTypingTime(text) {
   const chars = text.length;
   const speed = CONFIG.TYPING.CHAR_MIN + Math.random() * (CONFIG.TYPING.CHAR_MAX - CONFIG.TYPING.CHAR_MIN);
   let duration = chars * speed;
-  duration += (Math.random() - 0.5) * duration * 0.3; // ±30% variation
+  duration += (Math.random() - 0.5) * duration * 0.3;
   return Math.max(1500, Math.min(12000, Math.round(duration)));
 }
 
@@ -136,7 +143,6 @@ async function simulateTyping(sock, jid, durationMs, logger) {
 function cleanResponse(text) {
   if (!text) return '';
 
-  // Remove AI meta-commentary patterns
   const patterns = [
     /^(here'?s?|here is|let me (give|provide|deliver)).*?(lecture|content)[:\s]*/gi,
     /^(i'll|i will|i can) (deliver|give|provide|teach).*?[:\s]*/gi,
@@ -158,7 +164,7 @@ function cleanResponse(text) {
   return cleaned
     .trim()
     .replace(/\n{3,}/g, '\n\n')
-    .replace(/^\s*[-•*]\s*/gm, ''); // Remove leading bullets
+    .replace(/^\s*[-•*]\s*/gm, '');
 }
 
 async function generateLecture(lecturer, prompt, logger) {
@@ -306,28 +312,78 @@ ${isFirst
 500-700 words. Series continuity. Teach Part ${schedule.part}.`;
 }
 
-async function runScheduledLecture(scheduleId, sock, logger) {
+// ============================================================================
+// CRON JOB MANAGEMENT
+// ============================================================================
+
+function registerCronJob(jobId, cronTime, handler, timezone = 'Africa/Lagos') {
+  try {
+    if (activeCronJobs.has(jobId)) {
+      globalLogger?.warn(`Cron job ${jobId} already exists, stopping old one`);
+      const oldJob = activeCronJobs.get(jobId);
+      oldJob.stop();
+    }
+
+    if (!cron.validate(cronTime)) {
+      throw new Error(`Invalid cron expression: ${cronTime}`);
+    }
+
+    const cronJob = cron.schedule(cronTime, handler, {
+      scheduled: true,
+      timezone: timezone
+    });
+
+    activeCronJobs.set(jobId, cronJob);
+    globalLogger?.info(`Registered cron job: ${jobId} (${cronTime})`);
+    return true;
+  } catch (error) {
+    globalLogger?.error({ err: error }, `Failed to register cron job: ${jobId}`);
+    return false;
+  }
+}
+
+function cancelCronJob(jobId) {
+  try {
+    if (activeCronJobs.has(jobId)) {
+      const cronJob = activeCronJobs.get(jobId);
+      cronJob.stop();
+      activeCronJobs.delete(jobId);
+      globalLogger?.info(`Cancelled cron job: ${jobId}`);
+      return true;
+    }
+    globalLogger?.warn(`Cron job not found: ${jobId}`);
+    return false;
+  } catch (error) {
+    globalLogger?.error({ err: error }, `Failed to cancel cron job: ${jobId}`);
+    return false;
+  }
+}
+
+// ============================================================================
+// SCHEDULED LECTURE EXECUTION
+// ============================================================================
+
+async function runScheduledLecture(scheduleId) {
   const db = await PluginHelpers.getDB();
 
   try {
     const schedule = await db.collection('lecture_schedules').findOne({ _id: scheduleId });
 
     if (!schedule) {
-      logger.error(`Schedule ${scheduleId} not found`);
+      globalLogger.error(`Schedule ${scheduleId} not found`);
       return;
     }
 
     if (schedule.part > CONFIG.MAX_PARTS) {
-      logger.warn(`${schedule.subject} completed all ${CONFIG.MAX_PARTS} parts`);
-      await sock.sendMessage(schedule.groupId, {
+      globalLogger.warn(`${schedule.subject} completed all ${CONFIG.MAX_PARTS} parts`);
+      await globalSock.sendMessage(schedule.groupId, {
         text: `🎓 *${schedule.subject}* series complete!\n\nAll ${CONFIG.MAX_PARTS} parts delivered. Course concluded. 🎉`
       });
       return;
     }
 
-    logger.info(`Running: ${schedule.subject} Part ${schedule.part}`);
+    globalLogger.info(`Running: ${schedule.subject} Part ${schedule.part}`);
 
-    // Get previous lecture summary if not first
     let previousSummary = null;
     if (schedule.part > 1) {
       const prev = await db.collection('lecture_history').findOne(
@@ -340,26 +396,22 @@ async function runScheduledLecture(scheduleId, sock, logger) {
     }
 
     const prompt = buildSeriesPrompt(schedule, schedule.part === 1, previousSummary);
-    const script = await generateLecture(schedule.lecturer, prompt, logger);
+    const script = await generateLecture(schedule.lecturer, prompt, globalLogger);
 
-    // Header
-    await sock.sendMessage(schedule.groupId, {
+    await globalSock.sendMessage(schedule.groupId, {
       text: `🎓 *${schedule.subject.toUpperCase()} - PART ${schedule.part}*\n\n*Professor:* ${schedule.lecturer.name}\n${'─'.repeat(35)}`
     });
 
-    // Deliver
-    await deliverScript(sock, schedule.groupId, script, logger);
+    await deliverScript(globalSock, schedule.groupId, script, globalLogger);
 
-    // Footer
     await sleep(2000);
     const nextPart = schedule.part + 1;
     const footer = nextPart <= CONFIG.MAX_PARTS
       ? `${'─'.repeat(35)}\n🎓 *END PART ${schedule.part}*\n\n_Part ${nextPart} next week. See you then!_`
       : `${'─'.repeat(35)}\n🎓 *FINAL LECTURE*\n\n_Series complete. Thank you!_`;
 
-    await sock.sendMessage(schedule.groupId, { text: footer });
+    await globalSock.sendMessage(schedule.groupId, { text: footer });
 
-    // Update database
     await db.collection('lecture_schedules').updateOne(
       { _id: scheduleId },
       {
@@ -370,7 +422,6 @@ async function runScheduledLecture(scheduleId, sock, logger) {
       }
     );
 
-    // Log history
     await db.collection('lecture_history').insertOne({
       scheduleId,
       part: schedule.part,
@@ -379,15 +430,15 @@ async function runScheduledLecture(scheduleId, sock, logger) {
       status: 'success'
     });
 
-    logger.info(`Delivered ${schedule.subject} Part ${schedule.part}`);
+    globalLogger.info(`Delivered ${schedule.subject} Part ${schedule.part}`);
 
   } catch (error) {
-    logger.error({ err: error, scheduleId }, 'Scheduled lecture failed');
+    globalLogger.error({ err: error, scheduleId }, 'Scheduled lecture failed');
 
     try {
       const schedule = await db.collection('lecture_schedules').findOne({ _id: scheduleId });
       if (schedule) {
-        await sock.sendMessage(schedule.groupId, {
+        await globalSock.sendMessage(schedule.groupId, {
           text: `❌ Lecture delivery error\n\n*${schedule.subject} Part ${schedule.part}*\n\n_Will retry next week._`
         });
 
@@ -400,7 +451,7 @@ async function runScheduledLecture(scheduleId, sock, logger) {
         });
       }
     } catch (notifyError) {
-      logger.error({ err: notifyError }, 'Error notification failed');
+      globalLogger.error({ err: notifyError }, 'Error notification failed');
     }
   }
 }
@@ -458,7 +509,7 @@ async function handleManualLecture(context) {
 }
 
 async function handleSchedule(context) {
-  const { msg, text, logger, helpers, sock } = context;
+  const { msg, text, logger, sock } = context;
   const db = await PluginHelpers.getDB();
 
   try {
@@ -514,10 +565,10 @@ async function handleSchedule(context) {
     const jobId = getJobId(scheduleId);
 
     try {
-      const success = helpers.registerCronJob(
+      const success = registerCronJob(
         jobId,
         cronTime,
-        () => runScheduledLecture(scheduleId, sock, logger),
+        () => runScheduledLecture(scheduleId),
         timezone
       );
 
@@ -590,7 +641,7 @@ async function handleList(context) {
 }
 
 async function handleCancel(context) {
-  const { msg, text, logger, helpers } = context;
+  const { msg, text, logger } = context;
   const db = await PluginHelpers.getDB();
 
   if (!text) {
@@ -612,7 +663,7 @@ async function handleCancel(context) {
     }
 
     const jobId = getJobId(schedule._id);
-    helpers.cancelCronJob(jobId);
+    cancelCronJob(jobId);
 
     await db.collection('lecture_schedules').deleteOne({ _id: schedule._id });
     await db.collection('lecture_history').deleteMany({ scheduleId: schedule._id });
@@ -699,7 +750,7 @@ export default {
   name: 'AI Lecturer',
   description: 'Production-ready AI lecture system with 10 unique personalities',
   category: 'education',
-  version: '4.0.0',
+  version: '4.0.1',
   author: 'Claude + Malvin',
 
   commands: ['lecture', 'schedule', 'lectures', 'cancel', 'history'],
@@ -740,8 +791,11 @@ export default {
   },
 
   async onLoad(context) {
-    const { sock, logger, helpers } = context;
+    const { sock, logger } = context;
     const db = await PluginHelpers.getDB();
+
+    globalSock = sock;
+    globalLogger = logger;
 
     logger.info('AI Lecturer v4: Initializing...');
 
@@ -765,10 +819,10 @@ export default {
           const cronTime = getCronTime(schedule.time, schedule.dayOfWeek);
           const jobId = getJobId(schedule._id);
 
-          const success = helpers.registerCronJob(
+          const success = registerCronJob(
             jobId,
             cronTime,
-            () => runScheduledLecture(schedule._id, sock, logger),
+            () => runScheduledLecture(schedule._id),
             schedule.timezone
           );
 
