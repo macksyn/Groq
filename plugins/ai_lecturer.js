@@ -1,4 +1,4 @@
-// plugins/ai_lecturer.js - V3.3 Plugin (Multi-Persona, Improved Prompts & Natural Typing)
+// plugins/ai_lecturer.js - V3.4 Plugin (Optimized Prompts for GET API)
 import axios from 'axios';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
 
@@ -17,47 +17,47 @@ const CONFIG = {
   PRIMARY_API_TIMEOUT: 60000,
   FALLBACK_API_TIMEOUT: 60000,
 
-  // --- NEW: LECTURER PERSONAS ---
+  // --- LECTURER PERSONAS WITH OPTIMIZED PROMPTS ---
   LECTURERS: [
     {
       name: "Prof. Alex Macksyn",
-      style: "The fun, accessible OG professor. Makes complex topics fun with Nigerian examples, street urban slang, and a conversational, engaging tone. The default 'Gist HQ' style."
+      systemPrompt: "You're Prof. Alex - the OG Gist HQ professor. Drop knowledge like gist: fun, relatable, street-smart. Use Nigerian examples (NEPA, traffic, naira), sprinkle local slang naturally. Break every 2-3 sentences. Bold key terms. 5-7 emojis."
     },
     {
       name: "Dr. Evelyn Hayes",
-      style: "A sharp, insightful, slightly formal British academic. Loves data and clear examples. Speaks with fancy english and precision. Uses phrases like 'Right then, let's unpack this,' and 'Quite interesting, isn't it?'"
+      systemPrompt: "You're Dr. Hayes - sharp British academic. Precise, data-driven, sophisticated English. 'Right then, let's unpack this.' Use clear structure, cite examples. Professional but engaging. Break every 2-3 sentences. Bold terms. 4-6 emojis."
     },
     {
       name: "Sir M.A Adegoke",
-      style: "The wise, storytelling elder. Uses proverbs and real-life Nigerian parables. Very warm and patient. Uses phrases like 'My children, let me tell you...' and 'You see, it is like the tortoise who...'"
+      systemPrompt: "You're Sir Adegoke - wise elder storyteller. 'My children, let me tell you...' Use proverbs, parables from Nigerian culture. Warm, patient, teach through stories. Like tortoise wisdom. Break every 2-3 sentences. Bold terms. 5-7 emojis."
     },
     {
       name: "Ada 'The Coder' Eze",
-      style: "A young, fast-talking tech sis. Energetic, uses modern slang (it's giving, periodt, bet), and relates everything to tech, startups, and 'the new new'. Very forward-thinking."
+      systemPrompt: "You're Ada - tech sis with energy! Modern slang (it's giving, periodt, bet), relate to tech/startups. Fast-talking, forward-thinking. Drop gems about 'the new new'. Break every 2-3 sentences. Bold terms. 6-8 emojis."
     },
     {
       name: "Mr. Garba",
-      style: "A calm, patient, and methodical teacher from the North. Very clear, step-by-step, and encouraging. Uses simple language and ensures everyone is following. 'Slowly, slowly. We will understand it together.'"
+      systemPrompt: "You're Mr. Garba - calm Northern teacher. 'Slowly, slowly. We understand together.' Patient, methodical, step-by-step. Simple language, ensure clarity. Encouraging tone. Break every 2-3 sentences. Bold terms. 4-6 emojis."
     },
     {
       name: "Dr. Funke Alabi",
-      style: "The 'Lagos Big Aunty.' Sophisticated, sharp, and no-nonsense, but also very caring. Expects the best. Uses phrases like 'My dear, you must sit up!' and 'This is not play. Focus.'"
+      systemPrompt: "You're Dr. Funke - Lagos Big Aunty. 'My dear, sit up! This is not play. Focus.' Sophisticated, sharp, no-nonsense but caring. High expectations. Break every 2-3 sentences. Bold terms. 5-7 emojis."
     },
     {
       name: "Chike 'The Analyst'",
-      style: "A data-driven, straight-to-the-point guy. Loves numbers, charts, and practical, actionable insights. No fluff. Uses phrases like 'The data says...' and 'Let's look at the bottom line.'"
+      systemPrompt: "You're Chike - data guy. 'The data says...' 'Bottom line is...' Numbers, charts, actionable insights. Zero fluff. Straight facts. Practical application. Break every 2-3 sentences. Bold terms. 3-5 emojis."
     },
     {
       name: "Prof. (Mrs.) Okon",
-      style: "The classic, stern, highly-respected 'Mama' professor. Encyclopedic knowledge. Authoritative and formal. You don't mess around in her class. 'Open your notes. We begin.' 'Is that clear?'"
+      systemPrompt: "You're Prof. Okon - stern Mama professor. 'Open your notes. We begin.' Authoritative, formal, encyclopedic knowledge. Respected elder. No games. 'Is that clear?' Break every 2-3 sentences. Bold terms. 3-5 emojis."
     },
     {
       name: "Mr Jide",
-      style: "The relatable 'street-smart' lecturer. Connects complex topics to everyday hustle, business, and street sense. Very practical. Uses pidgin naturally. 'See ehn, e get as e be. Make I burst your brain...'"
+      systemPrompt: "You're Mr Jide - street-smart hustler prof. 'See ehn, e get as e be. Make I burst your brain...' Connect topics to hustle, business, street sense. Use pidgin naturally. Break every 2-3 sentences. Bold terms. 6-8 emojis."
     },
     {
       name: "Sister Grace",
-      style: "A very calm, almost philosophical lecturer. Speaks softly, uses metaphors, and encourages deep thinking and reflection. 'Now, let's pause and reflect on that.' 'What if we look at it from another perspective?'"
+      systemPrompt: "You're Sister Grace - philosophical soul. 'Let's pause and reflect...' 'Another perspective...' Calm, metaphorical, deep thinking. Soft wisdom, encourage reflection. Break every 2-3 sentences. Bold terms. 4-6 emojis."
     }
   ]
 };
@@ -67,7 +67,7 @@ const CONFIG = {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * NEW: Selects a random lecturer from the CONFIG list
+ * Selects a random lecturer from the CONFIG list
  */
 function getRandomLecturer() {
   const lecturers = CONFIG.LECTURERS;
@@ -92,7 +92,7 @@ async function ensureIndexes(db, logger) {
     await db.collection('lecture_schedules').createIndex({ groupId: 1 });
     await db.collection('lecture_history').createIndex({ scheduleId: 1, deliveredAt: -1 });
 
-    // NEW: Indexes for lecture summaries and engagement
+    // Indexes for lecture summaries and engagement
     await db.collection('lecture_summaries').createIndex({ scheduleId: 1, part: 1 });
     await db.collection('lecture_engagement').createIndex({ scheduleId: 1 });
 
@@ -114,7 +114,7 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
   const primaryApiUrl = 'https://malvin-api.vercel.app/ai/gpt-5';
 
   // For GET API: Combine into single concise prompt
-  const shortPrompt = `${systemPrompt}\n\nWrite the lecture.`;
+  const shortPrompt = `${systemPrompt}\n\n${userPrompt}`;
 
   try {
     logger.info('AI Lecturer: Trying primary API (gpt-5)...');
@@ -127,7 +127,7 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
 
     const result = response.data?.response || response.data?.result || response.data?.answer;
     if (result && typeof result === 'string' && result.trim().length > 0) {
-      lectureContent = cleanAIResponse(result.trim()); // ✅ CLEAN THE RESPONSE
+      lectureContent = cleanAIResponse(result.trim());
       generatedBy = 'GPT-5 (Primary)';
       logger.info('AI Lecturer: Primary API succeeded');
       return { lectureContent, generatedBy };
@@ -176,7 +176,7 @@ async function generateLecture(systemPrompt, userPrompt, logger) {
         throw new Error('Groq fallback returned empty content');
       }
 
-      lectureContent = cleanAIResponse(groqResult); // ✅ CLEAN THE RESPONSE
+      lectureContent = cleanAIResponse(groqResult);
       generatedBy = 'Groq AI (Fallback)';
       logger.info('AI Lecturer: Fallback API succeeded');
       return { lectureContent, generatedBy };
@@ -213,7 +213,7 @@ function cleanAIResponse(text) {
     /let me know if you need[:\s]*/gi,
     /\*\*note:?\*\*[^\n]*/gi,
     /\*\*disclaimer:?\*\*[^\n]*/gi,
-    ...lecturerPatterns // Add the new dynamic patterns
+    ...lecturerPatterns
   ];
 
   let cleaned = text;
@@ -233,23 +233,23 @@ function cleanAIResponse(text) {
 }
 
 /**
- * NEW: Enhance prompt with additional details for Groq (POST API)
+ * Enhance prompt with additional details for Groq (POST API can handle more)
  */
 function enhancePromptForGroq(shortPrompt) {
-  // Add more detailed instructions since POST has no length limit
   return `${shortPrompt}
 
-ADDITIONAL DETAILS:
-- Write in natural, flowing sentences
-- Include concrete examples from Nigerian life
-- Make it engaging and memorable
-- Use proper formatting: *bold* for terms, line breaks for readability
-- Balance education with entertainment
-- End with actionable takeaway`;
+QUALITY GUIDELINES:
+• Natural, flowing sentences with personality
+• 2+ concrete Nigerian examples (NEPA, traffic, markets, naira, etc.)
+• Engaging and memorable delivery
+• Proper formatting: *bold* for key terms, line breaks for readability
+• Balance education with entertainment
+• Clear, actionable takeaway at the end
+• Ensure continuity if part of a series (reference previous concepts)`;
 }
 
 /**
- * NEW: Realistic typing simulation that maintains typing indicator
+ * Realistic typing simulation that maintains typing indicator
  * throughout the entire typing duration
  */
 async function simulateTyping(sock, jid, durationMs, logger) {
@@ -280,7 +280,7 @@ async function simulateTyping(sock, jid, durationMs, logger) {
 }
 
 /**
- * NEW: Calculate realistic typing duration based on sentence length
+ * Calculate realistic typing duration based on sentence length
  */
 function calculateTypingDuration(sentence) {
   const charCount = sentence.length;
@@ -303,7 +303,7 @@ function calculateTypingDuration(sentence) {
 }
 
 /**
- * NEW: Calculate natural pause between sentences
+ * Calculate natural pause between sentences
  */
 function calculatePauseDuration() {
   const minPause = CONFIG.PAUSE_BETWEEN_SENTENCES_MIN;
@@ -316,7 +316,7 @@ function calculatePauseDuration() {
 }
 
 /**
- * IMPROVED: Delivers the lecture with realistic human-like typing
+ * Delivers the lecture with realistic human-like typing
  */
 async function deliverLectureScript(sock, jid, lectureText, logger) {
   // Split into sentences
@@ -549,110 +549,59 @@ async function getEngagementLevel(db, scheduleId) {
 }
 
 /**
- * Build SHORT prompt for GET API (under 800 chars)
+ * Build OPTIMIZED SHORT prompt for GET API (under 500 chars)
  */
 function buildManualLecturePrompt(topic, lecturer) {
-  // Use Prof. AB as a fallback if no lecturer is provided
   if (!lecturer) {
-    lecturer = CONFIG.LECTURERS[0]; // Prof. AB
+    lecturer = CONFIG.LECTURERS[0];
   }
 
-  return `You are ${lecturer.name}, a world-class professor lecturing "Gist HQ" - smart Nigerian whatsapp group.
+  return `${lecturer.systemPrompt}
 
-YOUR STYLE: ${lecturer.style}
+Topic: ${topic}
 
-Write a lecture on: ${topic}
+Structure: Hook (grab attention) → Define (what + why matters + Nigerian example) → 5 Points (explain→example→insight) → Apply (practical use) → Takeaway (memorable end)
 
-STRUCTURE:
-🎯 Hook (2-3 sentences - grab attention)
-📚 Setup (define concept + why it matters + Nigerian example)
-💡 5 Main Points (each: explain → example → insight)
-🔧 Practical Application (How they can apply the knowledge)
-🎬 Conclusion (memorable takeaway)
-
-STYLE: Break text every 2-3 sentences with proper use of paragraphs, Include 2+ local examples. 5-7 emojis. Bold key terms. 800-900 words. Start the lecture *immediately*. Do not write "Here is the lecture" or any other intro phrase. Just begin with the first sentence of the lecture content.`;
+800-900 words. Start lecture NOW. No meta-talk.`;
 }
 
 
 /**
- * Build SHORT prompt for series lectures (GET API compatible)
+ * Build OPTIMIZED SHORT prompt for series lectures (GET API compatible)
  */
 function buildSeriesLecturePrompt(schedule, context) {
-  const isFirstLecture = schedule.part === 1;
-  const prevSummary = context.hasPrevious ? context.summary.substring(0, 100) : "First lecture";
+  const lecturer = schedule.lecturer || CONFIG.LECTURERS[0];
+  const isFirst = schedule.part === 1;
   const engagement = context.engagement || 'standard';
 
-  // --- NEW: Get lecturer from schedule, fallback to Prof. AB ---
-  const lecturer = schedule.lecturer || CONFIG.LECTURERS[0];
-  // ---
-
-  let prompt = `You are ${lecturer.name} delivering Part ${schedule.part} of "${schedule.subject}" to Gist HQ WhatsApp group.
-
-YOUR STYLE: ${lecturer.style}
-
-SERIES CONTEXT:
-- This is Part ${schedule.part} of up to ${CONFIG.MAX_LECTURE_PARTS} parts
-- Previous coverage: ${prevSummary}
-- Audience engagement: ${engagementLevel}
-${context.keyPoints.length > 0 ? `- Key points from last lecture: ${context.keyPoints.join('; ')}` : ''}
-
-`;
-
-  if (isFirstLecture) {
-    prompt += `PART 1 STRUCTURE:
-  🎓 **WELCOME** (20-30 words)
-  Exciting intro to the series - what they'll learn over the coming weeks
-
-  `;
-  } else {
-    prompt += `CONTINUITY:
-  🔄 **QUICK RECAP** (25-30 words)
-  "Last week: [X]. Today: [Y]. Let's go deeper..."
-  Reference at least one specific concept from previous lecture.
-
-  `;
+  // Build context snippet (keep very short)
+  let contextSnippet = '';
+  if (!isFirst && context.hasPrevious) {
+    const lastPoints = context.keyPoints.slice(0, 2).join('; ');
+    contextSnippet = `Last: ${lastPoints || context.summary.substring(0, 80)}. `;
   }
 
-`🎯 TODAY'S FOCUS (30 words): What Part ${schedule.part} covers
+  // Engagement modifier
+  let engagementMod = '';
+  if (engagement === 'low') engagementMod = 'Bigger hook, simpler. ';
+  if (engagement === 'high') engagementMod = 'Go deeper, advanced. ';
 
-📚 TEACHING (400 words in 3 sections):
-1. Primary Concept (explain → Nigerian example → insight)
-2. Secondary Concept (connects to #1 → different example)
-3. Synthesis (how it fits → real application)
+  // Part progression modifier
+  let progressMod = '';
+  if (schedule.part <= 3) progressMod = 'Foundation level.';
+  else if (schedule.part <= 7) progressMod = 'Intermediate level.';
+  else progressMod = 'Advanced level.';
 
-💭 DISCUSSION (30 words): Thought question
-🔮 PREVIEW (30 words): Tease Part ${schedule.part + 1}
-🎓 TAKEAWAY (20 words): Memorable summary
+  return `${lecturer.systemPrompt}
 
-STYLE: Break every 2-3 sentences. Nigerian context (NEPA, traffic, naira). 5-8 emojis. *Bold* key terms. "Abi?" "Sha" naturally.`;
+Part ${schedule.part} of "${schedule.subject}" series. ${contextSnippet}${engagementMod}${progressMod}
 
-  // Add engagement adjustments
-  if (engagement === 'low') {
-    prompt += `\n\nBOOST: Bigger hook, more examples, simpler concepts.`;
-  } else if (engagement === 'high') {
-    prompt += `\n\nLEVEL UP: Go deeper, add advanced concepts.`;
-  }
+${isFirst ? 
+  'Structure: Welcome (intro series, what they\'ll learn) → Focus (today\'s topic) → Teach (3 concepts: explain→example→insight) → Question (thought) → Preview (next) → Takeaway' :
+  'Structure: Recap (30 words: last week→today) → Focus (what Part ' + schedule.part + ' covers) → Teach (3 concepts: explain→example→insight) → Question (thought) → Preview (Part ' + (schedule.part + 1) + ') → Takeaway'
+}
 
-  // Add progression
-  if (schedule.part <= 3) {
-    prompt += ` Foundation phase - accessible.`;
-  } else if (schedule.part <= 7) {
-    prompt += ` Growth phase - more complexity.`;
-  } else {
-    prompt += ` Mastery phase - advanced insights.`;
-  }
-
-    prompt += `QUALITY CHECK:
-  [ ] Someone who missed last week can still follow
-  [ ] Loyal attendees feel rewarded for consistency
-  [ ] Clearly advances beyond previous lectures
-  [ ] Creates anticipation for next week
-  [ ] Includes 2+ Nigerian-specific examples
-  [ ] Ends with clear, memorable takeaway
-
-  Write Part ${schedule.part} of "${schedule.subject}" following this structure exactly.`;
-
-  return prompt;
+500 words. Continuity matters. Write NOW.`;
 }
 
 /**
@@ -693,14 +642,14 @@ async function runScheduledLecture(scheduleId, sock, logger) {
 
     // Build improved prompt with context
     const systemPrompt = buildSeriesLecturePrompt(schedule, context);
-    const userPrompt = `Write Part ${schedule.part} of the ${schedule.subject} lecture series.`;
+    const userPrompt = `Write Part ${schedule.part}.`;
 
     // Generate lecture script
     const { lectureContent, generatedBy } = await generateLecture(systemPrompt, userPrompt, logger);
     if (!lectureContent) throw new Error('AI returned empty script');
 
-    // --- NEW: Get lecturer name for header ---
-    const lecturerName = schedule.lecturer?.name || "Prof. AB"; // Fallback
+    // Get lecturer name for header
+    const lecturerName = schedule.lecturer?.name || "Prof. Alex Macksyn";
 
     // Send header
     const header = `🎓 *AI LECTURE: PART ${schedule.part}* 🎓\n\n` +
@@ -804,20 +753,20 @@ async function handleManualLecture(context) {
     return;
   }
 
-  // --- NEW: Get random lecturer ---
+  // Get random lecturer
   const lecturer = getRandomLecturer();
-  // ---
 
   await msg.react('🧠');
   const loadingMsg = await msg.reply(
     `🧠 *Preparing your lecture...*\n\n` +
-    `*Topic:* ${topic}\n\n` +
-    `*Professor:* ${lecturer.name} is writing the full script..._` // Updated
+    `*Topic:* ${topic}\n` +
+    `*Professor:* ${lecturer.name}\n\n` +
+    `_Writing the full script..._`
   );
 
   // Use improved prompt with the selected lecturer
-  const systemPrompt = buildManualLecturePrompt(topic, lecturer); // Updated
-  const userPrompt = `Write a comprehensive lecture on: ${topic}`;
+  const systemPrompt = buildManualLecturePrompt(topic, lecturer);
+  const userPrompt = `Write lecture.`;
 
   try {
     const { lectureContent, generatedBy } = await generateLecture(systemPrompt, userPrompt, logger);
@@ -825,7 +774,7 @@ async function handleManualLecture(context) {
 
     const header = `🎓 *GHQ LECTURE: STARTING* 🎓\n\n` +
                      `*Topic:* ${topic}\n` +
-                     `*Professor:* ${lecturer.name}\n` + // Updated
+                     `*Professor:* ${lecturer.name}\n` +
                      `-----------------------------------`;
     await sock.sendMessage(msg.from, { text: header, edit: loadingMsg.key });
     await msg.react('✅');
@@ -871,9 +820,8 @@ async function handleScheduleLecture(context) {
     const { dayOfWeek, time, timezone } = parseSchedule(dayStr, timeStr, tzStr);
     const cronTime = getCronTime(time, dayOfWeek);
 
-    // --- NEW: Assign a random lecturer for the entire series ---
+    // Assign a random lecturer for the entire series
     const seriesLecturer = getRandomLecturer();
-    // ---
 
     // Prepare schedule document
     const newSchedule = {
@@ -883,7 +831,7 @@ async function handleScheduleLecture(context) {
       time: time,
       timezone: timezone,
       part: 1,
-      lecturer: seriesLecturer, // NEW: Store the lecturer
+      lecturer: seriesLecturer,
       lastDeliveredTimestamp: null,
       scheduledBy: msg.sender,
       createdAt: new Date()
@@ -925,7 +873,7 @@ async function handleScheduleLecture(context) {
     await msg.reply(
       `✅ *Lecture Scheduled Successfully!*\n\n` +
       `*Subject:* ${subject}\n` +
-      `*Professor:* ${seriesLecturer.name}\n` + // NEW: Announce the professor
+      `*Professor:* ${seriesLecturer.name}\n` +
       `*Schedule:* Every ${dayName} at ${time}\n` +
       `*Timezone:* ${timezone}\n` +
       `*Cron Pattern:* \`${cronTime}\`\n` +
@@ -980,12 +928,12 @@ async function handleListLectures(context) {
         ? new Date(s.lastDeliveredTimestamp).toLocaleString('en-GB', { timeZone: s.timezone })
         : 'Never';
 
-      const lecturerName = s.lecturer?.name || "Prof. AB"; // Show lecturer
+      const lecturerName = s.lecturer?.name || "Prof. Alex Macksyn";
       const progress = `${s.part - 1}/${CONFIG.MAX_LECTURE_PARTS}`;
 
       reply += `\n-----------------------------------\n` +
                `*${s.subject}*\n` +
-               `├ Professor: ${lecturerName}\n` + // Added
+               `├ Professor: ${lecturerName}\n` +
                `├ Next Part: ${s.part}\n` +
                `├ Progress: ${progress} completed\n` +
                `├ Schedule: ${dayName} @ ${s.time}\n` +
@@ -1037,11 +985,10 @@ async function handleCancelLecture(context) {
     // Delete from database
     const dbResult = await db.collection('lecture_schedules').deleteOne({ _id: schedule._id });
 
-    // NEW: Clean up related data (history, summaries, engagement)
+    // Clean up related data (history, summaries, engagement)
     await db.collection('lecture_history').deleteMany({ scheduleId: schedule._id });
     await db.collection('lecture_summaries').deleteMany({ scheduleId: schedule._id });
     await db.collection('lecture_engagement').deleteOne({ scheduleId: schedule._id });
-    // ---
 
     if (dbResult.deletedCount === 0) {
       logger.warn(`Cron job ${jobId} cancelled but DB delete failed`);
@@ -1104,7 +1051,7 @@ async function handleLectureHistory(context) {
       return;
     }
 
-    const lecturerName = schedule.lecturer?.name || "Prof. AB";
+    const lecturerName = schedule.lecturer?.name || "Prof. Alex Macksyn";
 
     let reply = `📜 *Lecture History: ${subject}*\n` +
                 `*Professor:* ${lecturerName}\n` +
@@ -1137,8 +1084,8 @@ export default {
   name: 'AI Lecturer (v3)',
   description: 'AI-powered course manager with manual lectures and automated weekly schedules.',
   category: 'ai',
-  version: '3.3.0', // Updated version
-  author: 'Gemini + Claude + Malvin', // Updated author
+  version: '3.4.0', // Optimized prompts for GET API
+  author: 'Gemini + Claude + Malvin',
 
   commands: ['lecture', 'teach', 'schedule-lecture', 'list-lectures', 'cancel-lecture', 'lecture-history'],
   aliases: ['ai-lecture', 'ai-teach', 'schedule-class', 'list-classes', 'cancel-class', 'lecture-log'],
@@ -1250,12 +1197,12 @@ export default {
           registeredJobs.add(jobId);
           successCount++;
 
-          const lecturerName = schedule.lecturer?.name || "Prof. AB";
+          const lecturerName = schedule.lecturer?.name || "Prof. Alex Macksyn";
 
           logger.info({
             jobId,
             subject: schedule.subject,
-            professor: lecturerName, // Added
+            professor: lecturerName,
             groupId: schedule.groupId,
             cronTime,
             timezone: schedule.timezone
