@@ -29,7 +29,7 @@ export default {
 
     // Permission check (owner or admin) - retain original logic for flexibility
     const isOwner = PermissionHelpers.isOwner(m.sender, config.OWNER_NUMBER + '@s.whatsapp.net');
-    let isAdmin = false;
+    let isAdmin = true;
 
     try {
       const admins = await getAdmins();
