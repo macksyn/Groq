@@ -1,857 +1,518 @@
-// plugins/ai_lecturer.js - V3.4 Plugin (Optimized Prompts for GET API)
+// plugins/ai_lecturer.js - V4.0 Production Ready
 import axios from 'axios';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
 
-// --- CONFIGURATION ---
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+
 const CONFIG = {
+  API_URL: 'https://malvin-api.vercel.app/ai/gpt-5',
+  API_TIMEOUT: 50000,
   DEFAULT_TIMEZONE: 'Africa/Lagos',
-  MAX_LECTURE_PARTS: 52, // Maximum 52 parts (1 year of weekly lectures)
+  MAX_PARTS: 52, // 1 year of weekly lectures
 
-  // REALISTIC TYPING SIMULATION
-  TYPING_SPEED_MIN: 40,    // Minimum ms per character (fast typer)
-  TYPING_SPEED_MAX: 80,    // Maximum ms per character (normal typer)
-  TYPING_REFRESH_INTERVAL: 3000, // Refresh typing indicator every 3s
-  PAUSE_BETWEEN_SENTENCES_MIN: 1500, // 1.5s pause after sentence
-  PAUSE_BETWEEN_SENTENCES_MAX: 3000, // 3s pause after sentence
+  // Realistic typing simulation
+  TYPING: {
+    CHAR_MIN: 35,
+    CHAR_MAX: 70,
+    SENTENCE_PAUSE_MIN: 1200,
+    SENTENCE_PAUSE_MAX: 2500,
+    REFRESH_INTERVAL: 2800
+  },
 
-  PRIMARY_API_TIMEOUT: 60000,
-  FALLBACK_API_TIMEOUT: 60000,
-
-  // --- LECTURER PERSONAS WITH OPTIMIZED PROMPTS ---
+  // 10 Unique Lecturer Personalities
   LECTURERS: [
     {
-      name: "Prof. Alex Macksyn",
-      systemPrompt: "You're Prof. Alex - the OG Gist HQ professor. Drop knowledge like gist: fun, relatable, street-smart. Use Nigerian examples (NEPA, traffic, naira), sprinkle local slang naturally. Break every 2-3 sentences. Bold key terms. 5-7 emojis."
+      id: 'prof_alex',
+      name: 'Prof. Alex Macksyn',
+      style: 'Street-smart Lagos prof',
+      prompt: 'You\'re Prof. Alex - cool Lagos lecturer. Use Nigerian vibes (NEPA, danfo, jollof debates). Fun but smart. Natural flow, 5-7 emojis. Bold key terms.'
     },
     {
-      name: "Dr. Evelyn Hayes",
-      systemPrompt: "You're Dr. Hayes - sharp British academic. Precise, data-driven, sophisticated English. 'Right then, let's unpack this.' Use clear structure, cite examples. Professional but engaging. Break every 2-3 sentences. Bold terms. 4-6 emojis."
+      id: 'dr_evelyn',
+      name: 'Dr. Evelyn Hayes',
+      style: 'British academic',
+      prompt: 'You\'re Dr. Hayes - sharp British scholar. "Right then..." Precise, data-first, sophisticated. Examples + evidence. 4-6 emojis. Bold key terms.'
     },
     {
-      name: "Sir M.A Adegoke",
-      systemPrompt: "You're Sir Adegoke - wise elder storyteller. 'My children, let me tell you...' Use proverbs, parables from Nigerian culture. Warm, patient, teach through stories. Like tortoise wisdom. Break every 2-3 sentences. Bold terms. 5-7 emojis."
+      id: 'sir_adegoke',
+      name: 'Baba Adegoke',
+      style: 'Elder storyteller',
+      prompt: 'You\'re Baba Adegoke - wise elder. "My children..." Use proverbs, Nigerian folk wisdom. Stories teach lessons. Warm grandpa vibes. 5-7 emojis. Bold terms.'
     },
     {
-      name: "Ada 'The Coder' Eze",
-      systemPrompt: "You're Ada - tech sis with energy! Modern slang (it's giving, periodt, bet), relate to tech/startups. Fast-talking, forward-thinking. Drop gems about 'the new new'. Break every 2-3 sentences. Bold terms. 6-8 emojis."
+      id: 'ada_coder',
+      name: 'Ada "Tech Sis" Eze',
+      style: 'Gen-Z tech enthusiast',
+      prompt: 'You\'re Ada - young tech sis! Modern slang (no cap, it\'s giving, slay). Link to startups/crypto/AI. High energy! 6-9 emojis. Bold terms.'
     },
     {
-      name: "Mr. Garba",
-      systemPrompt: "You're Mr. Garba - calm Northern teacher. 'Slowly, slowly. We understand together.' Patient, methodical, step-by-step. Simple language, ensure clarity. Encouraging tone. Break every 2-3 sentences. Bold terms. 4-6 emojis."
+      id: 'mr_garba',
+      name: 'Mallam Garba',
+      style: 'Patient Northern teacher',
+      prompt: 'You\'re Mallam Garba - calm Northern teacher. "Slowly, let us understand..." Patient, step-by-step. Simple clarity. Encouraging. 4-6 emojis. Bold terms.'
     },
     {
-      name: "Dr. Funke Alabi",
-      systemPrompt: "You're Dr. Funke - Lagos Big Aunty. 'My dear, sit up! This is not play. Focus.' Sophisticated, sharp, no-nonsense but caring. High expectations. Break every 2-3 sentences. Bold terms. 5-7 emojis."
+      id: 'dr_funke',
+      name: 'Dr. Funke Alabi',
+      style: 'No-nonsense Lagos aunty',
+      prompt: 'You\'re Dr. Funke - Lagos Big Aunty. "Sit up! This is serious." Sharp, sophisticated, high standards. Tough love. 5-7 emojis. Bold terms.'
     },
     {
-      name: "Chike 'The Analyst'",
-      systemPrompt: "You're Chike - data guy. 'The data says...' 'Bottom line is...' Numbers, charts, actionable insights. Zero fluff. Straight facts. Practical application. Break every 2-3 sentences. Bold terms. 3-5 emojis."
+      id: 'chike_analyst',
+      name: 'Chike "Numbers Guy"',
+      style: 'Data-driven analyst',
+      prompt: 'You\'re Chike - data analyst. "The numbers show..." Facts, stats, bottom line. Zero fluff. Actionable insights. 3-5 emojis. Bold terms.'
     },
     {
-      name: "Prof. (Mrs.) Okon",
-      systemPrompt: "You're Prof. Okon - stern Mama professor. 'Open your notes. We begin.' Authoritative, formal, encyclopedic knowledge. Respected elder. No games. 'Is that clear?' Break every 2-3 sentences. Bold terms. 3-5 emojis."
+      id: 'prof_okon',
+      name: 'Prof. (Mrs.) Okon',
+      style: 'Strict academic',
+      prompt: 'You\'re Prof. Okon - strict professor. "Open your books." Formal, authoritative, encyclopedic. Respected elder. "Is that clear?" 3-5 emojis. Bold terms.'
     },
     {
-      name: "Mr Jide",
-      systemPrompt: "You're Mr Jide - street-smart hustler prof. 'See ehn, e get as e be. Make I burst your brain...' Connect topics to hustle, business, street sense. Use pidgin naturally. Break every 2-3 sentences. Bold terms. 6-8 emojis."
+      id: 'uncle_jide',
+      name: 'Uncle Jide',
+      style: 'Street hustler philosopher',
+      prompt: 'You\'re Uncle Jide - street philosopher. "See ehn..." Use pidgin naturally. Link to hustle/business. Smart but street. 6-8 emojis. Bold terms.'
     },
     {
-      name: "Sister Grace",
-      systemPrompt: "You're Sister Grace - philosophical soul. 'Let's pause and reflect...' 'Another perspective...' Calm, metaphorical, deep thinking. Soft wisdom, encourage reflection. Break every 2-3 sentences. Bold terms. 4-6 emojis."
+      id: 'sister_grace',
+      name: 'Sister Grace',
+      style: 'Reflective thinker',
+      prompt: 'You\'re Sister Grace - deep thinker. "Let\'s reflect..." Philosophical, metaphors, multiple angles. Calm wisdom. 4-6 emojis. Bold terms.'
     }
   ]
 };
 
-// --- HELPER FUNCTIONS ---
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * Selects a random lecturer from the CONFIG list
- */
-function getRandomLecturer() {
-  const lecturers = CONFIG.LECTURERS;
-  const randomIndex = Math.floor(Math.random() * lecturers.length);
-  return lecturers[randomIndex];
+function randomLecturer() {
+  return CONFIG.LECTURERS[Math.floor(Math.random() * CONFIG.LECTURERS.length)];
 }
 
-
-/**
- * Ensures database indexes are created
- */
-async function ensureIndexes(db, logger) {
-  try {
-    await db.collection('lecture_schedules').createIndex(
-      { groupId: 1, subject: 1 },
-      {
-        unique: true,
-        collation: { locale: 'en', strength: 2 },
-        name: 'unique_group_subject'
-      }
-    );
-    await db.collection('lecture_schedules').createIndex({ groupId: 1 });
-    await db.collection('lecture_history').createIndex({ scheduleId: 1, deliveredAt: -1 });
-
-    // Indexes for lecture summaries and engagement
-    await db.collection('lecture_summaries').createIndex({ scheduleId: 1, part: 1 });
-    await db.collection('lecture_engagement').createIndex({ scheduleId: 1 });
-
-    logger.info('AI Lecturer: Database indexes ensured');
-  } catch (error) {
-    logger.warn(error, 'AI Lecturer: Failed to create indexes (may already exist)');
-  }
+function calculateTypingTime(text) {
+  const chars = text.length;
+  const speed = CONFIG.TYPING.CHAR_MIN + Math.random() * (CONFIG.TYPING.CHAR_MAX - CONFIG.TYPING.CHAR_MIN);
+  let duration = chars * speed;
+  duration += (Math.random() - 0.5) * duration * 0.3; // ±30% variation
+  return Math.max(1500, Math.min(12000, Math.round(duration)));
 }
 
-/**
- * Generates the lecture content from an AI provider.
- * Uses SHORT prompts for GET API, detailed for POST API
- */
-async function generateLecture(systemPrompt, userPrompt, logger) {
-  let lectureContent = null;
-  let generatedBy = 'AI';
-
-  // --- Try Primary API (GPT-5) with SHORT prompt ---
-  const primaryApiUrl = 'https://malvin-api.vercel.app/ai/gpt-5';
-
-  // For GET API: Combine into single concise prompt
-  const shortPrompt = `${systemPrompt}\n\n${userPrompt}`;
-
-  try {
-    logger.info('AI Lecturer: Trying primary API (gpt-5)...');
-    logger.info(`Prompt length: ${shortPrompt.length} chars`);
-
-    const response = await axios.get(primaryApiUrl, {
-      params: { text: shortPrompt },
-      timeout: CONFIG.PRIMARY_API_TIMEOUT
-    });
-
-    const result = response.data?.response || response.data?.result || response.data?.answer;
-    if (result && typeof result === 'string' && result.trim().length > 0) {
-      lectureContent = cleanAIResponse(result.trim());
-      generatedBy = 'GPT-5 (Primary)';
-      logger.info('AI Lecturer: Primary API succeeded');
-      return { lectureContent, generatedBy };
-    }
-    throw new Error('Primary API returned invalid or empty response');
-  } catch (primaryError) {
-    logger.warn({ err: primaryError }, 'AI Lecturer: Primary API failed, trying fallback...');
-
-    // --- Try Fallback API (Groq) with MORE DETAILED prompt ---
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) {
-      logger.error('AI Lecturer: GROQ_API_KEY not set for fallback');
-      throw new Error('Primary AI failed and fallback AI (Groq) is not configured. Please contact the bot administrator.');
-    }
-
-    const groqModel = 'llama3-70b-8192';
-    const groqApiUrl = 'https://api.groq.com/openai/v1/chat/completions';
-
-    // For POST API: Can use more detailed prompt
-    const detailedSystemPrompt = enhancePromptForGroq(systemPrompt);
-
-    try {
-      const groqResponse = await axios.post(
-        groqApiUrl,
-        {
-          model: groqModel,
-          messages: [
-            { role: 'system', content: detailedSystemPrompt + '\n\nIMPORTANT: Start immediately with the lecture content. Do NOT include any meta-commentary like "Here is the lecture" or "I can also provide". Just write the lecture.'},
-            { role: 'user', content: userPrompt }
-          ],
-          temperature: 0.7,
-          max_tokens: 3000,
-          top_p: 1.0,
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: CONFIG.FALLBACK_API_TIMEOUT
-        }
-      );
-
-      const groqResult = groqResponse.data?.choices?.[0]?.message?.content?.trim();
-      if (!groqResult || groqResult.length === 0) {
-        throw new Error('Groq fallback returned empty content');
-      }
-
-      lectureContent = cleanAIResponse(groqResult);
-      generatedBy = 'Groq AI (Fallback)';
-      logger.info('AI Lecturer: Fallback API succeeded');
-      return { lectureContent, generatedBy };
-    } catch (fallbackError) {
-      logger.error({ err: fallbackError }, 'AI Lecturer: Both primary and fallback APIs failed');
-      throw new Error('All AI services are currently unavailable. Please try again later.');
-    }
-  }
+function calculatePause() {
+  return Math.round(
+    CONFIG.TYPING.SENTENCE_PAUSE_MIN +
+    Math.random() * (CONFIG.TYPING.SENTENCE_PAUSE_MAX - CONFIG.TYPING.SENTENCE_PAUSE_MIN)
+  );
 }
 
-/**
- * Clean AI response to remove meta-commentary and instructions
- */
-function cleanAIResponse(text) {
-  if (!text) return text;
-
-  // Dynamically build lecturer name patterns
-  const lecturerNames = CONFIG.LECTURERS.map(l => l.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const lecturerPatterns = lecturerNames.map(name => new RegExp(`(in the style of|as) ${name}[:\\s]*`, 'gi'));
-
-
-  // Remove common AI meta-phrases (case-insensitive)
-  const metaPhrases = [
-    /here is the lecture in the style you requested for[:\s]*/gi,
-    /here's the lecture[:\s]*/gi,
-    /here is a lecture[:\s]*/gi,
-    /i'll deliver this lecture[:\s]*/gi,
-    /let me deliver[:\s]*/gi,
-    /now i can also craft[:\s]*/gi,
-    /i can also provide[:\s]*/gi,
-    /would you like me to[:\s]*/gi,
-    /shall i continue[:\s?\n]*/gi,
-    /is there anything else[:\s?\n]*/gi,
-    /let me know if you need[:\s]*/gi,
-    /\*\*note:?\*\*[^\n]*/gi,
-    /\*\*disclaimer:?\*\*[^\n]*/gi,
-    ...lecturerPatterns
-  ];
-
-  let cleaned = text;
-
-  // Remove meta-phrases
-  metaPhrases.forEach(pattern => {
-    cleaned = cleaned.replace(pattern, '');
-  });
-
-  // Remove empty lines at start/end
-  cleaned = cleaned.trim();
-
-  // Remove multiple consecutive line breaks (more than 2)
-  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
-
-  return cleaned;
-}
-
-/**
- * Enhance prompt with additional details for Groq (POST API can handle more)
- */
-function enhancePromptForGroq(shortPrompt) {
-  return `${shortPrompt}
-
-QUALITY GUIDELINES:
-• Natural, flowing sentences with personality
-• 2+ concrete Nigerian examples (NEPA, traffic, markets, naira, etc.)
-• Engaging and memorable delivery
-• Proper formatting: *bold* for key terms, line breaks for readability
-• Balance education with entertainment
-• Clear, actionable takeaway at the end
-• Ensure continuity if part of a series (reference previous concepts)`;
-}
-
-/**
- * Realistic typing simulation that maintains typing indicator
- * throughout the entire typing duration
- */
 async function simulateTyping(sock, jid, durationMs, logger) {
-  const startTime = Date.now();
-  const endTime = startTime + durationMs;
+  const endTime = Date.now() + durationMs;
 
   try {
-    // Initial typing indicator
     await sock.sendPresenceUpdate('composing', jid);
 
-    // Keep refreshing typing indicator until typing duration is complete
     while (Date.now() < endTime) {
-      const remainingTime = endTime - Date.now();
-      const waitTime = Math.min(CONFIG.TYPING_REFRESH_INTERVAL, remainingTime);
+      const remaining = endTime - Date.now();
+      const wait = Math.min(CONFIG.TYPING.REFRESH_INTERVAL, remaining);
 
-      if (waitTime > 0) {
-        await sleep(waitTime);
-
-        // Refresh typing indicator if still typing
+      if (wait > 0) {
+        await sleep(wait);
         if (Date.now() < endTime) {
           await sock.sendPresenceUpdate('composing', jid);
         }
       }
     }
   } catch (error) {
-    logger.error({ err: error }, 'Error during typing simulation');
+    logger.error({ err: error }, 'Typing simulation error');
   }
 }
 
-/**
- * Calculate realistic typing duration based on sentence length
- */
-function calculateTypingDuration(sentence) {
-  const charCount = sentence.length;
+function cleanResponse(text) {
+  if (!text) return '';
 
-  // Random typing speed between min and max (ms per character)
-  const typingSpeed = CONFIG.TYPING_SPEED_MIN +
-    Math.random() * (CONFIG.TYPING_SPEED_MAX - CONFIG.TYPING_SPEED_MIN);
+  // Remove AI meta-commentary patterns
+  const patterns = [
+    /^(here'?s?|here is|let me (give|provide|deliver)).*?(lecture|content)[:\s]*/gi,
+    /^(i'll|i will|i can) (deliver|give|provide|teach).*?[:\s]*/gi,
+    /would you like (me to|another|more).*?[\?\s]*/gi,
+    /shall i continue.*?[\?\s]*/gi,
+    /is there anything else.*?[\?\s]*/gi,
+    /let me know if.*?[\.\s]*/gi,
+    /\*\*note:?\*\*[^\n]*/gi,
+    /\*\*disclaimer:?\*\*[^\n]*/gi,
+    /in the style of.*?[:\s]*/gi,
+    /as (prof|dr|uncle|sister|mallam|baba).*?[:\s]*/gi
+  ];
 
-  // Base typing time
-  let duration = charCount * typingSpeed;
+  let cleaned = text;
+  patterns.forEach(pattern => {
+    cleaned = cleaned.replace(pattern, '');
+  });
 
-  // Add slight random variation (±20%) for naturalness
-  const variation = duration * 0.2;
-  duration += (Math.random() * variation * 2) - variation;
-
-  // Ensure reasonable bounds (min 2s, max 15s per sentence)
-  duration = Math.max(2000, Math.min(15000, duration));
-
-  return Math.round(duration);
+  return cleaned
+    .trim()
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/^\s*[-•*]\s*/gm, ''); // Remove leading bullets
 }
 
-/**
- * Calculate natural pause between sentences
- */
-function calculatePauseDuration() {
-  const minPause = CONFIG.PAUSE_BETWEEN_SENTENCES_MIN;
-  const maxPause = CONFIG.PAUSE_BETWEEN_SENTENCES_MAX;
+async function generateLecture(lecturer, prompt, logger) {
+  try {
+    logger.info(`Generating lecture with ${lecturer.name}...`);
 
-  // Random pause with slight bias toward shorter pauses
-  const pause = minPause + Math.random() * (maxPause - minPause);
+    const fullPrompt = `${lecturer.prompt}\n\n${prompt}\n\nWrite naturally. NO meta-talk. Start directly.`;
 
-  return Math.round(pause);
+    const response = await axios.get(CONFIG.API_URL, {
+      params: { text: fullPrompt },
+      timeout: CONFIG.API_TIMEOUT
+    });
+
+    const raw = response.data?.response || response.data?.result || response.data?.answer;
+
+    if (!raw || typeof raw !== 'string' || raw.trim().length < 100) {
+      throw new Error('API returned empty or invalid response');
+    }
+
+    const cleaned = cleanResponse(raw.trim());
+
+    if (cleaned.length < 100) {
+      throw new Error('Cleaned response too short');
+    }
+
+    logger.info(`Generated ${cleaned.length} chars`);
+    return cleaned;
+
+  } catch (error) {
+    logger.error({ err: error }, 'Lecture generation failed');
+    throw new Error(`Could not generate lecture: ${error.message}`);
+  }
 }
 
-/**
- * Delivers the lecture with realistic human-like typing
- */
-async function deliverLectureScript(sock, jid, lectureText, logger) {
-  // Split into sentences
-  const sentences = lectureText
-    .replace(/(\r\n|\n|\r)/gm, " ")
+async function deliverScript(sock, jid, script, logger) {
+  const sentences = script
+    .replace(/[\r\n]+/g, ' ')
     .split(/(?<=[.!?])\s+/)
     .filter(s => s.trim().length > 0);
 
-  logger.info(`AI Lecturer: Delivering ${sentences.length} sentences to ${jid}`);
+  logger.info(`Delivering ${sentences.length} sentences`);
 
   for (let i = 0; i < sentences.length; i++) {
     const sentence = sentences[i].trim();
 
     try {
-      // Calculate realistic typing duration for this sentence
-      const typingDuration = calculateTypingDuration(sentence);
-
-      logger.info(`Sentence ${i + 1}/${sentences.length}: ${sentence.substring(0, 50)}... (${typingDuration}ms typing)`);
-
-      // Simulate typing with sustained indicator
-      await simulateTyping(sock, jid, typingDuration, logger);
-
-      // Send the message
+      const typingTime = calculateTypingTime(sentence);
+      await simulateTyping(sock, jid, typingTime, logger);
       await sock.sendMessage(jid, { text: sentence });
 
-      // Natural pause between sentences (like thinking)
       if (i < sentences.length - 1) {
-        const pauseDuration = calculatePauseDuration();
-        await sleep(pauseDuration);
+        await sleep(calculatePause());
       }
-
     } catch (error) {
-      logger.error({ err: error, sentence: i + 1 }, 'Failed to send sentence, continuing...');
-      // Brief pause before continuing to next sentence
-      await sleep(1000);
+      logger.error({ err: error, index: i }, 'Failed to send sentence');
+      await sleep(800);
     }
   }
 
-  // Stop typing indicator
   await sock.sendPresenceUpdate('paused', jid);
-  logger.info('Lecture delivery complete');
+  logger.info('Delivery complete');
 }
 
-/**
- * Parses and validates schedule parameters.
- */
-function parseSchedule(dayStr, timeStr, userTz) {
+function parseSchedule(dayStr, timeStr, tzStr) {
   const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-  let dayOfWeek;
 
+  let dayOfWeek;
   if (/^\d+$/.test(dayStr)) {
     dayOfWeek = parseInt(dayStr, 10);
     if (dayOfWeek < 0 || dayOfWeek > 6) {
-      throw new Error('Invalid day number. Must be 0 (Sunday) to 6 (Saturday).');
+      throw new Error('Day must be 0-6 (0=Sunday)');
     }
   } else {
     dayOfWeek = days.indexOf(dayStr.toLowerCase());
     if (dayOfWeek === -1) {
-      throw new Error('Invalid day name. Use full day name (e.g., "Monday") or number 0-6.');
+      throw new Error('Invalid day. Use day name or 0-6');
     }
   }
 
   if (!/^\d{2}:\d{2}$/.test(timeStr)) {
-    throw new Error('Invalid time format. Use 24-hour HH:MM (e.g., "10:00" or "23:30").');
+    throw new Error('Time must be HH:MM (24-hour)');
   }
 
-  const [hours, minutes] = timeStr.split(':').map(Number);
-  if (hours > 23 || minutes > 59) {
-    throw new Error('Invalid time values. Hours must be 0-23, minutes 0-59.');
+  const [hour, minute] = timeStr.split(':').map(Number);
+  if (hour > 23 || minute > 59) {
+    throw new Error('Invalid time (00:00-23:59)');
   }
 
-  const timezone = userTz || CONFIG.DEFAULT_TIMEZONE;
+  const timezone = tzStr || CONFIG.DEFAULT_TIMEZONE;
 
   try {
     new Date().toLocaleString('en-US', { timeZone: timezone });
   } catch (e) {
-    throw new Error(`Invalid timezone: "${timezone}". Examples: "Africa/Lagos", "Europe/London", "America/New_York".`);
+    throw new Error(`Invalid timezone: ${timezone}`);
   }
 
   return { dayOfWeek, time: timeStr, timezone };
 }
 
-/**
- * Logs delivery history to database
- */
-async function logDeliveryHistory(db, scheduleId, part, status, error = null, logger) {
-  try {
-    await db.collection('lecture_history').insertOne({
-      scheduleId: scheduleId,
-      part: part,
-      deliveredAt: new Date(),
-      status: status,
-      error: error ? error.message : null
-    });
-  } catch (err) {
-    logger.error({ err }, 'Failed to log delivery history');
-  }
-}
-
-/**
- * Extract key points from lecture content (simple extraction)
- */
-function extractKeyPoints(lectureContent) {
-  const sentences = lectureContent
-    .split(/[.!?]/)
-    .map(s => s.trim())
-    .filter(s => s.length > 30 && s.length < 150); // Reasonable length sentences
-
-  // Take first 3 substantial sentences as key points
-  return sentences.slice(0, 3);
-}
-
-/**
- * Save lecture summary for future context
- */
-async function saveLectureSummary(db, scheduleId, part, subject, lectureContent, logger) {
-  try {
-    const keyPoints = extractKeyPoints(lectureContent);
-    const summary = lectureContent.substring(0, 250).trim() + '...';
-
-    await db.collection('lecture_summaries').insertOne({
-      scheduleId: scheduleId,
-      part: part,
-      subject: subject,
-      summary: summary,
-      keyPoints: keyPoints,
-      createdAt: new Date()
-    });
-
-    logger.info(`Saved summary for ${subject} Part ${part}`);
-  } catch (err) {
-    logger.error({ err }, 'Failed to save lecture summary');
-  }
-}
-
-/**
- * Get previous lecture context
- */
-async function getPreviousContext(db, scheduleId, currentPart) {
-  try {
-    if (currentPart === 1) {
-      return {
-        hasPrevious: false,
-        summary: null,
-        keyPoints: []
-      };
-    }
-
-    const previousLecture = await db.collection('lecture_summaries').findOne({
-      scheduleId: scheduleId,
-      part: currentPart - 1
-    });
-
-    if (!previousLecture) {
-      return {
-        hasPrevious: true,
-        summary: "Previous lecture content not available",
-        keyPoints: []
-      };
-    }
-
-    return {
-      hasPrevious: true,
-      summary: previousLecture.summary,
-      keyPoints: previousLecture.keyPoints || []
-    };
-  } catch (err) {
-    return {
-      hasPrevious: currentPart > 1,
-      summary: "Unable to retrieve previous lecture",
-      keyPoints: []
-    };
-  }
-}
-
-/**
- * Track engagement metrics
- */
-async function trackEngagement(db, scheduleId, wasSuccessful, logger) {
-  try {
-    const engagement = await db.collection('lecture_engagement').findOne({ scheduleId });
-
-    if (!engagement) {
-      // Initialize engagement tracking
-      await db.collection('lecture_engagement').insertOne({
-        scheduleId: scheduleId,
-        totalDeliveries: 1,
-        successfulDeliveries: wasSuccessful ? 1 : 0,
-        failureCount: wasSuccessful ? 0 : 1,
-        lastUpdated: new Date()
-      });
-    } else {
-      // Update engagement
-      await db.collection('lecture_engagement').updateOne(
-        { scheduleId },
-        {
-          $inc: {
-            totalDeliveries: 1,
-            successfulDeliveries: wasSuccessful ? 1 : 0,
-            failureCount: wasSuccessful ? 0 : 1
-          },
-          $set: { lastUpdated: new Date() }
-        }
-      );
-    }
-  } catch (err) {
-    logger.error({ err }, 'Failed to track engagement');
-  }
-}
-
-/**
- * Get engagement level
- */
-async function getEngagementLevel(db, scheduleId) {
-  try {
-    const engagement = await db.collection('lecture_engagement').findOne({ scheduleId });
-
-    if (!engagement || engagement.totalDeliveries < 3) {
-      return 'standard'; // Not enough data
-    }
-
-    const successRate = engagement.successfulDeliveries / engagement.totalDeliveries;
-
-    if (successRate > 0.85) return 'high';
-    if (successRate < 0.5) return 'low';
-    return 'standard';
-  } catch (err) {
-    return 'standard';
-  }
-}
-
-/**
- * Build OPTIMIZED SHORT prompt for GET API (under 500 chars)
- */
-function buildManualLecturePrompt(topic, lecturer) {
-  if (!lecturer) {
-    lecturer = CONFIG.LECTURERS[0];
-  }
-
-  return `${lecturer.systemPrompt}
-
-Topic: ${topic}
-
-Structure: Hook (grab attention) → Define (what + why matters + Nigerian example) → 5 Points (explain→example→insight) → Apply (practical use) → Takeaway (memorable end)
-
-800-900 words. Start lecture NOW. No meta-talk.`;
-}
-
-
-/**
- * Build OPTIMIZED SHORT prompt for series lectures (GET API compatible)
- */
-function buildSeriesLecturePrompt(schedule, context) {
-  const lecturer = schedule.lecturer || CONFIG.LECTURERS[0];
-  const isFirst = schedule.part === 1;
-  const engagement = context.engagement || 'standard';
-
-  // Build context snippet (keep very short)
-  let contextSnippet = '';
-  if (!isFirst && context.hasPrevious) {
-    const lastPoints = context.keyPoints.slice(0, 2).join('; ');
-    contextSnippet = `Last: ${lastPoints || context.summary.substring(0, 80)}. `;
-  }
-
-  // Engagement modifier
-  let engagementMod = '';
-  if (engagement === 'low') engagementMod = 'Bigger hook, simpler. ';
-  if (engagement === 'high') engagementMod = 'Go deeper, advanced. ';
-
-  // Part progression modifier
-  let progressMod = '';
-  if (schedule.part <= 3) progressMod = 'Foundation level.';
-  else if (schedule.part <= 7) progressMod = 'Intermediate level.';
-  else progressMod = 'Advanced level.';
-
-  return `${lecturer.systemPrompt}
-
-Part ${schedule.part} of "${schedule.subject}" series. ${contextSnippet}${engagementMod}${progressMod}
-
-${isFirst ? 
-  'Structure: Welcome (intro series, what they\'ll learn) → Focus (today\'s topic) → Teach (3 concepts: explain→example→insight) → Question (thought) → Preview (next) → Takeaway' :
-  'Structure: Recap (30 words: last week→today) → Focus (what Part ' + schedule.part + ' covers) → Teach (3 concepts: explain→example→insight) → Question (thought) → Preview (Part ' + (schedule.part + 1) + ') → Takeaway'
-}
-
-500 words. Continuity matters. Write NOW.`;
-}
-
-/**
- * Runs the automated, scheduled lecture with improved prompts
- */
-async function runScheduledLecture(scheduleId, sock, logger) {
-  const db = await PluginHelpers.getDB();
-
-  try {
-    // Fetch fresh schedule data from database
-    const schedule = await db.collection('lecture_schedules').findOne({ _id: scheduleId });
-
-    if (!schedule) {
-      logger.error(`Schedule ${scheduleId} not found in database - may have been deleted`);
-      return;
-    }
-
-    // Check if we've reached max parts
-    if (schedule.part > CONFIG.MAX_LECTURE_PARTS) {
-      logger.warn(`Schedule ${schedule.subject} has reached max parts (${CONFIG.MAX_LECTURE_PARTS})`);
-      await sock.sendMessage(schedule.groupId, {
-        text: `🎓 The lecture series "${schedule.subject}" has completed all ${CONFIG.MAX_LECTURE_PARTS} parts.\n\n` +
-              `_This course has automatically concluded. Thank you for attending!_`
-      });
-      return;
-    }
-
-    logger.info(`Running scheduled lecture: ${schedule.subject} (Part ${schedule.part}) in ${schedule.groupId}`);
-
-    // Get previous context and engagement level
-    const previousContext = await getPreviousContext(db, scheduleId, schedule.part);
-    const engagementLevel = await getEngagementLevel(db, scheduleId);
-
-    const context = {
-      ...previousContext,
-      engagement: engagementLevel
-    };
-
-    // Build improved prompt with context
-    const systemPrompt = buildSeriesLecturePrompt(schedule, context);
-    const userPrompt = `Write Part ${schedule.part}.`;
-
-    // Generate lecture script
-    const { lectureContent, generatedBy } = await generateLecture(systemPrompt, userPrompt, logger);
-    if (!lectureContent) throw new Error('AI returned empty script');
-
-    // Get lecturer name for header
-    const lecturerName = schedule.lecturer?.name || "Prof. Alex Macksyn";
-
-    // Send header
-    const header = `🎓 *AI LECTURE: PART ${schedule.part}* 🎓\n\n` +
-                   `*Topic:* ${schedule.subject}\n` +
-                   `*Professor:* ${lecturerName}\n` +
-                   `-----------------------------------`;
-    await sock.sendMessage(schedule.groupId, { text: header });
-
-    // Deliver script with realistic typing
-    await deliverLectureScript(sock, schedule.groupId, lectureContent, logger);
-
-    // Save lecture summary for next time
-    await saveLectureSummary(db, scheduleId, schedule.part, schedule.subject, lectureContent, logger);
-
-    // Send footer
-    await sock.sendPresenceUpdate('composing', schedule.groupId);
-    await sleep(3000);
-    const nextPart = schedule.part + 1;
-    const footerMsg = nextPart <= CONFIG.MAX_LECTURE_PARTS
-      ? `_Class dismissed. Part ${nextPart} will be delivered next week._`
-      : `_This was the final lecture. Course concluded!_`;
-
-    await sock.sendMessage(schedule.groupId, {
-      text: `-----------------------------------\n` +
-            `🎓 *END OF PART ${schedule.part}* 🎓\n\n` +
-            footerMsg
-    });
-    await sock.sendPresenceUpdate('paused', schedule.groupId);
-
-    // Update database for next week
-    await db.collection('lecture_schedules').updateOne(
-      { _id: scheduleId },
-      {
-        $set: {
-          part: nextPart,
-          lastDeliveredTimestamp: new Date()
-        }
-      }
-    );
-
-    // Track successful engagement
-    await trackEngagement(db, scheduleId, true, logger);
-
-    // Log success
-    await logDeliveryHistory(db, scheduleId, schedule.part, 'success', null, logger);
-    logger.info(`Successfully delivered lecture ${schedule.subject} Part ${schedule.part}`);
-
-  } catch (error) {
-    logger.error({ err: error, scheduleId }, 'Failed to run scheduled lecture');
-
-    try {
-      const schedule = await db.collection('lecture_schedules').findOne({ _id: scheduleId });
-      if (schedule) {
-        await sock.sendMessage(schedule.groupId, {
-          text: `❌ *Lecture Delivery Failed*\n\n` +
-                `I was scheduled to deliver *Part ${schedule.part} of ${schedule.subject}*, but an error occurred.\n\n` +
-                `_Error: ${error.message}_\n\n` +
-                `The lecture will be attempted again at the next scheduled time.`
-        });
-
-        // Track failed engagement
-        await trackEngagement(db, scheduleId, false, logger);
-        await logDeliveryHistory(db, scheduleId, schedule.part, 'failed', error, logger);
-      }
-    } catch (notifyError) {
-      logger.error({ err: notifyError }, 'Failed to send error notification');
-    }
-  }
-}
-
-/**
- * Converts schedule info into a cron time string.
- */
 function getCronTime(time, dayOfWeek) {
   const [hour, minute] = time.split(':');
   return `${minute} ${hour} * * ${dayOfWeek}`;
 }
 
-/**
- * Creates a unique, predictable job ID for the scheduler
- */
 function getJobId(scheduleId) {
   return `lecture_${scheduleId.toString()}`;
 }
 
-// --- COMMAND HANDLERS ---
-
-/**
- * Handles manual `.lecture` command with improved prompt
- */
-async function handleManualLecture(context) {
-  const { msg, text, sock, config, logger } = context;
-  const topic = text;
-
-  if (!topic) {
-    await msg.reply(
-      `Please provide a topic for the lecture.\n\n` +
-      `*Usage:* ${config.PREFIX}lecture <topic>\n` +
-      `*Example:* ${config.PREFIX}lecture The impact of Afrobeats on global music`
+async function ensureIndexes(db, logger) {
+  try {
+    await db.collection('lecture_schedules').createIndex(
+      { groupId: 1, subject: 1 },
+      { unique: true, collation: { locale: 'en', strength: 2 } }
     );
-    return;
+    await db.collection('lecture_schedules').createIndex({ groupId: 1 });
+    await db.collection('lecture_history').createIndex({ scheduleId: 1, deliveredAt: -1 });
+    logger.info('Lecture indexes created');
+  } catch (error) {
+    logger.warn({ err: error }, 'Index creation warning');
   }
+}
 
-  // Get random lecturer
-  const lecturer = getRandomLecturer();
+function buildOneTimePrompt(topic) {
+  return `Topic: ${topic}
 
-  await msg.react('🧠');
-  const loadingMsg = await msg.reply(
-    `🧠 *Preparing your lecture...*\n\n` +
-    `*Topic:* ${topic}\n` +
-    `*Professor:* ${lecturer.name}\n\n` +
-    `_Writing the full script..._`
-  );
+Structure:
+Hook → Core Teaching (3 points with examples) → Practical Application → Strong Close
 
-  // Use improved prompt with the selected lecturer
-  const systemPrompt = buildManualLecturePrompt(topic, lecturer);
-  const userPrompt = `Write lecture.`;
+600-800 words. Natural Nigerian context. Teach it.`;
+}
+
+function buildSeriesPrompt(schedule, isFirst, previousSummary = null) {
+  const contextNote = !isFirst && previousSummary 
+    ? `Last time: ${previousSummary.substring(0, 120)}...` 
+    : '';
+
+  return `${schedule.subject} - Part ${schedule.part}
+${contextNote}
+
+${isFirst 
+  ? 'Structure: Welcome → Overview → First 3 Concepts → Preview Next → Strong Close'
+  : `Structure: Quick Recap → Today's 3 Concepts → Connect to Part ${schedule.part - 1} → Preview Part ${schedule.part + 1} → Close`
+}
+
+500-700 words. Series continuity. Teach Part ${schedule.part}.`;
+}
+
+async function runScheduledLecture(scheduleId, sock, logger) {
+  const db = await PluginHelpers.getDB();
 
   try {
-    const { lectureContent, generatedBy } = await generateLecture(systemPrompt, userPrompt, logger);
-    if (!lectureContent) throw new Error('AI returned an empty script');
+    const schedule = await db.collection('lecture_schedules').findOne({ _id: scheduleId });
 
-    const header = `🎓 *GHQ LECTURE: STARTING* 🎓\n\n` +
-                     `*Topic:* ${topic}\n` +
-                     `*Professor:* ${lecturer.name}\n` +
-                     `-----------------------------------`;
-    await sock.sendMessage(msg.from, { text: header, edit: loadingMsg.key });
-    await msg.react('✅');
+    if (!schedule) {
+      logger.error(`Schedule ${scheduleId} not found`);
+      return;
+    }
 
-    await deliverLectureScript(sock, msg.from, lectureContent, logger);
+    if (schedule.part > CONFIG.MAX_PARTS) {
+      logger.warn(`${schedule.subject} completed all ${CONFIG.MAX_PARTS} parts`);
+      await sock.sendMessage(schedule.groupId, {
+        text: `🎓 *${schedule.subject}* series complete!\n\nAll ${CONFIG.MAX_PARTS} parts delivered. Course concluded. 🎉`
+      });
+      return;
+    }
 
-    await sock.sendPresenceUpdate('composing', msg.from);
-    await sleep(3000);
-    await sock.sendMessage(msg.from, {
-      text: `-----------------------------------\n` +
-            `🎓 *AI LECTURE: END* 🎓\n\n` +
-            `_This concludes today's lecture._`
+    logger.info(`Running: ${schedule.subject} Part ${schedule.part}`);
+
+    // Get previous lecture summary if not first
+    let previousSummary = null;
+    if (schedule.part > 1) {
+      const prev = await db.collection('lecture_history').findOne(
+        { scheduleId, part: schedule.part - 1, status: 'success' },
+        { sort: { deliveredAt: -1 } }
+      );
+      if (prev) {
+        previousSummary = prev.summary;
+      }
+    }
+
+    const prompt = buildSeriesPrompt(schedule, schedule.part === 1, previousSummary);
+    const script = await generateLecture(schedule.lecturer, prompt, logger);
+
+    // Header
+    await sock.sendMessage(schedule.groupId, {
+      text: `🎓 *${schedule.subject.toUpperCase()} - PART ${schedule.part}*\n\n*Professor:* ${schedule.lecturer.name}\n${'─'.repeat(35)}`
     });
-    await sock.sendPresenceUpdate('paused', msg.from);
+
+    // Deliver
+    await deliverScript(sock, schedule.groupId, script, logger);
+
+    // Footer
+    await sleep(2000);
+    const nextPart = schedule.part + 1;
+    const footer = nextPart <= CONFIG.MAX_PARTS
+      ? `${'─'.repeat(35)}\n🎓 *END PART ${schedule.part}*\n\n_Part ${nextPart} next week. See you then!_`
+      : `${'─'.repeat(35)}\n🎓 *FINAL LECTURE*\n\n_Series complete. Thank you!_`;
+
+    await sock.sendMessage(schedule.groupId, { text: footer });
+
+    // Update database
+    await db.collection('lecture_schedules').updateOne(
+      { _id: scheduleId },
+      {
+        $set: {
+          part: nextPart,
+          lastDelivered: new Date()
+        }
+      }
+    );
+
+    // Log history
+    await db.collection('lecture_history').insertOne({
+      scheduleId,
+      part: schedule.part,
+      summary: script.substring(0, 200),
+      deliveredAt: new Date(),
+      status: 'success'
+    });
+
+    logger.info(`Delivered ${schedule.subject} Part ${schedule.part}`);
+
   } catch (error) {
-    logger.error({ err: error }, 'AI Lecturer plugin failed (manual)');
+    logger.error({ err: error, scheduleId }, 'Scheduled lecture failed');
+
+    try {
+      const schedule = await db.collection('lecture_schedules').findOne({ _id: scheduleId });
+      if (schedule) {
+        await sock.sendMessage(schedule.groupId, {
+          text: `❌ Lecture delivery error\n\n*${schedule.subject} Part ${schedule.part}*\n\n_Will retry next week._`
+        });
+
+        await db.collection('lecture_history').insertOne({
+          scheduleId,
+          part: schedule.part,
+          deliveredAt: new Date(),
+          status: 'failed',
+          error: error.message
+        });
+      }
+    } catch (notifyError) {
+      logger.error({ err: notifyError }, 'Error notification failed');
+    }
+  }
+}
+
+// ============================================================================
+// COMMAND HANDLERS
+// ============================================================================
+
+async function handleManualLecture(context) {
+  const { msg, text, sock, config, logger } = context;
+
+  if (!text || text.length < 5) {
+    return msg.reply(
+      `📚 *Lecture Command*\n\n` +
+      `*Usage:* ${config.PREFIX}lecture <topic>\n\n` +
+      `*Example:*\n${config.PREFIX}lecture Why Bitcoin matters\n${config.PREFIX}lecture Afrobeats history`
+    );
+  }
+
+  const lecturer = randomLecturer();
+
+  await msg.react('🎓');
+  const loading = await msg.reply(
+    `🎓 *Preparing Lecture*\n\n` +
+    `*Topic:* ${text}\n` +
+    `*Professor:* ${lecturer.name}\n\n` +
+    `_Generating content..._`
+  );
+
+  try {
+    const prompt = buildOneTimePrompt(text);
+    const script = await generateLecture(lecturer, prompt, logger);
+
+    await sock.sendMessage(msg.from, {
+      text: `🎓 *LECTURE START*\n\n*Topic:* ${text}\n*Prof:* ${lecturer.name}\n${'─'.repeat(35)}`,
+      edit: loading.key
+    });
+
+    await msg.react('✅');
+    await deliverScript(sock, msg.from, script, logger);
+
+    await sleep(2000);
+    await sock.sendMessage(msg.from, {
+      text: `${'─'.repeat(35)}\n🎓 *LECTURE END*\n\n_Class dismissed!_`
+    });
+
+  } catch (error) {
+    logger.error({ err: error }, 'Manual lecture failed');
     await msg.react('❌');
     await sock.sendMessage(msg.from, {
       text: `❌ *Lecture Failed*\n\n${error.message}`,
-      edit: loadingMsg.key
+      edit: loading.key
     });
   }
 }
 
-/**
- * Handles `.schedule-lecture <subject> | <day> | <time> | [timezone]`
- */
-async function handleScheduleLecture(context) {
+async function handleSchedule(context) {
   const { msg, text, logger, helpers, sock } = context;
   const db = await PluginHelpers.getDB();
 
   try {
     const parts = text.split('|').map(p => p.trim());
+
     if (parts.length < 3) {
-      throw new Error('USAGE_ERROR');
+      return msg.reply(
+        `📅 *Schedule Lecture Series*\n\n` +
+        `*Format:* \`.schedule <subject> | <day> | <time> | [timezone]\`\n\n` +
+        `*Examples:*\n` +
+        `• \`.schedule Python Basics | Monday | 10:00\`\n` +
+        `• \`.schedule History of Jazz | Friday | 15:30 | America/New_York\`\n\n` +
+        `*Day:* Sunday-Saturday or 0-6\n` +
+        `*Time:* 24-hour HH:MM\n` +
+        `*Timezone:* Optional (default: ${CONFIG.DEFAULT_TIMEZONE})`
+      );
     }
 
     const [subject, dayStr, timeStr, tzStr] = parts;
+
     if (!subject || !dayStr || !timeStr) {
-      throw new Error('USAGE_ERROR');
+      throw new Error('Missing required fields');
     }
 
     const { dayOfWeek, time, timezone } = parseSchedule(dayStr, timeStr, tzStr);
     const cronTime = getCronTime(time, dayOfWeek);
+    const lecturer = randomLecturer();
 
-    // Assign a random lecturer for the entire series
-    const seriesLecturer = getRandomLecturer();
-
-    // Prepare schedule document
     const newSchedule = {
       groupId: msg.from,
-      subject: subject,
-      dayOfWeek: dayOfWeek,
-      time: time,
-      timezone: timezone,
+      subject,
+      dayOfWeek,
+      time,
+      timezone,
       part: 1,
-      lecturer: seriesLecturer,
-      lastDeliveredTimestamp: null,
+      lecturer,
+      lastDelivered: null,
       scheduledBy: msg.sender,
       createdAt: new Date()
     };
 
-    // Insert into database (will fail if duplicate due to unique index)
-    let insertResult;
+    let result;
     try {
-      insertResult = await db.collection('lecture_schedules').insertOne(newSchedule);
+      result = await db.collection('lecture_schedules').insertOne(newSchedule);
     } catch (dbError) {
       if (dbError.code === 11000) {
-        throw new Error(`A lecture on "${subject}" is already scheduled in this group. Cancel it first to reschedule.`);
+        throw new Error(`"${subject}" already scheduled. Cancel it first.`);
       }
       throw dbError;
     }
 
-    const scheduleId = insertResult.insertedId;
-
-    // Register with cron scheduler
+    const scheduleId = result.insertedId;
     const jobId = getJobId(scheduleId);
+
     try {
       const success = helpers.registerCronJob(
         jobId,
@@ -861,51 +522,32 @@ async function handleScheduleLecture(context) {
       );
 
       if (!success) {
-        throw new Error('Failed to register job with cron scheduler');
+        throw new Error('Cron registration failed');
       }
     } catch (cronError) {
-      // Rollback: delete from database if cron registration fails
       await db.collection('lecture_schedules').deleteOne({ _id: scheduleId });
-      throw new Error(`Could not schedule lecture: ${cronError.message}`);
+      throw new Error(`Scheduling failed: ${cronError.message}`);
     }
 
     const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek];
+
     await msg.reply(
-      `✅ *Lecture Scheduled Successfully!*\n\n` +
+      `✅ *Lecture Series Scheduled*\n\n` +
       `*Subject:* ${subject}\n` +
-      `*Professor:* ${seriesLecturer.name}\n` +
+      `*Professor:* ${lecturer.name}\n` +
       `*Schedule:* Every ${dayName} at ${time}\n` +
       `*Timezone:* ${timezone}\n` +
-      `*Cron Pattern:* \`${cronTime}\`\n` +
-      `*Job ID:* \`${jobId}\`\n\n` +
-      `Part 1 will be delivered on the next scheduled day.\n` +
-      `_Maximum ${CONFIG.MAX_LECTURE_PARTS} parts will be delivered._`
+      `*Total Parts:* Up to ${CONFIG.MAX_PARTS}\n\n` +
+      `Part 1 starts on the next ${dayName}!`
     );
 
   } catch (error) {
-    logger.error({ err: error }, 'Failed to schedule lecture');
-
-    if (error.message === 'USAGE_ERROR') {
-      await msg.reply(
-        `❌ *Invalid Format*\n\n` +
-        `*Usage:* \`.schedule-lecture <Subject> | <Day> | <Time> | [Timezone]\`\n\n` +
-        `*Examples:*\n` +
-        `• \`.schedule-lecture Biology | Monday | 10:00\`\n` +
-        `• \`.schedule-lecture Physics | 1 | 14:30 | Europe/London\`\n\n` +
-        `*Day:* 0-6 (0=Sunday, 6=Saturday) or full name\n` +
-        `*Time:* 24-hour HH:MM format\n` +
-        `*Timezone:* Optional (default: ${CONFIG.DEFAULT_TIMEZONE})`
-      );
-    } else {
-      await msg.reply(`❌ *Schedule Failed*\n\n${error.message}`);
-    }
+    logger.error({ err: error }, 'Schedule failed');
+    await msg.reply(`❌ *Schedule Failed*\n\n${error.message}`);
   }
 }
 
-/**
- * Handles `.list-lectures`
- */
-async function handleListLectures(context) {
+async function handleList(context) {
   const { msg, logger } = context;
   const db = await PluginHelpers.getDB();
 
@@ -916,128 +558,98 @@ async function handleListLectures(context) {
       .toArray();
 
     if (schedules.length === 0) {
-      await msg.reply(`📚 No lectures are currently scheduled for this group.\n\nUse \`.schedule-lecture\` to create one.`);
-      return;
+      return msg.reply(
+        `📚 *No Active Lectures*\n\n` +
+        `Use \`.schedule\` to create one.`
+      );
     }
 
-    let reply = `📚 *Scheduled Lectures (${schedules.length})*\n`;
+    let reply = `📚 *Active Lecture Series (${schedules.length})*\n`;
 
     for (const s of schedules) {
-      const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.dayOfWeek];
-      const lastRan = s.lastDeliveredTimestamp
-        ? new Date(s.lastDeliveredTimestamp).toLocaleString('en-GB', { timeZone: s.timezone })
-        : 'Never';
+      const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.dayOfWeek];
+      const lastRan = s.lastDelivered 
+        ? new Date(s.lastDelivered).toLocaleDateString('en-GB')
+        : 'Not yet';
 
-      const lecturerName = s.lecturer?.name || "Prof. Alex Macksyn";
-      const progress = `${s.part - 1}/${CONFIG.MAX_LECTURE_PARTS}`;
-
-      reply += `\n-----------------------------------\n` +
+      reply += `\n${'─'.repeat(35)}\n` +
                `*${s.subject}*\n` +
-               `├ Professor: ${lecturerName}\n` +
-               `├ Next Part: ${s.part}\n` +
-               `├ Progress: ${progress} completed\n` +
-               `├ Schedule: ${dayName} @ ${s.time}\n` +
-               `├ Timezone: ${s.timezone}\n` +
-               `├ Last Ran: ${lastRan}\n` +
-               `└ Job ID: \`${getJobId(s._id)}\``;
+               `├ Prof: ${s.lecturer.name}\n` +
+               `├ Next: Part ${s.part}/${CONFIG.MAX_PARTS}\n` +
+               `├ When: ${day} @ ${s.time}\n` +
+               `├ Zone: ${s.timezone}\n` +
+               `└ Last: ${lastRan}`;
     }
 
     await msg.reply(reply);
+
   } catch (error) {
-    logger.error({ err: error }, 'Failed to list lectures');
-    await msg.reply(`❌ Could not fetch lecture list.\n\n_Error: ${error.message}_`);
+    logger.error({ err: error }, 'List failed');
+    await msg.reply(`❌ *List Failed*\n\n${error.message}`);
   }
 }
 
-/**
- * Handles `.cancel-lecture <subject>`
- */
-async function handleCancelLecture(context) {
+async function handleCancel(context) {
   const { msg, text, logger, helpers } = context;
   const db = await PluginHelpers.getDB();
-  const subjectToCancel = text;
 
-  if (!subjectToCancel) {
-    await msg.reply(
-      `Please provide the subject name to cancel.\n\n` +
-      `*Usage:* \`.cancel-lecture <Subject>\`\n` +
-      `*Example:* \`.cancel-lecture Biology\``
+  if (!text) {
+    return msg.reply(
+      `🗑️ *Cancel Lecture*\n\n` +
+      `*Usage:* \`.cancel <subject>\`\n` +
+      `*Example:* \`.cancel Python Basics\``
     );
-    return;
   }
 
   try {
     const schedule = await db.collection('lecture_schedules').findOne({
       groupId: msg.from,
-      subject: { $regex: new RegExp(`^${subjectToCancel}$`, 'i') }
+      subject: { $regex: new RegExp(`^${text}$`, 'i') }
     });
 
     if (!schedule) {
-      await msg.reply(`❌ Could not find a lecture named "${subjectToCancel}" in this group.`);
-      return;
+      return msg.reply(`❌ No lecture found: "${text}"`);
     }
 
     const jobId = getJobId(schedule._id);
+    helpers.cancelCronJob(jobId);
 
-    // Cancel the cron job first
-    const cronCancelled = helpers.cancelCronJob(jobId);
-
-    // Delete from database
-    const dbResult = await db.collection('lecture_schedules').deleteOne({ _id: schedule._id });
-
-    // Clean up related data (history, summaries, engagement)
+    await db.collection('lecture_schedules').deleteOne({ _id: schedule._id });
     await db.collection('lecture_history').deleteMany({ scheduleId: schedule._id });
-    await db.collection('lecture_summaries').deleteMany({ scheduleId: schedule._id });
-    await db.collection('lecture_engagement').deleteOne({ scheduleId: schedule._id });
 
-    if (dbResult.deletedCount === 0) {
-      logger.warn(`Cron job ${jobId} cancelled but DB delete failed`);
-      await msg.reply(
-        `⚠️ Partially cancelled.\n\n` +
-        `Cron job stopped but database entry remains. Please check logs.`
-      );
-    } else {
-      const partsDelivered = schedule.part - 1;
-      await msg.reply(
-        `✅ *Lecture Series Cancelled*\n\n` +
-        `*Subject:* ${schedule.subject}\n` +
-        `*Parts Delivered:* ${partsDelivered}/${CONFIG.MAX_LECTURE_PARTS}\n` +
-        `*Job ID:* \`${jobId}\`\n\n` +
-        `The scheduled lectures and all related history have been permanently removed.`
-      );
-    }
+    await msg.reply(
+      `✅ *Lecture Cancelled*\n\n` +
+      `*Subject:* ${schedule.subject}\n` +
+      `*Parts Delivered:* ${schedule.part - 1}/${CONFIG.MAX_PARTS}\n\n` +
+      `Schedule and history removed.`
+    );
+
   } catch (error) {
-    logger.error({ err: error }, 'Failed to cancel lecture');
-    await msg.reply(`❌ *Cancellation Failed*\n\n${error.message}`);
+    logger.error({ err: error }, 'Cancel failed');
+    await msg.reply(`❌ *Cancel Failed*\n\n${error.message}`);
   }
 }
 
-/**
- * Handles `.lecture-history <subject>`
- */
-async function handleLectureHistory(context) {
+async function handleHistory(context) {
   const { msg, text, logger } = context;
   const db = await PluginHelpers.getDB();
-  const subject = text;
 
-  if (!subject) {
-    await msg.reply(
-      `Please provide the subject name.\n\n` +
-      `*Usage:* \`.lecture-history <Subject>\`\n` +
-      `*Example:* \`.lecture-history Biology\``
+  if (!text) {
+    return msg.reply(
+      `📜 *Lecture History*\n\n` +
+      `*Usage:* \`.history <subject>\`\n` +
+      `*Example:* \`.history Python Basics\``
     );
-    return;
   }
 
   try {
     const schedule = await db.collection('lecture_schedules').findOne({
       groupId: msg.from,
-      subject: { $regex: new RegExp(`^${subject}$`, 'i') }
+      subject: { $regex: new RegExp(`^${text}$`, 'i') }
     });
 
     if (!schedule) {
-      await msg.reply(`❌ No lecture series found for "${subject}" in this group.`);
-      return;
+      return msg.reply(`❌ No lecture found: "${text}"`);
     }
 
     const history = await db.collection('lecture_history')
@@ -1047,58 +659,58 @@ async function handleLectureHistory(context) {
       .toArray();
 
     if (history.length === 0) {
-      await msg.reply(`📜 No delivery history found for "${subject}".\n\n_The first lecture hasn't been delivered yet._`);
-      return;
+      return msg.reply(
+        `📜 *No History*\n\n` +
+        `"${text}" hasn't been delivered yet.`
+      );
     }
 
-    const lecturerName = schedule.lecturer?.name || "Prof. Alex Macksyn";
-
-    let reply = `📜 *Lecture History: ${subject}*\n` +
-                `*Professor:* ${lecturerName}\n` +
-                `_Showing last ${history.length} deliveries_\n`;
+    let reply = `📜 *History: ${schedule.subject}*\n` +
+                `*Professor:* ${schedule.lecturer.name}\n` +
+                `_Last ${history.length} deliveries_\n`;
 
     for (const entry of history) {
-      const status = entry.status === 'success' ? '✅' : '❌';
-      const date = new Date(entry.deliveredAt).toLocaleString('en-GB', {
-        timeZone: schedule.timezone,
-        dateStyle: 'short',
-        timeStyle: 'short'
+      const icon = entry.status === 'success' ? '✅' : '❌';
+      const date = new Date(entry.deliveredAt).toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
       });
 
-      reply += `\n${status} Part ${entry.part} - ${date}`;
+      reply += `\n${icon} Part ${entry.part} - ${date}`;
       if (entry.error) {
-        reply += `\n   └ Error: ${entry.error}`;
+        reply += `\n   └ ${entry.error.substring(0, 50)}`;
       }
     }
 
     await msg.reply(reply);
+
   } catch (error) {
-    logger.error({ err: error }, 'Failed to fetch lecture history');
-    await msg.reply(`❌ Could not fetch history.\n\n_Error: ${error.message}_`);
+    logger.error({ err: error }, 'History failed');
+    await msg.reply(`❌ *History Failed*\n\n${error.message}`);
   }
 }
 
-// --- V3 PLUGIN EXPORT ---
+// ============================================================================
+// PLUGIN EXPORT
+// ============================================================================
 
 export default {
-  name: 'AI Lecturer (v3)',
-  description: 'AI-powered course manager with manual lectures and automated weekly schedules.',
-  category: 'ai',
-  version: '3.4.0', // Optimized prompts for GET API
-  author: 'Gemini + Claude + Malvin',
+  name: 'AI Lecturer',
+  description: 'Production-ready AI lecture system with 10 unique personalities',
+  category: 'education',
+  version: '4.0.0',
+  author: 'Claude + Malvin',
 
-  commands: ['lecture', 'teach', 'schedule-lecture', 'list-lectures', 'cancel-lecture', 'lecture-history'],
-  aliases: ['ai-lecture', 'ai-teach', 'schedule-class', 'list-classes', 'cancel-class', 'lecture-log'],
+  commands: ['lecture', 'schedule', 'lectures', 'cancel', 'history'],
+  aliases: ['teach', 'class', 'schedule-lecture', 'list-lectures', 'cancel-lecture', 'lecture-history'],
 
-  usage: 'Use .lecture <topic> or .schedule-lecture <subject> | <day> | <time> | [timezone]',
-  example: '.lecture The Benin Empire\n.schedule-lecture History | Monday | 10:00 | Africa/Lagos\n.list-lectures\n.cancel-lecture History\n.lecture-history History',
+  usage: '.lecture <topic> or .schedule <subject> | <day> | <time>',
+  example: '.lecture Bitcoin explained\n.schedule Python | Monday | 10:00\n.lectures\n.cancel Python\n.history Python',
 
   adminOnly: true,
   groupOnly: true,
 
-  /**
-   * Main V3 plugin execution function (Command Router)
-   */
   async run(context) {
     const { command } = context;
 
@@ -1107,80 +719,52 @@ export default {
       case 'teach':
         await handleManualLecture(context);
         break;
+      case 'schedule':
       case 'schedule-lecture':
-      case 'schedule-class':
-        await handleScheduleLecture(context);
+      case 'class':
+        await handleSchedule(context);
         break;
+      case 'lectures':
       case 'list-lectures':
-      case 'list-classes':
-        await handleListLectures(context);
+        await handleList(context);
         break;
+      case 'cancel':
       case 'cancel-lecture':
-      case 'cancel-class':
-        await handleCancelLecture(context);
+        await handleCancel(context);
         break;
+      case 'history':
       case 'lecture-history':
-      case 'lecture-log':
-        await handleLectureHistory(context);
+        await handleHistory(context);
         break;
     }
   },
 
-  /**
-   * V3 LIFECYCLE HOOK: onLoad
-   * Loads all schedules from DB and registers them with node-cron.
-   */
   async onLoad(context) {
     const { sock, logger, helpers } = context;
     const db = await PluginHelpers.getDB();
 
-    logger.info('AI Lecturer (onLoad): Initializing...');
+    logger.info('AI Lecturer v4: Initializing...');
 
     try {
-      // Ensure database indexes exist
       await ensureIndexes(db, logger);
 
-      // Fetch all schedules
-      const allSchedules = await db.collection('lecture_schedules').find().toArray();
+      const schedules = await db.collection('lecture_schedules').find().toArray();
 
-      if (allSchedules.length === 0) {
-        logger.info('AI Lecturer (onLoad): No schedules found in database');
+      if (schedules.length === 0) {
+        logger.info('No schedules to load');
         return;
       }
 
-      logger.info(`AI Lecturer (onLoad): Found ${allSchedules.length} schedule(s) to load`);
+      logger.info(`Loading ${schedules.length} schedule(s)`);
 
-      // Track already registered jobs to prevent duplicates
-      const registeredJobs = new Set();
-      let successCount = 0;
-      let skipCount = 0;
+      let loaded = 0;
+      let failed = 0;
 
-      for (const schedule of allSchedules) {
-        const jobId = getJobId(schedule._id);
-
-        // Prevent duplicate registration
-        if (registeredJobs.has(jobId)) {
-          logger.warn(`Job ${jobId} already registered in this load cycle, skipping`);
-          skipCount++;
-          continue;
-        }
-
+      for (const schedule of schedules) {
         try {
-          // Validate timezone is still valid
-          try {
-            new Date().toLocaleString('en-US', { timeZone: schedule.timezone });
-          } catch (tzError) {
-            logger.error(
-              { scheduleId: schedule._id, timezone: schedule.timezone },
-              'Invalid timezone in stored schedule, skipping'
-            );
-            skipCount++;
-            continue;
-          }
-
           const cronTime = getCronTime(schedule.time, schedule.dayOfWeek);
+          const jobId = getJobId(schedule._id);
 
-          // Register the job with fresh data fetching
           const success = helpers.registerCronJob(
             jobId,
             cronTime,
@@ -1188,45 +772,27 @@ export default {
             schedule.timezone
           );
 
-          if (!success) {
-            logger.error({ jobId, scheduleId: schedule._id }, 'Failed to register cron job');
-            skipCount++;
-            continue;
+          if (success) {
+            loaded++;
+            logger.info({
+              subject: schedule.subject,
+              professor: schedule.lecturer.name,
+              schedule: `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][schedule.dayOfWeek]} @ ${schedule.time}`
+            }, 'Lecture loaded');
+          } else {
+            failed++;
+            logger.error({ subject: schedule.subject }, 'Failed to load');
           }
-
-          registeredJobs.add(jobId);
-          successCount++;
-
-          const lecturerName = schedule.lecturer?.name || "Prof. Alex Macksyn";
-
-          logger.info({
-            jobId,
-            subject: schedule.subject,
-            professor: lecturerName,
-            groupId: schedule.groupId,
-            cronTime,
-            timezone: schedule.timezone
-          }, 'Successfully registered lecture schedule');
-
         } catch (error) {
-          logger.error(
-            { err: error, scheduleId: schedule._id, subject: schedule.subject },
-            'Error loading individual schedule'
-          );
-          skipCount++;
+          failed++;
+          logger.error({ err: error, subject: schedule.subject }, 'Load error');
         }
       }
 
-      logger.info(
-        `AI Lecturer (onLoad): Completed. Success: ${successCount}, Skipped: ${skipCount}, Total: ${allSchedules.length}`
-      );
-
-      if (skipCount > 0) {
-        logger.warn(`${skipCount} schedule(s) failed to load. Check logs for details.`);
-      }
+      logger.info(`AI Lecturer v4: Loaded ${loaded}/${schedules.length} schedules (${failed} failed)`);
 
     } catch (error) {
-      logger.error({ err: error }, 'AI Lecturer (onLoad): Critical error during initialization');
+      logger.error({ err: error }, 'AI Lecturer v4: Initialization failed');
     }
   }
 };
