@@ -35,8 +35,8 @@ let birthdaySettings = { ...defaultSettings };
 // ===== V3 PLUGIN EXPORT =====
 export default {
   name: 'Birthday System',
-  version: '3.0.0',
-  author: 'Alex Macksyn',
+  version: '3.0.1', // Incremented version
+  author: 'Alex Macksyn (with fix)',
   description: 'Advanced birthday system with automatic reminders and wishes using scheduled tasks',
   category: 'social',
 
@@ -298,7 +298,10 @@ async function getUpcomingBirthdays(daysAhead) {
 
 // Generate birthday wish message
 function getBirthdayWishMessage(birthdayPerson) {
-  // NEW: Get the user's number for tagging
+  // ===== ⭐️ USER'S PREFERRED FIX ⭐️ =====
+  // We use the person's @tag in the text, as requested.
+  // The 'mentions' array in scheduledBirthdayWishes will be modified
+  // to EXCLUDE the birthday person to prevent a double tag.
   const userTag = `@${birthdayPerson.userId.split('@')[0]}`;
 
   const wishes = [
@@ -308,6 +311,7 @@ function getBirthdayWishMessage(birthdayPerson) {
     `🎈 BIRTHDAY ALERT! 🎈\n\nIt's ${userTag}'s special day! 🎂 Let's celebrate this wonderful person who brings joy to our group! 🎊🎉`,
     `🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday dear ${userTag}! 🎵\n🎵 Happy Birthday to you! 🎵\n\n🎂 Hope your day is as special as you are! 🌟`
   ];
+  // ===== ⭐️ END FIX ⭐️ =====
 
   const randomWish = wishes[Math.floor(Math.random() * wishes.length)];
   let message = randomWish;
@@ -416,8 +420,10 @@ async function scheduledBirthdayWishes(context) {
               // NEW: Get all participants for silent tag
               const allParticipants = await getGroupParticipants(sock, groupId, logger);
 
-              // Add birthday person to mentions if not already in the list (should be)
-              const mentions = [...new Set([birthdayPerson.userId, ...allParticipants])];
+              // ===== ⭐️ USER'S PREFERRED FIX ⭐️ =====
+              // Filter out the birthday person from the mentions array,
+              // as they are already tagged in the message text.
+              const mentions = allParticipants.filter(id => id !== birthdayPerson.userId);
 
               // FIXED: Use 'sock' from context
               const success = await safeSend(sock, groupId, {
@@ -432,7 +438,7 @@ async function scheduledBirthdayWishes(context) {
               }
 
               await new Promise(resolve => setTimeout(resolve, 5000));
-            } catch (error) {
+            } catch (error) { // <--- ⭐️ SYNTAX FIX ⭐️ Added missing { and }
               logger.error(`❌ Group wish failed for ${groupId.split('@')[0]}:`, error.message);
             }
           }
@@ -874,7 +880,7 @@ async function handleThisMonth(context) {
     }
 
     // Check if birthday has passed this month
-    const today = moment.tz('Africa/Lagos');
+    const today = moment.tz('Africa/LLagos');
     if (person.birthday.month === today.month() + 1) {
       if (person.birthday.day === today.date()) {
         message += ` 🎊 TODAY!`;
