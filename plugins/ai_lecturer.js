@@ -1,4 +1,61 @@
-// plugins/ai_lecturer.js - V4.0 Production Ready (Fixed for Your Bot)
+//
+// 🎲 VARIETY MODE (Default) - Fresh Topics Each Week
+// ---------------------------------------------------
+// Perfect for: Talk shows, discussion series, weekly segments
+// Each session = Standalone topic within the category
+// No continuity required - anyone can join any week
+//
+// Examples:
+// • "Relationship Gist" (Tuesdays)
+//   Week 1: Communication in modern relationships
+//   Week 2: Building trust and setting boundaries
+//   Week 3: Handling conflicts effectively
+//   Week 4: Love languages explained
+//   (Each week = completely different topic!)
+//
+// • "BizTalk" (Wednesdays)
+//   Week 1: Starting a side hustle in Nigeria
+//   Week 2: Digital marketing on a budget
+//   Week 3: Managing business finances
+//   Week 4: Customer retention strategies
+//
+// • "Sex Education / Freaky Gist" (Thursdays)
+//   Week 1: Understanding consent
+//   Week 2: Sexual health basics
+//   Week 3: Relationship intimacy
+//   Week 4: Safe practices
+//
+// • "Health Talk" (Fridays)
+//   Week 1: Nutrition myths debunked
+//   Week 2: Mental health awareness
+//   Week 3: Exercise for beginners
+//   Week 4: Sleep hygiene tips
+//
+// 📚 COURSE MODE - Progressive Learning
+// --------------------------------------
+// Perfect for: Skills, subjects, structured learning
+// Each part builds on previous ones
+// Students should follow from Part 1
+//
+// Examples:
+// • "Python Programming"
+//   Part 1: What is Python? Setup & basics
+//   Part 2: Variables and data types
+//   Part 3: Control flow (if/else, loops)
+//   Part 10: Object-oriented programming
+//   (Each part builds on previous knowledge!)
+//
+// • "Nigerian History"
+//   Part 1: Overview and importance
+//   Part 2: Pre-colonial kingdoms
+//   Part 5: Colonial era
+//   Part 15: Independence movement
+//
+// HOW TO SCHEDULE:
+// ================
+// VARIETY: .schedule Relationship Gist | Tuesday | 10:00
+// COURSE:  .schedule Python | Monday | 10:00 | course
+
 import axios from 'axios';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
 import cron from 'node-cron';
@@ -25,8 +82,8 @@ const CONFIG = {
     {
       id: 'prof_alex',
       name: 'Prof. Alex Macksyn',
-      style: 'Witty Lagos Academic prof',
-      prompt: 'You\'re Prof. Alex - mordern naija intellectual. Makes complex topic relatable with contemporary nigerian realities. Natural flow, 5-7 emojis. Bold key terms.'
+      style: 'Street-smart Lagos prof',
+      prompt: 'You\'re Prof. Alex - cool Lagos lecturer. Use Nigerian vibes (NEPA, danfo, jollof debates). Fun but smart. Natural flow, 5-7 emojis. Bold key terms.'
     },
     {
       id: 'dr_evelyn',
@@ -296,20 +353,55 @@ Hook → Core Teaching (3 points with examples) → Practical Application → St
 600-800 words. Natural Nigerian context. Teach it.`;
 }
 
-function buildSeriesPrompt(schedule, isFirst, previousSummary = null) {
+function buildSeriesPrompt(schedule, isFirst, previousSummary = null, coursePlan = null) {
+  const mode = schedule.mode || 'course'; // 'course' or 'variety'
+
+  if (mode === 'variety') {
+    // VARIETY MODE: Different topic each week within the category
+    const previousTopics = schedule.previousTopics || [];
+    const topicHistory = previousTopics.length > 0 
+      ? `Covered before: ${previousTopics.slice(-5).join(', ')}. Pick NEW topic.` 
+      : '';
+
+    return `${schedule.subject} - Session ${schedule.part}
+
+${topicHistory}
+
+Pick a fresh, engaging topic within "${schedule.subject}". Make it:
+- Relevant to Nigerian audience
+- Different from previous sessions
+- Practical and relatable
+- Standalone (not continuing last week)
+
+Structure: Hook → Topic intro → 3-4 key points (examples + insights) → Practical tips → Strong close
+
+600-800 words. Teach now.`;
+  }
+
+  // COURSE MODE: Progressive curriculum
   const contextNote = !isFirst && previousSummary 
-    ? `Last time: ${previousSummary.substring(0, 120)}...` 
+    ? `Last: ${previousSummary.substring(0, 120)}...` 
     : '';
 
-  return `${schedule.subject} - Part ${schedule.part}
+  let stage = '';
+  if (schedule.part <= 4) stage = 'Foundation (basics, fundamentals)';
+  else if (schedule.part <= 12) stage = 'Building (intermediate concepts)';
+  else if (schedule.part <= 26) stage = 'Advanced (deep dives, applications)';
+  else stage = 'Mastery (expert topics, real-world)';
+
+  const planNote = coursePlan ? `Course plan: ${coursePlan}` : '';
+
+  return `${schedule.subject} - Part ${schedule.part}/${CONFIG.MAX_PARTS}
 ${contextNote}
+${planNote}
+Stage: ${stage}
 
 ${isFirst 
-  ? 'Structure: Welcome → Overview → First 3 Concepts → Preview Next → Strong Close'
-  : `Structure: Quick Recap → Today's 3 Concepts → Connect to Part ${schedule.part - 1} → Preview Part ${schedule.part + 1} → Close`
+  ? `Part 1: Intro. Cover: (1) What is ${schedule.subject}? Why learn it? (2) Roadmap for this 52-part series - what students will master (3) First core concept. End with: "Next week, Part 2..."`
+  : `Part ${schedule.part}: Progress from Part ${schedule.part - 1}. Teach 2-3 NEW concepts at ${stage} level. Reference previous. Preview Part ${schedule.part + 1}.`
 }
 
-500-700 words. Series continuity. Teach Part ${schedule.part}.`;
+500-700 words. Natural progression. Teach now.`;
 }
 
 // ============================================================================
@@ -377,15 +469,19 @@ async function runScheduledLecture(scheduleId) {
     if (schedule.part > CONFIG.MAX_PARTS) {
       globalLogger.warn(`${schedule.subject} completed all ${CONFIG.MAX_PARTS} parts`);
       await globalSock.sendMessage(schedule.groupId, {
-        text: `🎓 *${schedule.subject}* series complete!\n\nAll ${CONFIG.MAX_PARTS} parts delivered. Course concluded. 🎉`
+        text: `🎓 *${schedule.subject}* series complete!\n\nAll ${CONFIG.MAX_PARTS} sessions delivered. 🎉`
       });
       return;
     }
 
-    globalLogger.info(`Running: ${schedule.subject} Part ${schedule.part}`);
+    const mode = schedule.mode || 'course';
+    globalLogger.info(`Running: ${schedule.subject} ${mode === 'variety' ? 'Session' : 'Part'} ${schedule.part}`);
 
+    // Get previous context
     let previousSummary = null;
-    if (schedule.part > 1) {
+    let coursePlan = schedule.coursePlan || null;
+
+    if (schedule.part > 1 && mode === 'course') {
       const prev = await db.collection('lecture_history').findOne(
         { scheduleId, part: schedule.part - 1, status: 'success' },
         { sort: { deliveredAt: -1 } }
@@ -395,42 +491,81 @@ async function runScheduledLecture(scheduleId) {
       }
     }
 
-    const prompt = buildSeriesPrompt(schedule, schedule.part === 1, previousSummary);
+    const prompt = buildSeriesPrompt(schedule, schedule.part === 1, previousSummary, coursePlan);
     const script = await generateLecture(schedule.lecturer, prompt, globalLogger);
 
+    // Extract topic for variety mode
+    let currentTopic = null;
+    if (mode === 'variety') {
+      // Try to extract the topic from the lecture
+      const topicMatch = script.match(/(?:today|this week|let'?s talk about)[:\s]*([^\n\.!?]{10,80})/i);
+      if (topicMatch) {
+        currentTopic = topicMatch[1].trim();
+      }
+    }
+
+    // If Part 1 in course mode, extract and save course plan
+    if (schedule.part === 1 && mode === 'course' && !coursePlan) {
+      const planMatch = script.match(/(?:roadmap|syllabus|we'?ll cover|plan|series will include)[:\s]([^\.]+(?:\.[^\.]+){0,3})/i);
+      if (planMatch) {
+        coursePlan = planMatch[1].substring(0, 200).trim();
+        await db.collection('lecture_schedules').updateOne(
+          { _id: scheduleId },
+          { $set: { coursePlan } }
+        );
+        globalLogger.info(`Saved course plan: ${coursePlan.substring(0, 50)}...`);
+      }
+    }
+
+    // Header
+    const partLabel = mode === 'variety' ? `SESSION ${schedule.part}` : `PART ${schedule.part}`;
     await globalSock.sendMessage(schedule.groupId, {
-      text: `🎓 *${schedule.subject.toUpperCase()} - PART ${schedule.part}*\n\n*Professor:* ${schedule.lecturer.name}\n${'─'.repeat(35)}`
+      text: `🎓 *${schedule.subject.toUpperCase()} - ${partLabel}*\n\n*Professor:* ${schedule.lecturer.name}\n${'─'.repeat(35)}`
     });
 
     await deliverScript(globalSock, schedule.groupId, script, globalLogger);
 
     await sleep(2000);
     const nextPart = schedule.part + 1;
+    const nextLabel = mode === 'variety' ? `Session ${nextPart}` : `Part ${nextPart}`;
     const footer = nextPart <= CONFIG.MAX_PARTS
-      ? `${'─'.repeat(35)}\n🎓 *END PART ${schedule.part}*\n\n_Part ${nextPart} next week. See you then!_`
-      : `${'─'.repeat(35)}\n🎓 *FINAL LECTURE*\n\n_Series complete. Thank you!_`;
+      ? `${'─'.repeat(35)}\n🎓 *END ${partLabel}*\n\n_${nextLabel} next week with a fresh topic!_`
+      : `${'─'.repeat(35)}\n🎓 *FINAL SESSION*\n\n_Series complete. Thank you!_`;
 
     await globalSock.sendMessage(schedule.groupId, { text: footer });
 
+    // Update schedule
+    const updateData = {
+      part: nextPart,
+      lastDelivered: new Date()
+    };
+
+    // For variety mode, track previous topics
+    if (mode === 'variety' && currentTopic) {
+      const previousTopics = schedule.previousTopics || [];
+      previousTopics.push(currentTopic);
+      // Keep only last 10 topics
+      if (previousTopics.length > 10) {
+        previousTopics.shift();
+      }
+      updateData.previousTopics = previousTopics;
+    }
+
     await db.collection('lecture_schedules').updateOne(
       { _id: scheduleId },
-      {
-        $set: {
-          part: nextPart,
-          lastDelivered: new Date()
-        }
-      }
+      { $set: updateData }
     );
 
     await db.collection('lecture_history').insertOne({
       scheduleId,
       part: schedule.part,
+      topic: currentTopic || null,
       summary: script.substring(0, 200),
       deliveredAt: new Date(),
       status: 'success'
     });
 
-    globalLogger.info(`Delivered ${schedule.subject} Part ${schedule.part}`);
+    globalLogger.info(`Delivered ${schedule.subject} ${partLabel}${currentTopic ? `: ${currentTopic}` : ''}`);
 
   } catch (error) {
     globalLogger.error({ err: error, scheduleId }, 'Scheduled lecture failed');
@@ -438,8 +573,11 @@ async function runScheduledLecture(scheduleId) {
     try {
       const schedule = await db.collection('lecture_schedules').findOne({ _id: scheduleId });
       if (schedule) {
+        const mode = schedule.mode || 'course';
+        const label = mode === 'variety' ? `Session ${schedule.part}` : `Part ${schedule.part}`;
+
         await globalSock.sendMessage(schedule.groupId, {
-          text: `❌ Lecture delivery error\n\n*${schedule.subject} Part ${schedule.part}*\n\n_Will retry next week._`
+          text: `❌ Lecture delivery error\n\n*${schedule.subject} ${label}*\n\n_Will retry next week._`
         });
 
         await db.collection('lecture_history').insertOne({
@@ -518,23 +656,58 @@ async function handleSchedule(context) {
     if (parts.length < 3) {
       return msg.reply(
         `📅 *Schedule Lecture Series*\n\n` +
-        `*Format:* \`.schedule <subject> | <day> | <time> | [timezone]\`\n\n` +
-        `*Examples:*\n` +
-        `• \`.schedule Python Basics | Monday | 10:00\`\n` +
-        `• \`.schedule History of Jazz | Friday | 15:30 | America/New_York\`\n\n` +
-        `*Day:* Sunday-Saturday or 0-6\n` +
-        `*Time:* 24-hour HH:MM\n` +
-        `*Timezone:* Optional (default: ${CONFIG.DEFAULT_TIMEZONE})`
+        `*Format:* \`.schedule <subject> | <day> | <time> | [mode] | [timezone]\`\n\n` +
+        `*🎯 TWO MODES:*\n\n` +
+        `*1️⃣ VARIETY MODE* (default)\n` +
+        `Different topic each week within category\n` +
+        `Perfect for: Relationship Gist, BizTalk, Health Talk\n` +
+        `Example: \`.schedule Relationship Gist | Tuesday | 10:00\`\n` +
+        `  Week 1: Communication in relationships\n` +
+        `  Week 2: Trust and boundaries\n` +
+        `  Week 3: Dealing with conflicts\n` +
+        `  (Fresh topic each week!)\n\n` +
+        `*2️⃣ COURSE MODE*\n` +
+        `Progressive curriculum, building each week\n` +
+        `Perfect for: Python, History, Business Strategy\n` +
+        `Example: \`.schedule Python Programming | Monday | 14:00 | course\`\n` +
+        `  Part 1: Introduction\n` +
+        `  Part 2: Variables (builds on Part 1)\n` +
+        `  Part 3: Functions (builds on Part 2)\n` +
+        `  (Progressive learning!)\n\n` +
+        `*More Examples:*\n` +
+        `• \`.schedule BizTalk | Wednesday | 15:00\` ← variety\n` +
+        `• \`.schedule Sex Education | Thursday | 20:00\` ← variety\n` +
+        `• \`.schedule Health Talk | Friday | 10:00 | variety | Africa/Lagos\`\n` +
+        `• \`.schedule Data Science | Monday | 10:00 | course\`\n\n` +
+        `*Parameters:*\n` +
+        `• Day: Sunday-Saturday or 0-6\n` +
+        `• Time: 24-hour HH:MM\n` +
+        `• Mode: "variety" or "course" (default: variety)\n` +
+        `• Timezone: Optional (default: ${CONFIG.DEFAULT_TIMEZONE})`
       );
     }
 
-    const [subject, dayStr, timeStr, tzStr] = parts;
+    let [subject, dayStr, timeStr, modeOrTz, tzStr] = parts;
+
+    // Parse mode and timezone (flexible order)
+    let mode = 'variety'; // Default to variety mode
+    let timezone = null;
+
+    if (modeOrTz) {
+      if (modeOrTz.toLowerCase() === 'course' || modeOrTz.toLowerCase() === 'variety') {
+        mode = modeOrTz.toLowerCase();
+        timezone = tzStr;
+      } else {
+        // modeOrTz is actually timezone
+        timezone = modeOrTz;
+      }
+    }
 
     if (!subject || !dayStr || !timeStr) {
       throw new Error('Missing required fields');
     }
 
-    const { dayOfWeek, time, timezone } = parseSchedule(dayStr, timeStr, tzStr);
+    const { dayOfWeek, time, timezone: parsedTz } = parseSchedule(dayStr, timeStr, timezone);
     const cronTime = getCronTime(time, dayOfWeek);
     const lecturer = randomLecturer();
 
@@ -543,9 +716,12 @@ async function handleSchedule(context) {
       subject,
       dayOfWeek,
       time,
-      timezone,
+      timezone: parsedTz,
+      mode,
       part: 1,
       lecturer,
+      previousTopics: [], // For variety mode
+      coursePlan: null, // For course mode
       lastDelivered: null,
       scheduledBy: msg.sender,
       createdAt: new Date()
@@ -569,7 +745,7 @@ async function handleSchedule(context) {
         jobId,
         cronTime,
         () => runScheduledLecture(scheduleId),
-        timezone
+        parsedTz
       );
 
       if (!success) {
@@ -581,16 +757,36 @@ async function handleSchedule(context) {
     }
 
     const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek];
+    const modeEmoji = mode === 'variety' ? '🎲' : '📚';
+    const modeDesc = mode === 'variety' 
+      ? 'Different topic each week' 
+      : 'Progressive curriculum';
 
-    await msg.reply(
-      `✅ *Lecture Series Scheduled*\n\n` +
+    let reply = `✅ *Lecture Series Scheduled*\n\n` +
       `*Subject:* ${subject}\n` +
       `*Professor:* ${lecturer.name}\n` +
       `*Schedule:* Every ${dayName} at ${time}\n` +
-      `*Timezone:* ${timezone}\n` +
-      `*Total Parts:* Up to ${CONFIG.MAX_PARTS}\n\n` +
-      `Part 1 starts on the next ${dayName}!`
-    );
+      `*Timezone:* ${parsedTz}\n` +
+      `*Mode:* ${modeEmoji} ${mode.toUpperCase()}\n` +
+      `*Type:* ${modeDesc}\n` +
+      `*Total Sessions:* Up to ${CONFIG.MAX_PARTS}\n\n`;
+
+    if (mode === 'variety') {
+      reply += `📚 *How it works:*\n` +
+        `Each ${dayName}, the AI picks a fresh topic within "${subject}".\n` +
+        `Topics are standalone - no need to catch previous weeks!\n\n` +
+        `_Session 1 starts on the next ${dayName}!_`;
+    } else {
+      reply += `📚 *How it works:*\n` +
+        `Part 1: Introduction + roadmap\n` +
+        `Parts 2-4: Foundation concepts\n` +
+        `Parts 5-12: Building skills\n` +
+        `Parts 13-26: Advanced topics\n` +
+        `Parts 27-52: Mastery + real-world\n\n` +
+        `_Part 1 starts on the next ${dayName}!_`;
+    }
+
+    await msg.reply(reply);
 
   } catch (error) {
     logger.error({ err: error }, 'Schedule failed');
@@ -623,10 +819,15 @@ async function handleList(context) {
         ? new Date(s.lastDelivered).toLocaleDateString('en-GB')
         : 'Not yet';
 
+      const mode = s.mode || 'course';
+      const modeEmoji = mode === 'variety' ? '🎲' : '📚';
+      const label = mode === 'variety' ? 'Session' : 'Part';
+
       reply += `\n${'─'.repeat(35)}\n` +
                `*${s.subject}*\n` +
+               `├ Mode: ${modeEmoji} ${mode}\n` +
                `├ Prof: ${s.lecturer.name}\n` +
-               `├ Next: Part ${s.part}/${CONFIG.MAX_PARTS}\n` +
+               `├ Next: ${label} ${s.part}/${CONFIG.MAX_PARTS}\n` +
                `├ When: ${day} @ ${s.time}\n` +
                `├ Zone: ${s.timezone}\n` +
                `└ Last: ${lastRan}`;
@@ -681,22 +882,7 @@ async function handleCancel(context) {
   }
 }
 
-async function handleHistory(context) {
-  const { msg, text, logger } = context;
-  const db = await PluginHelpers.getDB();
-
-  if (!text) {
-    return msg.reply(
-      `📜 *Lecture History*\n\n` +
-      `*Usage:* \`.history <subject>\`\n` +
-      `*Example:* \`.history Python Basics\``
-    );
-  }
-
-  try {
-    const schedule = await db.collection('lecture_schedules').findOne({
-      groupId: msg.from,
-      subject: { $regex: new RegExp(`^${text}$`, 'i') }
+, 'i') }
     });
 
     if (!schedule) {
@@ -716,7 +902,11 @@ async function handleHistory(context) {
       );
     }
 
+    const mode = schedule.mode || 'course';
+    const label = mode === 'variety' ? 'Session' : 'Part';
+
     let reply = `📜 *History: ${schedule.subject}*\n` +
+                `*Mode:* ${mode === 'variety' ? '🎲 Variety' : '📚 Course'}\n` +
                 `*Professor:* ${schedule.lecturer.name}\n` +
                 `_Last ${history.length} deliveries_\n`;
 
@@ -728,9 +918,15 @@ async function handleHistory(context) {
         year: 'numeric'
       });
 
-      reply += `\n${icon} Part ${entry.part} - ${date}`;
+      reply += `\n${icon} ${label} ${entry.part} - ${date}`;
+
+      // Show topic for variety mode
+      if (mode === 'variety' && entry.topic) {
+        reply += `\n   └ ${entry.topic}`;
+      }
+
       if (entry.error) {
-        reply += `\n   └ ${entry.error.substring(0, 50)}`;
+        reply += `\n   └ Error: ${entry.error.substring(0, 50)}`;
       }
     }
 
@@ -748,16 +944,16 @@ async function handleHistory(context) {
 
 export default {
   name: 'AI Lecturer',
-  description: 'Production-ready AI lecture system with 10 unique personalities',
+  description: 'Production-ready AI lecture system with 10 personalities and 2 modes (variety/course)',
   category: 'education',
-  version: '4.0.1',
+  version: '4.1.0',
   author: 'Claude + Malvin',
 
   commands: ['lecture', 'schedule', 'lectures', 'cancel', 'history'],
   aliases: ['teach', 'class', 'schedule-lecture', 'list-lectures', 'cancel-lecture', 'lecture-history'],
 
-  usage: '.lecture <topic> or .schedule <subject> | <day> | <time>',
-  example: '.lecture Bitcoin explained\n.schedule Python | Monday | 10:00\n.lectures\n.cancel Python\n.history Python',
+  usage: '.lecture <topic> or .schedule <subject> | <day> | <time> | [mode]',
+  example: '.lecture Bitcoin explained\n.schedule Relationship Gist | Tuesday | 10:00\n.schedule Python | Monday | 10:00 | course\n.lectures\n.cancel Relationship Gist\n.history Relationship Gist',
 
   adminOnly: true,
   groupOnly: true,
@@ -797,7 +993,7 @@ export default {
     globalSock = sock;
     globalLogger = logger;
 
-    logger.info('AI Lecturer v4: Initializing...');
+    logger.info('AI Lecturer v4.1: Initializing (Variety + Course modes)...');
 
     try {
       await ensureIndexes(db, logger);
@@ -818,6 +1014,7 @@ export default {
         try {
           const cronTime = getCronTime(schedule.time, schedule.dayOfWeek);
           const jobId = getJobId(schedule._id);
+          const mode = schedule.mode || 'course';
 
           const success = registerCronJob(
             jobId,
@@ -830,6 +1027,7 @@ export default {
             loaded++;
             logger.info({
               subject: schedule.subject,
+              mode: mode,
               professor: schedule.lecturer.name,
               schedule: `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][schedule.dayOfWeek]} @ ${schedule.time}`
             }, 'Lecture loaded');
@@ -843,10 +1041,10 @@ export default {
         }
       }
 
-      logger.info(`AI Lecturer v4: Loaded ${loaded}/${schedules.length} schedules (${failed} failed)`);
+      logger.info(`AI Lecturer v4.1: Loaded ${loaded}/${schedules.length} schedules (${failed} failed)`);
 
     } catch (error) {
-      logger.error({ err: error }, 'AI Lecturer v4: Initialization failed');
+      logger.error({ err: error }, 'AI Lecturer v4.1: Initialization failed');
     }
   }
 };

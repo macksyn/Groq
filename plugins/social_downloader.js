@@ -108,25 +108,36 @@ const PLATFORM_APIS = {
     }
   },
   facebook: {
-    endpoint: 'https://delirius-apiofc.vercel.app/download/facebook',
-    buildUrl: (url) => `https://delirius-apiofc.vercel.app/download/facebook?url=${encodeURIComponent(url)}`,
-    extractData: (response) => {
+    endpoint: 'https://jawad-tech.vercel.app/downloader',
+    buildUrl: (url) => `https://jawad-tech.vercel.app/downloader?url=${encodeURIComponent(url)}`,
+  extractData: (response) => {
       const data = response.data;
-      if (!data || !data.urls || data.urls.length === 0) {
-        throw new Error('Invalid Facebook response format');
+
+      // Check if API returned success
+      if (!data.status || data.status === false) {
+        throw new Error(data.message || 'Facebook API returned error');
       }
-      
-      const videoUrl = data.urls[0].hd || data.urls[1]?.sd;
-      if (!videoUrl) {
-        throw new Error('No video URL found in Facebook response');
+
+      // Check if result array exists and has items
+      if (!data.result || !Array.isArray(data.result) || data.result.length === 0) {
+        throw new Error('No video URLs found in Facebook response');
       }
-      
+
+      // Try to get HD quality first, fallback to SD or first available
+      const hdVideo = data.result.find(v => v.quality === 'HD');
+      const sdVideo = data.result.find(v => v.quality === 'SD');
+      const videoData = hdVideo || sdVideo || data.result[0];
+
+      if (!videoData || !videoData.url) {
+        throw new Error('No valid video URL found in Facebook response');
+      }
+
       return {
-        url: videoUrl,
-        thumbnail: null,
-        title: data.title || 'Facebook Video',
-        duration: null,
-        isHd: data.isHdAvailable || false
+        url: videoData.url,
+        thumbnail: data.metadata?.thumbnail || null,
+        title: data.metadata?.title || 'Facebook Video',
+        duration: data.metadata?.duration || null,
+        isHd: videoData.quality === 'HD'
       };
     }
   },
