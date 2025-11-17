@@ -12,7 +12,7 @@ const DEFAULT_SETTINGS = {
   downloadCost: 50,
   rateLimitFree: 10,
   rateLimitCooldown: 24 * 60 * 60 * 1000, // 24 hours
-  enabledPlatforms: ['facebook', 'tiktok', 'twitter', 'instagram', 'spotify'],
+  enabledPlatforms: ['facebook', 'tiktok', 'twitter', 'instagram', 'spotify', 'youtube'],
   maxFileSize: 100, // MB
   allowGroups: true,
   allowPrivate: true,
@@ -65,6 +65,18 @@ const PLATFORMS = {
       /(?:https?:\/\/)?open\.spotify\.com\/album\/[\w]+/gi
     ],
     icon: '🎵'
+  },
+  YOUTUBE: {
+    name: 'YouTube',
+    key: 'youtube',
+    patterns: [
+      /(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com\/watch\?v=[\w-]+/gi,
+      /(?:https?:\/\/)?(?:www\.)?youtu\.be\/[\w-]+/gi,
+      /(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com\/shorts\/[\w-]+/gi,
+      /(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com\/embed\/[\w-]+/gi,
+      /(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com\/v\/[\w-]+/gi
+    ],
+    icon: '📺'
   }
 };
 
@@ -77,7 +89,7 @@ const PLATFORM_APIS = {
       if (!data || !data.meta?.media?.[0]) {
         throw new Error('Invalid TikTok response format');
       }
-      
+
       const media = data.meta.media[0];
       return {
         url: media.hd || media.org || media.wm,
@@ -96,7 +108,7 @@ const PLATFORM_APIS = {
       if (!data || !Array.isArray(data) || data.length === 0) {
         throw new Error('Invalid Instagram response format');
       }
-      
+
       const media = data[0];
       return {
         url: media.url,
@@ -149,7 +161,7 @@ const PLATFORM_APIS = {
       if (!data || !data.url) {
         throw new Error('Invalid Spotify response format');
       }
-      
+
       return {
         url: data.url,
         thumbnail: data.image || null,
@@ -167,12 +179,40 @@ const PLATFORM_APIS = {
       if (!videoMatch) {
         throw new Error('No video URL found in Twitter response');
       }
-      
+
       return {
         url: videoMatch[0],
         thumbnail: null,
         title: 'Twitter Video',
         duration: null
+      };
+    }
+  },
+  youtube: {
+    endpoint: 'https://jawad-tech.vercel.app/download/ytdl',
+    buildUrl: (url) => `https://jawad-tech.vercel.app/download/ytdl?url=${encodeURIComponent(url)}`,
+    extractData: (response) => {
+      const data = response.data;
+
+      // Check if API returned success
+      if (!data.status || data.status === false) {
+        throw new Error(data.message || 'YouTube API returned error');
+      }
+
+      // Check if result exists
+      if (!data.result) {
+        throw new Error('No result found in YouTube response');
+      }
+
+      return {
+        url: data.result.mp4 || data.result.mp3,
+        mp3Url: data.result.mp3,
+        mp4Url: data.result.mp4,
+        thumbnail: null,
+        title: data.result.title || 'YouTube Video',
+        duration: null,
+        hasAudio: !!data.result.mp3,
+        hasVideo: !!data.result.mp4
       };
     }
   }
@@ -204,13 +244,13 @@ class SocialMediaDownloader {
     try {
       return await safeOperation(async (db, collection) => {
         let settings = await collection.findOne({ _id: 'main_settings' });
-        
+
         if (!settings) {
           settings = { _id: 'main_settings', ...DEFAULT_SETTINGS };
           await collection.insertOne(settings);
           console.log(chalk.cyan('📝 Created default downloader settings'));
         }
-        
+
         return settings;
       }, SETTINGS_COLLECTION);
     } catch (error) {
@@ -227,15 +267,15 @@ class SocialMediaDownloader {
           updatedAt: new Date(),
           updatedBy
         };
-        
+
         const result = await collection.updateOne(
           { _id: 'main_settings' },
           { $set: updateData },
           { upsert: true }
         );
-        
+
         this.settings = await this.loadSettings();
-        
+
         console.log(chalk.green('✅ Downloader settings updated'));
         return result;
       }, SETTINGS_COLLECTION);
@@ -252,7 +292,7 @@ class SocialMediaDownloader {
   isAdmin(userId) {
     const adminNumber = process.env.OWNER_NUMBER || process.env.ADMIN_NUMBER;
     if (!adminNumber) return false;
-    
+
     const userNumber = userId.split('@')[0];
     return adminNumber === userNumber || adminNumber.includes(userNumber);
   }
@@ -279,7 +319,7 @@ class SocialMediaDownloader {
       return await safeOperation(async (db, collection) => {
         const now = Date.now();
         let usage = await collection.findOne({ userId });
-        
+
         if (!usage) {
           usage = {
             userId,
@@ -291,7 +331,7 @@ class SocialMediaDownloader {
           };
           await collection.insertOne(usage);
         }
-        
+
         if (now > usage.resetTime) {
           await collection.updateOne(
             { userId },
@@ -305,7 +345,7 @@ class SocialMediaDownloader {
           usage.count = 0;
           usage.resetTime = now + this.getSettings().rateLimitCooldown;
         }
-        
+
         return usage;
       }, USAGE_COLLECTION);
     } catch (error) {
@@ -360,10 +400,10 @@ class SocialMediaDownloader {
       }
 
       console.log(chalk.cyan(`🔄 Downloading from ${platformKey} API: ${url}`));
-      
+
       const apiUrl = apiConfig.buildUrl(url);
       console.log(chalk.cyan(`API URL: ${apiUrl}`));
-      
+
       const response = await axios.get(apiUrl, {
         timeout: 30000,
         headers: {
@@ -378,19 +418,19 @@ class SocialMediaDownloader {
       }
 
       const extractedData = apiConfig.extractData(response);
-      
+
       return {
         ...extractedData,
         source: platformKey
       };
     } catch (error) {
       console.error(chalk.red(`${platformKey} API error:`), error.message);
-      
+
       if (error.response) {
         console.error(chalk.red('Response status:'), error.response.status);
         console.error(chalk.red('Response data:'), JSON.stringify(error.response.data, null, 2));
       }
-      
+
       throw error;
     }
   }
@@ -398,7 +438,7 @@ class SocialMediaDownloader {
   async download(url, userId, isGroup) {
     const downloadId = `${userId}_${Date.now()}`;
     const settings = this.getSettings();
-    
+
     if (isGroup && !settings.allowGroups) {
       return { error: '⚠️ Group downloads are currently disabled by admin.' };
     }
@@ -449,12 +489,12 @@ class SocialMediaDownloader {
       }
 
       let result;
-      
+
       try {
         result = await this.downloadWithPlatformAPI(url, config.key);
       } catch (error) {
         console.error(chalk.red(`❌ ${config.name} download failed`));
-        
+
         return { 
           error: `❌ *Download Failed*\n\n` +
                  `The ${config.name} content couldn't be downloaded. Possible reasons:\n` +
@@ -520,7 +560,7 @@ class SocialMediaDownloader {
 
   async getStats() {
     const now = Date.now();
-    
+
     if (this.statsCache && (now - this.statsCacheTime < this.statsCacheDuration)) {
       return this.statsCache;
     }
@@ -533,7 +573,7 @@ class SocialMediaDownloader {
           premiumDownloads: 0,
           platforms: {}
         };
-        
+
         return globalStats;
       }, SETTINGS_COLLECTION);
 
@@ -542,7 +582,7 @@ class SocialMediaDownloader {
         const activeUsers = await collection.countDocuments({ 
           lastDownload: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } 
         });
-        
+
         return { totalUsers, activeUsers };
       }, USAGE_COLLECTION);
 
@@ -664,19 +704,19 @@ async function handleDlSettings(reply, downloaderInstance, config, sender, setti
         if (platform && (state === 'on' || state === 'off')) {
           const settings = downloaderInstance.getSettings();
           const platforms = [...settings.enabledPlatforms] || [];
-          
+
           if (state === 'on' && !platforms.includes(platform)) {
             platforms.push(platform);
           } else if (state === 'off') {
             const index = platforms.indexOf(platform);
             if (index > -1) platforms.splice(index, 1);
           }
-          
+
           updates.enabledPlatforms = platforms;
           await downloaderInstance.saveSettings(updates, sender);
           await reply(`✅ ${platform} ${state === 'on' ? 'enabled' : 'disabled'}`);
         } else {
-          await reply('❌ Usage: .dlsettings platform <facebook|tiktok|twitter|instagram|spotify> on/off');
+          await reply('❌ Usage: .dlsettings platform <facebook|tiktok|twitter|instagram|spotify|youtube> on/off');
         }
         break;
       case 'groups':
@@ -710,7 +750,7 @@ async function handleDownload(reply, downloaderInstance, config, sock, m, sender
   if (!url) {
     const remaining = await downloaderInstance.getRemainingDownloads(sender);
     const settings = downloaderInstance.getSettings();
-    
+
     let replyText = `*📥 Social Media Downloader*\n\n`;
     replyText += `*Supported Platforms:*\n`;
     replyText += `${settings.enabledPlatforms.map(p => {
@@ -725,7 +765,7 @@ async function handleDownload(reply, downloaderInstance, config, sock, m, sender
     }
     replyText += `*Usage:* ${config.PREFIX}dl <url>\n`;
     replyText += `*Example:* ${config.PREFIX}dl https://tiktok.com/@user/video/123`;
-    
+
     await reply(replyText);
     return;
   }
@@ -743,9 +783,9 @@ async function handleDownload(reply, downloaderInstance, config, sock, m, sender
   if (result.success) {
     const settings = downloaderInstance.getSettings();
     const remaining = await downloaderInstance.getRemainingDownloads(sender);
-    
+
     let caption = `${result.icon} *${result.platform} Download*\n\n`;
-    
+
     if (result.artist) {
       caption += `🎤 *Artist:* ${result.artist}\n`;
     }
@@ -758,7 +798,7 @@ async function handleDownload(reply, downloaderInstance, config, sock, m, sender
     if (result.author) {
       caption += `👤 *Creator:* ${result.author}\n`;
     }
-    
+
     if (settings.premiumEnabled) {
       caption += `💳 Charged: ₦${settings.downloadCost}\n`;
     } else {
@@ -769,7 +809,8 @@ async function handleDownload(reply, downloaderInstance, config, sock, m, sender
     try {
       const isAudio = result.platform === 'Spotify';
       const isImage = result.type === 'image';
-      
+      const isYouTube = result.platform === 'YouTube';
+
       if (isAudio) {
         await sock.sendMessage(m.from, {
           audio: { url: result.url },
@@ -777,13 +818,32 @@ async function handleDownload(reply, downloaderInstance, config, sock, m, sender
           ptt: false,
           fileName: `${result.title}.mp3`
         }, { quoted: m });
-        
+
         await sock.sendMessage(m.from, { text: caption }, { quoted: m });
       } else if (isImage) {
         await sock.sendMessage(m.from, {
           image: { url: result.url },
           caption: caption
         }, { quoted: m });
+      } else if (isYouTube) {
+        // Send video first
+        if (result.mp4Url) {
+          await sock.sendMessage(m.from, {
+            video: { url: result.mp4Url },
+            caption: caption,
+            mimetype: 'video/mp4'
+          }, { quoted: m });
+        }
+
+        // Send audio if available
+        if (result.mp3Url) {
+          await sock.sendMessage(m.from, {
+            audio: { url: result.mp3Url },
+            mimetype: 'audio/mpeg',
+            ptt: false,
+            fileName: `${result.title}.mp3`
+          }, { quoted: m });
+        }
       } else {
         await sock.sendMessage(m.from, {
           video: { url: result.url },
@@ -797,11 +857,11 @@ async function handleDownload(reply, downloaderInstance, config, sock, m, sender
       });
     } catch (sendError) {
       console.error(chalk.red('Error sending media:'), sendError.message);
-      
+
       await sock.sendMessage(m.from, {
         react: { text: '❌', key: m.key }
       });
-      
+
       await reply(
         `❌ *Send Failed*\n\nThe media was downloaded but couldn't be sent. This might be due to:\n• File size too large\n• Network issues\n• WhatsApp restrictions\n\nDirect link: ${result.url}`
       );
@@ -811,7 +871,7 @@ async function handleDownload(reply, downloaderInstance, config, sock, m, sender
 
 async function handleDlStats(reply, downloaderInstance) {
   const stats = await downloaderInstance.getStats();
-  
+
   await reply(
     `*📊 Downloader Statistics*\n\n` +
     `*Total Downloads:* ${stats.totalDownloads || 0}\n` +
@@ -833,7 +893,7 @@ async function handleDlStats(reply, downloaderInstance) {
 
 async function handleDlHistory(reply, downloaderInstance, sender) {
   const history = await downloaderInstance.getUserHistory(sender, 10);
-  
+
   if (history.length === 0) {
     await reply(`📜 *Your Download History*\n\nNo downloads yet!`);
     return;
@@ -853,11 +913,11 @@ async function handleDlHistory(reply, downloaderInstance, sender) {
 export default {
   // Metadata from original 'info' object
   name: 'Social Media Downloader',
-  version: '3.0.0',
+  version: '3.1.0',
   author: 'Alex Macksyn',
-  description: 'Download videos/audio from social media with platform-specific APIs',
+  description: 'Download videos/audio from social media (Facebook, TikTok, Twitter, Instagram, Spotify, YouTube)',
   category: 'media',
-  
+
   // Commands from original 'info' object
   commands: ['dl', 'download', 'dlsettings', 'dlstats', 'dlhistory'],
   aliases: [], // Original 'info' object didn't have aliases array
@@ -869,11 +929,11 @@ export default {
   async init(context) {
     const { logger } = context;
     await downloader.initialize();
-    
+
     const settings = downloader.getSettings();
     logger.info('✅ Social Media Downloader V3 initialized');
     logger.info(`Mode: ${settings.premiumEnabled ? '💎 Premium' : '🆓 Free'}`);
-    logger.info(`Supported: TikTok, Instagram, Facebook, Twitter, Spotify`);
+    logger.info(`Supported: TikTok, Instagram, Facebook, Twitter, Spotify, YouTube`);
   },
 
   /**
@@ -893,14 +953,14 @@ export default {
       const sender = m.sender;
       const from = m.from;
       const isGroup = m.isGroup;
-      
+
       if (!sender) {
         logger.warn('⚠️ No sender found in message (from V3 context)');
         return;
       }
-      
+
       const isAdmin = downloader.isAdmin(sender);
-      
+
       // Reply helper using context
       const reply = async (text) => {
         // Use m.reply helper if available, otherwise fallback
