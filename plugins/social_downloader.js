@@ -154,20 +154,29 @@ const PLATFORM_APIS = {
     }
   },
   spotify: {
-    endpoint: 'https://delirius-apiofc.vercel.app/download/spotifydl',
-    buildUrl: (url) => `https://delirius-apiofc.vercel.app/download/spotifydl?url=${encodeURIComponent(url)}`,
+    endpoint: 'https://delirius-apiofc.vercel.app/download/spotifydlv2',
+    buildUrl: (url) => `https://delirius-apiofc.vercel.app/download/spotifydlv2?url=${encodeURIComponent(url)}`,
     extractData: (response) => {
-      const data = response.data?.data;
-      if (!data || !data.url) {
-        throw new Error('Invalid Spotify response format');
+      const res = response.data;
+
+      // Robust checking: Try 'data', 'result', or the root object
+      const data = res.data || res.result || res;
+
+      // Try multiple common field names for the audio URL
+      const downloadUrl = data.url || data.link || data.download || data.audio;
+
+      if (!downloadUrl) {
+        // DEBUG: Log the actual response so the user can see what went wrong in console
+        console.log(chalk.yellow('⚠️ Debug - Spotify API Response:'), JSON.stringify(res, null, 2));
+        throw new Error('Invalid Spotify response format (check console for details)');
       }
 
       return {
-        url: data.url,
-        image: data.image || null,
+        url: downloadUrl,
+        thumbnail: data.image || data.thumbnail || data.cover || null,
         title: data.title || 'Spotify Track',
         duration: data.duration || null,
-        author: data.artist || 'Unknown Artist',
+        artist: data.artist || data.author || 'Unknown Artist',
         album: data.album || null
       };
     }
