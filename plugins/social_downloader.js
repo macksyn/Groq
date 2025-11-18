@@ -154,8 +154,8 @@ const PLATFORM_APIS = {
     }
   },
   spotify: {
-    endpoint: 'https://delirius-apiofc.vercel.app/download/spotifydlv2',
-    buildUrl: (url) => `https://delirius-apiofc.vercel.app/download/spotifydlv2?url=${encodeURIComponent(url)}`,
+    endpoint: 'https://delirius-apiofc.vercel.app/download/spotifydl',
+    buildUrl: (url) => `https://delirius-apiofc.vercel.app/download/spotifydl?url=${encodeURIComponent(url)}`,
     extractData: (response) => {
       const data = response.data?.data;
       if (!data || !data.url) {
@@ -164,10 +164,10 @@ const PLATFORM_APIS = {
 
       return {
         url: data.url,
-        thumbnail: data.image || null,
+        image: data.image || null,
         title: data.title || 'Spotify Track',
         duration: data.duration || null,
-        artist: data.artist || 'Unknown Artist',
+        author: data.artist || 'Unknown Artist',
         album: data.album || null
       };
     }
