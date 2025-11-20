@@ -1,4 +1,4 @@
-// plugins/ai_lecturer.js - Clean Production Version
+// plugins/ai_lecturer.js - Fixed & Robust Version
 import axios from 'axios';
 import cron from 'node-cron';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
@@ -9,11 +9,10 @@ import { PluginHelpers } from '../lib/pluginIntegration.js';
 
 const CONFIG = {
   API_URL: 'https://malvin-api.vercel.app/ai/gpt-5',
-  API_TIMEOUT: 50000,
+  API_TIMEOUT: 60000, // Increased to 60s
   DEFAULT_TIMEZONE: 'Africa/Lagos',
   MAX_SESSIONS: 52,
 
-  // 10 Lecturers with distinct personalities
   LECTURERS: [
     {
     id: 'prof_alex',
@@ -63,10 +62,10 @@ const CONFIG = {
   ]
 };
 
-// Global state for cron jobs and references
+// Global state
 const cronJobs = new Map();
-let sock = null;
-let logger = null;
+let globalSock = null;
+let globalLogger = null;
 
 // ============================================================================
 // UTILITIES
@@ -80,8 +79,6 @@ function randomLecturer() {
 
 function cleanAIResponse(text) {
   if (!text) return '';
-
-  // Remove AI meta-talk
   let clean = text
     .replace(/^(here'?s?|here is|let me (give|provide|deliver)).*?(lecture|content)[:\s]*/gi, '')
     .replace(/would you like (me to|another|more).*?[\?\s]*/gi, '')
@@ -93,7 +90,6 @@ function cleanAIResponse(text) {
     .replace(/in the style of.*?[:\s]*/gi, '' )
     .replace(/as (prof|dr|uncle|sister|mallam|baba).*?[:\s]*/gi, '')
     .trim();
-
   return clean.replace(/\n{3,}/g, '\n\n');
 }
 
@@ -102,11 +98,9 @@ async function generateLecture(lecturer, topic, mode, sessionNum, prevTopics) {
     let userPrompt = '';
 
     if (mode === 'variety') {
-      // Different topic each week
       const avoid = prevTopics.length > 0 ? `Avoid: ${prevTopics.slice(-3).join(', ')}. ` : '';
       userPrompt = `${topic} - Session ${sessionNum}\n${avoid}Pick NEW engaging topic. 600-800 words. Hook → 3 points → tips → close. Start now.`;
     } else {
-      // Progressive course
       userPrompt = `${topic} - Part ${sessionNum}\nTeach progressively. ${sessionNum === 1 ? 'Intro + roadmap.' : 'Build on previous.'} 500-700 words. Start now.`;
     }
 
@@ -118,7 +112,7 @@ async function generateLecture(lecturer, topic, mode, sessionNum, prevTopics) {
     });
 
     const raw = response.data?.response || response.data?.result || response.data?.answer;
-    if (!raw || raw.length < 100) throw new Error('Empty response');
+    if (!raw || raw.length < 100) throw new Error('AI returned empty or too short response');
 
     return cleanAIResponse(raw.trim());
   } catch (error) {
@@ -126,7 +120,9 @@ async function generateLecture(lecturer, topic, mode, sessionNum, prevTopics) {
   }
 }
 
-async function deliverWithTyping(sock, jid, text, logger) {
+async function deliverWithTyping(sock, jid, text) {
+  if (!sock) throw new Error('Connection lost');
+
   const sentences = text.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 0);
 
   for (let i = 0; i < sentences.length; i++) {
@@ -135,7 +131,13 @@ async function deliverWithTyping(sock, jid, text, logger) {
 
     await sock.sendPresenceUpdate('composing', jid);
     await sleep(typingTime);
-    await sock.sendMessage(jid, { text: sentence });
+
+    try {
+      await sock.sendMessage(jid, { text: sentence });
+    } catch (e) {
+      console.error('Failed to send sentence:', e);
+      break; // Stop if message fails
+    }
 
     if (i < sentences.length - 1) {
       await sleep(1500);
@@ -146,69 +148,68 @@ async function deliverWithTyping(sock, jid, text, logger) {
 }
 
 // ============================================================================
-// SCHEDULING
+// SCHEDULING CORE
 // ============================================================================
 
 function parseDayTime(dayStr, timeStr, tzStr) {
   const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-
   let day = /^\d+$/.test(dayStr) ? parseInt(dayStr) : days.indexOf(dayStr.toLowerCase());
-  if (day < 0 || day > 6) throw new Error('Invalid day (use 0-6 or Sunday-Saturday)');
 
+  if (day < 0 || day > 6) throw new Error('Invalid day (use 0-6 or Sunday-Saturday)');
   if (!/^\d{2}:\d{2}$/.test(timeStr)) throw new Error('Time must be HH:MM (e.g., 14:30)');
 
   const [hour, min] = timeStr.split(':').map(Number);
   if (hour > 23 || min > 59) throw new Error('Invalid time');
 
   const tz = tzStr || CONFIG.DEFAULT_TIMEZONE;
-  try {
-    new Date().toLocaleString('en-US', { timeZone: tz });
-  } catch (e) {
-    throw new Error(`Invalid timezone: ${tz}`);
-  }
-
   return { day, time: timeStr, timezone: tz, cronTime: `${min} ${hour} * * ${day}` };
 }
 
 function registerCron(id, cronTime, handler, tz) {
   try {
-    if (cronJobs.has(id)) {
-      cronJobs.get(id).stop();
-    }
+    if (cronJobs.has(id)) cronJobs.get(id).stop();
+    // Validate TZ
+    try { new Date().toLocaleString('en-US', { timeZone: tz }); } catch { tz = 'UTC'; }
 
     const job = cron.schedule(cronTime, handler, { scheduled: true, timezone: tz });
     cronJobs.set(id, job);
     return true;
   } catch (error) {
-    logger?.error({ err: error }, 'Cron registration failed');
+    globalLogger?.error({ err: error }, 'Cron registration failed');
     return false;
   }
-}
-
-function cancelCron(id) {
-  if (cronJobs.has(id)) {
-    cronJobs.get(id).stop();
-    cronJobs.delete(id);
-    return true;
-  }
-  return false;
 }
 
 async function runScheduledLecture(scheduleId) {
   const db = await PluginHelpers.getDB();
 
+  // FIX: Ensure we have a valid socket
+  if (!globalSock) {
+    globalLogger?.error('Skipping scheduled lecture: No socket connection');
+    return;
+  }
+
+  let schedule = null;
+
   try {
-    const schedule = await db.collection('lectures').findOne({ _id: scheduleId });
+    schedule = await db.collection('lectures').findOne({ _id: scheduleId });
     if (!schedule) return;
 
+    // 1. Ack that cron fired
+    await globalSock.sendMessage(schedule.groupId, { 
+      text: `⏳ *${schedule.lecturer.name}* is preparing lecture notes...` 
+    });
+
     if (schedule.session > CONFIG.MAX_SESSIONS) {
-      await sock.sendMessage(schedule.groupId, {
-        text: `🎓 *${schedule.title}* complete!\n\nAll ${CONFIG.MAX_SESSIONS} sessions delivered. 🎉`
+      await globalSock.sendMessage(schedule.groupId, {
+        text: `🎓 *${schedule.title}* complete!\nSeries finished.`
       });
       return;
     }
 
     const prevTopics = schedule.previousTopics || [];
+
+    // 2. Generate
     const script = await generateLecture(
       schedule.lecturer,
       schedule.title,
@@ -217,45 +218,36 @@ async function runScheduledLecture(scheduleId) {
       prevTopics
     );
 
-    // Extract topic if variety mode
+    // 3. Extract topic
     let currentTopic = null;
     if (schedule.mode === 'variety') {
       const match = script.match(/(?:today|this week).{0,80}[:\n]/i);
-      if (match) {
-        currentTopic = match[0].replace(/(?:today|this week)[:\s]*/i, '').trim();
-      }
+      if (match) currentTopic = match[0].replace(/(?:today|this week)[:\s]*/i, '').trim();
     }
 
-    // Send header
+    // 4. Deliver
     const label = schedule.mode === 'variety' ? 'SESSION' : 'PART';
-    await sock.sendMessage(schedule.groupId, {
+    await globalSock.sendMessage(schedule.groupId, {
       text: `🎓 *${schedule.title.toUpperCase()} - ${label} ${schedule.session}*\n\n*Professor:* ${schedule.lecturer.name}\n${'─'.repeat(35)}`
     });
 
-    // Deliver
-    await deliverWithTyping(sock, schedule.groupId, script, logger);
+    await deliverWithTyping(globalSock, schedule.groupId, script);
 
-    // Footer
+    // 5. Close
     await sleep(2000);
     const next = schedule.session + 1;
-    await sock.sendMessage(schedule.groupId, {
-      text: `${'─'.repeat(35)}\n🎓 *END ${label} ${schedule.session}*\n\n_${next <= CONFIG.MAX_SESSIONS ? `${label} ${next} next week!` : 'Series complete!'}_`
+    await globalSock.sendMessage(schedule.groupId, {
+      text: `${'─'.repeat(35)}\n🎓 *END ${label} ${schedule.session}*\n_${next <= CONFIG.MAX_SESSIONS ? 'See you next week!' : 'Course Complete!'}_`
     });
 
-    // Update database
+    // 6. Update DB
     const newTopics = schedule.mode === 'variety' && currentTopic 
       ? [...prevTopics, currentTopic].slice(-10) 
       : prevTopics;
 
     await db.collection('lectures').updateOne(
       { _id: scheduleId },
-      { 
-        $set: { 
-          session: next, 
-          previousTopics: newTopics,
-          lastRun: new Date() 
-        } 
-      }
+      { $set: { session: next, previousTopics: newTopics, lastRun: new Date() } }
     );
 
     await db.collection('lecture_logs').insertOne({
@@ -267,11 +259,18 @@ async function runScheduledLecture(scheduleId) {
     });
 
   } catch (error) {
-    logger.error({ err: error }, 'Scheduled lecture failed');
+    globalLogger?.error({ err: error }, 'Scheduled lecture failed');
+
+    // FIX: Inform user of failure
+    if (schedule && globalSock) {
+      await globalSock.sendMessage(schedule.groupId, {
+        text: `❌ *Class Cancelled*\n\nProfessor ${schedule.lecturer.name} could not make it.\n*Reason:* ${error.message || 'Connection error'}`
+      });
+    }
 
     await db.collection('lecture_logs').insertOne({
       scheduleId,
-      session: schedule.session,
+      session: schedule ? schedule.session : 0,
       status: 'failed',
       error: error.message,
       date: new Date()
@@ -280,20 +279,16 @@ async function runScheduledLecture(scheduleId) {
 }
 
 // ============================================================================
-// COMMANDS
+// COMMAND HANDLERS
 // ============================================================================
 
 async function cmdLecture(context) {
   const { msg, text, sock, config, logger } = context;
-
-  if (!text) {
-    return msg.reply(`*Usage:* ${config.PREFIX}lecture <topic>\n\n*Example:* ${config.PREFIX}lecture Bitcoin explained`);
-  }
+  if (!text) return msg.reply(`*Usage:* ${config.PREFIX}lecture <topic>`);
 
   const lecturer = randomLecturer();
-
   await msg.react('🎓');
-  const loading = await msg.reply(`🎓 Preparing lecture...\n\n*Topic:* ${text}\n*Prof:* ${lecturer.name}`);
+  const loading = await msg.reply(`🎓 *Prof ${lecturer.name}* is preparing materials on:\n"${text}"...`);
 
   try {
     const script = await generateLecture(lecturer, text, 'variety', 1, []);
@@ -303,17 +298,12 @@ async function cmdLecture(context) {
       edit: loading.key
     });
 
-    await deliverWithTyping(sock, msg.from, script, logger);
-
-    await sleep(2000);
-    await sock.sendMessage(msg.from, {
-      text: `${'─'.repeat(35)}\n🎓 *LECTURE END*`
-    });
+    await deliverWithTyping(sock, msg.from, script);
+    await sock.sendMessage(msg.from, { text: `${'─'.repeat(35)}\n🎓 *CLASS DISMISSED*` });
 
   } catch (error) {
-    logger.error({ err: error }, 'Manual lecture failed');
     await sock.sendMessage(msg.from, {
-      text: `❌ Failed: ${error.message}`,
+      text: `❌ Lecture Failed: ${error.message}`,
       edit: loading.key
     });
   }
@@ -323,177 +313,106 @@ async function cmdSchedule(context) {
   const { msg, text, sock, logger } = context;
   const db = await PluginHelpers.getDB();
 
+  // FIX: Update global sock reference immediately
+  globalSock = sock;
+
   try {
     const parts = text.split('|').map(p => p.trim());
-
-    if (parts.length < 3) {
-      return msg.reply(
-        `📅 *Schedule Lecture*\n\n` +
-        `*Format:* \`.schedule <title> | <day> | <time> | [mode]\`\n\n` +
-        `*Modes:*\n` +
-        `• *variety* (default) - Different topic each week\n` +
-        `  Example: Relationship Gist, BizTalk, Health Talk\n\n` +
-        `• *course* - Progressive curriculum\n` +
-        `  Example: Python, History, Business Strategy\n\n` +
-        `*Examples:*\n` +
-        `\`.schedule Relationship Gist | Tuesday | 10:00\`\n` +
-        `\`.schedule BizTalk | Wednesday | 15:00 | variety\`\n` +
-        `\`.schedule Python | Monday | 14:00 | course\``
-      );
-    }
+    if (parts.length < 3) throw new Error('Format: Title | Day | Time');
 
     const [title, dayStr, timeStr, modeStr] = parts;
     const mode = modeStr === 'course' ? 'course' : 'variety';
-
     const { day, time, timezone, cronTime } = parseDayTime(dayStr, timeStr, parts[4]);
-    const lecturer = randomLecturer();
 
+    // Check duplicates
+    const exists = await db.collection('lectures').findOne({ groupId: msg.from, title });
+    if (exists) throw new Error(`Lecture "${title}" already exists. Cancel it first.`);
+
+    const lecturer = randomLecturer();
     const schedule = {
       groupId: msg.from,
-      title,
-      mode,
-      day,
-      time,
-      timezone,
-      session: 1,
-      lecturer,
-      previousTopics: [],
-      lastRun: null,
+      title, mode, day, time, timezone,
+      session: 1, lecturer, previousTopics: [],
       createdAt: new Date()
     };
 
     const result = await db.collection('lectures').insertOne(schedule);
-    const scheduleId = result.insertedId;
 
     const success = registerCron(
-      `lec_${scheduleId}`,
+      `lec_${result.insertedId}`,
       cronTime,
-      () => runScheduledLecture(scheduleId),
+      () => runScheduledLecture(result.insertedId),
       timezone
     );
 
     if (!success) {
-      await db.collection('lectures').deleteOne({ _id: scheduleId });
-      throw new Error('Failed to register schedule');
+      await db.collection('lectures').deleteOne({ _id: result.insertedId });
+      throw new Error('System failed to register timer.');
     }
 
     const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day];
-
     await msg.reply(
-      `✅ *Scheduled*\n\n` +
-      `*Title:* ${title}\n` +
-      `*Mode:* ${mode === 'variety' ? '🎲 Variety' : '📚 Course'}\n` +
-      `*Professor:* ${lecturer.name}\n` +
-      `*When:* Every ${dayName} at ${time}\n` +
-      `*Timezone:* ${timezone}\n\n` +
-      `${mode === 'variety' ? 'Fresh topic each week!' : 'Progressive learning!'}`
+      `✅ *Class Scheduled!*\n\n` +
+      `*Subject:* ${title}\n` +
+      `*Prof:* ${lecturer.name}\n` +
+      `*Time:* Every ${dayName} @ ${time} (${timezone})\n` +
+      `*Next:* I will send a message when class starts.`
     );
 
   } catch (error) {
-    logger.error({ err: error }, 'Schedule failed');
-    await msg.reply(`❌ Failed: ${error.message}`);
+    await msg.reply(`❌ Schedule Failed:\n${error.message}\n\nTry: \`.schedule BizTalk | Friday | 14:00\``);
   }
+}
+
+// Debug command to force run a schedule
+async function cmdTestSchedule(context) {
+  const { msg, text, sock } = context;
+  if (!context.isAdmin) return;
+
+  const db = await PluginHelpers.getDB();
+  const schedule = await db.collection('lectures').findOne({ groupId: msg.from });
+
+  if (!schedule) return msg.reply('No schedules found in this group.');
+
+  await msg.reply(`🧪 Force running: ${schedule.title}...`);
+  globalSock = sock; // Force update sock
+  await runScheduledLecture(schedule._id);
 }
 
 async function cmdList(context) {
   const { msg } = context;
   const db = await PluginHelpers.getDB();
+  const schedules = await db.collection('lectures').find({ groupId: msg.from }).toArray();
 
-  const schedules = await db.collection('lectures')
-    .find({ groupId: msg.from })
-    .sort({ title: 1 })
-    .toArray();
+  if (schedules.length === 0) return msg.reply('📚 No lectures scheduled.');
 
-  if (schedules.length === 0) {
-    return msg.reply('📚 No active lectures.\n\nUse `.schedule` to create one.');
-  }
-
-  let reply = `📚 *Active Lectures (${schedules.length})*\n`;
-
+  let reply = `📚 *Scheduled Classes (${schedules.length})*\n`;
   for (const s of schedules) {
     const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.day];
-    const mode = s.mode === 'variety' ? '🎲' : '📚';
-
-    reply += `\n${'─'.repeat(30)}\n` +
-             `*${s.title}*\n` +
-             `├ ${mode} ${s.mode}\n` +
-             `├ Prof: ${s.lecturer.name}\n` +
-             `├ Next: Session ${s.session}/${CONFIG.MAX_SESSIONS}\n` +
-             `└ When: ${day} @ ${s.time}`;
+    reply += `\n*${s.title}*\n├ 🕒 ${day} @ ${s.time}\n└ 👨‍🏫 ${s.lecturer.name}\n`;
   }
-
   await msg.reply(reply);
 }
 
 async function cmdCancel(context) {
   const { msg, text } = context;
+  if (!text) return msg.reply('Usage: .cancel <Title>');
+
   const db = await PluginHelpers.getDB();
-
-  if (!text) {
-    return msg.reply('*Usage:* `.cancel <title>`\n\n*Example:* `.cancel Relationship Gist`');
-  }
-
   const schedule = await db.collection('lectures').findOne({
     groupId: msg.from,
     title: { $regex: new RegExp(`^${text}$`, 'i') }
   });
 
-  if (!schedule) {
-    return msg.reply(`❌ No lecture found: "${text}"`);
+  if (!schedule) return msg.reply('❌ Class not found.');
+
+  if (cronJobs.has(`lec_${schedule._id}`)) {
+    cronJobs.get(`lec_${schedule._id}`).stop();
+    cronJobs.delete(`lec_${schedule._id}`);
   }
 
-  cancelCron(`lec_${schedule._id}`);
   await db.collection('lectures').deleteOne({ _id: schedule._id });
-  await db.collection('lecture_logs').deleteMany({ scheduleId: schedule._id });
-
-  await msg.reply(
-    `✅ *Cancelled*\n\n` +
-    `*Title:* ${schedule.title}\n` +
-    `*Sessions Delivered:* ${schedule.session - 1}/${CONFIG.MAX_SESSIONS}`
-  );
-}
-
-async function cmdHistory(context) {
-  const { msg, text } = context;
-  const db = await PluginHelpers.getDB();
-
-  if (!text) {
-    return msg.reply('*Usage:* `.history <title>`\n\n*Example:* `.history Relationship Gist`');
-  }
-
-  const schedule = await db.collection('lectures').findOne({
-    groupId: msg.from,
-    title: { $regex: new RegExp(`^${text}$`, 'i') }
-  });
-
-  if (!schedule) {
-    return msg.reply(`❌ No lecture found: "${text}"`);
-  }
-
-  const logs = await db.collection('lecture_logs')
-    .find({ scheduleId: schedule._id })
-    .sort({ date: -1 })
-    .limit(10)
-    .toArray();
-
-  if (logs.length === 0) {
-    return msg.reply(`📜 No history for "${text}"`);
-  }
-
-  let reply = `📜 *History: ${schedule.title}*\n` +
-              `*Mode:* ${schedule.mode === 'variety' ? '🎲 Variety' : '📚 Course'}\n` +
-              `*Professor:* ${schedule.lecturer.name}\n`;
-
-  for (const log of logs) {
-    const icon = log.status === 'success' ? '✅' : '❌';
-    const date = new Date(log.date).toLocaleDateString('en-GB');
-
-    reply += `\n${icon} Session ${log.session} - ${date}`;
-    if (log.topic) reply += `\n   └ ${log.topic}`;
-    if (log.error) reply += `\n   └ Error: ${log.error.substring(0, 40)}`;
-  }
-
-  await msg.reply(reply);
+  await msg.reply(`✅ Cancelled: ${schedule.title}`);
 }
 
 // ============================================================================
@@ -502,76 +421,40 @@ async function cmdHistory(context) {
 
 export default {
   name: 'AI Lecturer',
-  description: 'AI lecture system with 10 personalities, variety & course modes',
+  description: 'AI lecture system (Robust)',
   category: 'education',
-  version: '5.0.0',
-  author: 'Claude',
+  version: '5.1.0',
 
-  commands: ['lecture', 'schedule', 'lectures', 'cancel', 'history'],
-  aliases: ['teach', 'schedule-lecture', 'list-lectures', 'cancel-lecture', 'lecture-history'],
-
-  usage: '.lecture <topic> | .schedule <title> | <day> | <time> | [mode]',
-  example: '.lecture Crypto explained\n.schedule Relationship Gist | Tuesday | 10:00\n.schedule Python | Monday | 14:00 | course',
-
-  adminOnly: true,
-  groupOnly: true,
+  commands: ['lecture', 'schedule', 'lectures', 'cancel', 'testschedule'],
 
   async run(context) {
-    const { command } = context;
+    // Update global sock on every command to keep it fresh
+    globalSock = context.sock;
+    globalLogger = context.logger;
 
-    switch (command) {
-      case 'lecture':
-      case 'teach':
-        await cmdLecture(context);
-        break;
-      case 'schedule':
-      case 'schedule-lecture':
-        await cmdSchedule(context);
-        break;
-      case 'lectures':
-      case 'list-lectures':
-        await cmdList(context);
-        break;
-      case 'cancel':
-      case 'cancel-lecture':
-        await cmdCancel(context);
-        break;
-      case 'history':
-      case 'lecture-history':
-        await cmdHistory(context);
-        break;
+    switch (context.command) {
+      case 'lecture': await cmdLecture(context); break;
+      case 'schedule': await cmdSchedule(context); break;
+      case 'lectures': await cmdList(context); break;
+      case 'cancel': await cmdCancel(context); break;
+      case 'testschedule': await cmdTestSchedule(context); break;
     }
   },
 
   async onLoad(context) {
-    sock = context.sock;
-    logger = context.logger;
+    globalSock = context.sock;
+    globalLogger = context.logger;
     const db = await PluginHelpers.getDB();
 
-    logger.info('AI Lecturer: Loading...');
+    globalLogger.info('AI Lecturer: Initializing Scheduler...');
 
     try {
-      // Create indexes
-      await db.collection('lectures').createIndex({ groupId: 1, title: 1 }, { unique: true });
-      await db.collection('lecture_logs').createIndex({ scheduleId: 1, date: -1 });
-
-      // Load all schedules
       const schedules = await db.collection('lectures').find().toArray();
-
-      if (schedules.length === 0) {
-        logger.info('AI Lecturer: No schedules');
-        return;
-      }
-
       let loaded = 0;
 
       for (const schedule of schedules) {
         try {
-          const { cronTime } = parseDayTime(
-            schedule.day.toString(),
-            schedule.time,
-            schedule.timezone
-          );
+          const { cronTime } = parseDayTime(schedule.day.toString(), schedule.time, schedule.timezone);
 
           const success = registerCron(
             `lec_${schedule._id}`,
@@ -579,17 +462,14 @@ export default {
             () => runScheduledLecture(schedule._id),
             schedule.timezone
           );
-
           if (success) loaded++;
-        } catch (error) {
-          logger.error({ err: error, title: schedule.title }, 'Load failed');
+        } catch (e) {
+          globalLogger.error(`Failed to load schedule ${schedule.title}: ${e.message}`);
         }
       }
-
-      logger.info(`AI Lecturer: Loaded ${loaded}/${schedules.length} schedules`);
-
-    } catch (error) {
-      logger.error({ err: error }, 'AI Lecturer: Init failed');
+      globalLogger.info(`AI Lecturer: Restored ${loaded} schedules`);
+    } catch (e) {
+      globalLogger.error('AI Lecturer Init Error:', e);
     }
   }
 };
