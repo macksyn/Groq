@@ -425,7 +425,7 @@ export default {
   category: 'education',
   version: '5.1.0',
 
-  commands: ['lecture', 'schedule', 'lectures', 'cancel', 'testschedule'],
+  commands: ['lecture', 'schedule-lecture', 'lectures', 'cancel-lecture', 'testschedule'],
 
   async run(context) {
     // Update global sock on every command to keep it fresh
@@ -434,9 +434,9 @@ export default {
 
     switch (context.command) {
       case 'lecture': await cmdLecture(context); break;
-      case 'schedule': await cmdSchedule(context); break;
+      case 'schedule-lecture': await cmdSchedule(context); break;
       case 'lectures': await cmdList(context); break;
-      case 'cancel': await cmdCancel(context); break;
+      case 'cancel-lecture': await cmdCancel(context); break;
       case 'testschedule': await cmdTestSchedule(context); break;
     }
   },
