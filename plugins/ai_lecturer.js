@@ -9,7 +9,7 @@ import { PluginHelpers } from '../lib/pluginIntegration.js';
 
 const CONFIG = {
   API_URL: 'https://malvin-api.vercel.app/ai/gpt-5',
-  API_TIMEOUT: 60000, // Increased to 60s
+  API_TIMEOUT: 60000,
   DEFAULT_TIMEZONE: 'Africa/Lagos',
   MAX_SESSIONS: 52,
 
@@ -99,9 +99,16 @@ async function generateLecture(lecturer, topic, mode, sessionNum, prevTopics) {
 
     if (mode === 'variety') {
       const avoid = prevTopics.length > 0 ? `Avoid: ${prevTopics.slice(-3).join(', ')}. ` : '';
-      userPrompt = `${topic} - Session ${sessionNum}\n${avoid}Pick NEW engaging topic. 600-800 words. Hook → 3 points → tips → close. Start now.`;
+      userPrompt = `${topic} - Session ${sessionNum}\n${avoid}Pick NEW engaging topic. 600-800 words. Structure: Warm conversational Welcome → Hook → 3 main points → tips → Engaging Sign-off. Start now.`;
     } else {
-      userPrompt = `${topic} - Part ${sessionNum}\nTeach progressively. ${sessionNum === 1 ? 'Intro + roadmap.' : 'Build on previous.'} 500-700 words. Start now.`;
+      // Progressive course - Logic for Recap and Teaser
+      const lastTopic = prevTopics.length > 0 ? prevTopics[prevTopics.length - 1] : null;
+
+      const recapInstruction = sessionNum > 1 
+        ? `Start with a warm conversational welcome and a brief 1-sentence recap of the previous session/topic.` 
+        : 'Start with a warm conversational welcome and a strong course introduction.';
+
+      userPrompt = `${topic} - Part ${sessionNum}\n${recapInstruction} Teach progressively. Build on previous concepts. 500-700 words. \nIMPORTANT: End the lecture with a specific, exciting teaser of exactly what we will cover in the next session (Part ${sessionNum + 1}).`;
     }
 
     const fullPrompt = `${lecturer.prompt}\n\n${userPrompt}`;
@@ -136,7 +143,7 @@ async function deliverWithTyping(sock, jid, text) {
       await sock.sendMessage(jid, { text: sentence });
     } catch (e) {
       console.error('Failed to send sentence:', e);
-      break; // Stop if message fails
+      break;
     }
 
     if (i < sentences.length - 1) {
@@ -168,7 +175,6 @@ function parseDayTime(dayStr, timeStr, tzStr) {
 function registerCron(id, cronTime, handler, tz) {
   try {
     if (cronJobs.has(id)) cronJobs.get(id).stop();
-    // Validate TZ
     try { new Date().toLocaleString('en-US', { timeZone: tz }); } catch { tz = 'UTC'; }
 
     const job = cron.schedule(cronTime, handler, { scheduled: true, timezone: tz });
@@ -183,7 +189,6 @@ function registerCron(id, cronTime, handler, tz) {
 async function runScheduledLecture(scheduleId) {
   const db = await PluginHelpers.getDB();
 
-  // FIX: Ensure we have a valid socket
   if (!globalSock) {
     globalLogger?.error('Skipping scheduled lecture: No socket connection');
     return;
@@ -195,14 +200,14 @@ async function runScheduledLecture(scheduleId) {
     schedule = await db.collection('lectures').findOne({ _id: scheduleId });
     if (!schedule) return;
 
-    // 1. Ack that cron fired
+    // 1. Ack that cron fired (More engaging)
     await globalSock.sendMessage(schedule.groupId, { 
-      text: `⏳ *${schedule.lecturer.name}* is preparing lecture notes...` 
+      text: `⏳ *Stand by...*\n_${schedule.lecturer.name} is gathering materials for today's session on ${schedule.title}..._` 
     });
 
     if (schedule.session > CONFIG.MAX_SESSIONS) {
       await globalSock.sendMessage(schedule.groupId, {
-        text: `🎓 *${schedule.title}* complete!\nSeries finished.`
+        text: `🎓 *Course Completed!*\n\nCongratulations! This concludes the ${schedule.title} series. 🎉`
       });
       return;
     }
@@ -218,32 +223,38 @@ async function runScheduledLecture(scheduleId) {
       prevTopics
     );
 
-    // 3. Extract topic
+    // 3. Extract topic for variety mode
     let currentTopic = null;
     if (schedule.mode === 'variety') {
       const match = script.match(/(?:today|this week).{0,80}[:\n]/i);
       if (match) currentTopic = match[0].replace(/(?:today|this week)[:\s]*/i, '').trim();
     }
 
-    // 4. Deliver
+    // 4. Deliver (More engaging Header)
     const label = schedule.mode === 'variety' ? 'SESSION' : 'PART';
+
     await globalSock.sendMessage(schedule.groupId, {
-      text: `🎓 *${schedule.title.toUpperCase()} - ${label} ${schedule.session}*\n\n*Professor:* ${schedule.lecturer.name}\n${'─'.repeat(35)}`
+      text: `🔔 *Class is in Session!* 🔔\n\n📝 *Topic:* ${schedule.title}\n👨‍🏫 *Lecturer:* ${schedule.lecturer.name}\n${'─'.repeat(30)}\n\n_Everyone take your seats, the lecture is about to begin..._`
     });
 
     await deliverWithTyping(globalSock, schedule.groupId, script);
 
-    // 5. Close
+    // 5. Close (More engaging Footer)
     await sleep(2000);
     const next = schedule.session + 1;
+
+    const footerMsg = next <= CONFIG.MAX_SESSIONS 
+      ? `👋 *Class Dismissed!*\n\n_Don't forget to review your notes. See you same time next week for ${label} ${next}!_` 
+      : `🎓 *Series Concluded!*\n\n_Thank you for attending the final session of ${schedule.title}. Class dismissed!_`;
+
     await globalSock.sendMessage(schedule.groupId, {
-      text: `${'─'.repeat(35)}\n🎓 *END ${label} ${schedule.session}*\n_${next <= CONFIG.MAX_SESSIONS ? 'See you next week!' : 'Course Complete!'}_`
+      text: `${'─'.repeat(30)}\n${footerMsg}`
     });
 
     // 6. Update DB
-    const newTopics = schedule.mode === 'variety' && currentTopic 
-      ? [...prevTopics, currentTopic].slice(-10) 
-      : prevTopics;
+    // In course mode, we also want to track history even if generic, for the recap logic
+    const topicToLog = currentTopic || `${schedule.title} - Part ${schedule.session}`;
+    const newTopics = [...prevTopics, topicToLog].slice(-10);
 
     await db.collection('lectures').updateOne(
       { _id: scheduleId },
@@ -253,7 +264,7 @@ async function runScheduledLecture(scheduleId) {
     await db.collection('lecture_logs').insertOne({
       scheduleId,
       session: schedule.session,
-      topic: currentTopic,
+      topic: topicToLog,
       status: 'success',
       date: new Date()
     });
@@ -261,10 +272,9 @@ async function runScheduledLecture(scheduleId) {
   } catch (error) {
     globalLogger?.error({ err: error }, 'Scheduled lecture failed');
 
-    // FIX: Inform user of failure
     if (schedule && globalSock) {
       await globalSock.sendMessage(schedule.groupId, {
-        text: `❌ *Class Cancelled*\n\nProfessor ${schedule.lecturer.name} could not make it.\n*Reason:* ${error.message || 'Connection error'}`
+        text: `❌ *Class Cancelled*\n\nProfessor ${schedule.lecturer.name} sent an owl: "Unavoidable delay."\n*Reason:* ${error.message || 'Network issues'}`
       });
     }
 
@@ -283,23 +293,23 @@ async function runScheduledLecture(scheduleId) {
 // ============================================================================
 
 async function cmdLecture(context) {
-  const { msg, text, sock, config, logger } = context;
+  const { msg, text, sock, config } = context;
   if (!text) return msg.reply(`*Usage:* ${config.PREFIX}lecture <topic>`);
 
   const lecturer = randomLecturer();
   await msg.react('🎓');
-  const loading = await msg.reply(`🎓 *Prof ${lecturer.name}* is preparing materials on:\n"${text}"...`);
+  const loading = await msg.reply(`⏳ *Prof ${lecturer.name}* is looking up "${text}" in the archives...`);
 
   try {
     const script = await generateLecture(lecturer, text, 'variety', 1, []);
 
     await sock.sendMessage(msg.from, {
-      text: `🎓 *LECTURE START*\n\n*Topic:* ${text}\n*Prof:* ${lecturer.name}\n${'─'.repeat(35)}`,
+      text: `🔔 *Lecture Starting...*\n\n*Topic:* ${text}\n*Prof:* ${lecturer.name}\n${'─'.repeat(30)}`,
       edit: loading.key
     });
 
     await deliverWithTyping(sock, msg.from, script);
-    await sock.sendMessage(msg.from, { text: `${'─'.repeat(35)}\n🎓 *CLASS DISMISSED*` });
+    await sock.sendMessage(msg.from, { text: `${'─'.repeat(30)}\n👋 *Lecture Ended. Any questions?*` });
 
   } catch (error) {
     await sock.sendMessage(msg.from, {
@@ -310,10 +320,9 @@ async function cmdLecture(context) {
 }
 
 async function cmdSchedule(context) {
-  const { msg, text, sock, logger } = context;
+  const { msg, text, sock } = context;
   const db = await PluginHelpers.getDB();
 
-  // FIX: Update global sock reference immediately
   globalSock = sock;
 
   try {
@@ -324,7 +333,6 @@ async function cmdSchedule(context) {
     const mode = modeStr === 'course' ? 'course' : 'variety';
     const { day, time, timezone, cronTime } = parseDayTime(dayStr, timeStr, parts[4]);
 
-    // Check duplicates
     const exists = await db.collection('lectures').findOne({ groupId: msg.from, title });
     if (exists) throw new Error(`Lecture "${title}" already exists. Cancel it first.`);
 
@@ -356,7 +364,7 @@ async function cmdSchedule(context) {
       `*Subject:* ${title}\n` +
       `*Prof:* ${lecturer.name}\n` +
       `*Time:* Every ${dayName} @ ${time} (${timezone})\n` +
-      `*Next:* I will send a message when class starts.`
+      `*Next:* I will send a notification when class starts.`
     );
 
   } catch (error) {
@@ -364,9 +372,8 @@ async function cmdSchedule(context) {
   }
 }
 
-// Debug command to force run a schedule
 async function cmdTestSchedule(context) {
-  const { msg, text, sock } = context;
+  const { msg, sock } = context;
   if (!context.isAdmin) return;
 
   const db = await PluginHelpers.getDB();
@@ -375,7 +382,7 @@ async function cmdTestSchedule(context) {
   if (!schedule) return msg.reply('No schedules found in this group.');
 
   await msg.reply(`🧪 Force running: ${schedule.title}...`);
-  globalSock = sock; // Force update sock
+  globalSock = sock; 
   await runScheduledLecture(schedule._id);
 }
 
@@ -415,20 +422,15 @@ async function cmdCancel(context) {
   await msg.reply(`✅ Cancelled: ${schedule.title}`);
 }
 
-// ============================================================================
-// PLUGIN EXPORT
-// ============================================================================
-
 export default {
   name: 'AI Lecturer',
   description: 'AI lecture system (Robust)',
   category: 'education',
-  version: '5.1.0',
+  version: '5.2.0',
 
   commands: ['lecture', 'schedule-lecture', 'lectures', 'cancel-lecture', 'testschedule'],
 
   async run(context) {
-    // Update global sock on every command to keep it fresh
     globalSock = context.sock;
     globalLogger = context.logger;
 
