@@ -157,26 +157,17 @@ const PLATFORM_APIS = {
     endpoint: 'https://delirius-apiofc.vercel.app/download/spotifydlv2',
     buildUrl: (url) => `https://delirius-apiofc.vercel.app/download/spotifydlv2?url=${encodeURIComponent(url)}`,
     extractData: (response) => {
-      const res = response.data;
-
-      // Robust checking: Try 'data', 'result', or the root object
-      const data = res.data || res.result || res;
-
-      // Try multiple common field names for the audio URL
-      const downloadUrl = data.url || data.link || data.download || data.audio;
-
-      if (!downloadUrl) {
-        // DEBUG: Log the actual response so the user can see what went wrong in console
-        console.log(chalk.yellow('⚠️ Debug - Spotify API Response:'), JSON.stringify(res, null, 2));
-        throw new Error('Invalid Spotify response format (check console for details)');
+      const data = response.data?.data;
+      if (!data || !data.url) {
+        throw new Error('Invalid Spotify response format');
       }
 
       return {
-        url: downloadUrl,
-        thumbnail: data.image || data.thumbnail || data.cover || null,
+        url: data.url,
+        thumbnail: data.image || null,
         title: data.title || 'Spotify Track',
         duration: data.duration || null,
-        artist: data.artist || data.author || 'Unknown Artist',
+        artist: data.artist || 'Unknown Artist',
         album: data.album || null
       };
     }
