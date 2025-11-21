@@ -1,4 +1,4 @@
-// plugins/ai_lecturer.js - Fixed & Robust Version
+// plugins/ai_lecturer.js - Enhanced with Fallback API System
 import axios from 'axios';
 import cron from 'node-cron';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
@@ -8,17 +8,66 @@ import { PluginHelpers } from '../lib/pluginIntegration.js';
 // ============================================================================
 
 const CONFIG = {
-  API_URL: 'https://malvin-api.vercel.app/ai/gpt-5',
+  // API Configuration with Fallback
+  PRIMARY_API_URL: 'https://malvin-api.vercel.app/ai/gpt-5',
+  FALLBACK_API_URL: 'https://malvin-api.vercel.app/ai/venice',
+
   API_TIMEOUT: 60000,
   DEFAULT_TIMEZONE: 'Africa/Lagos',
   MAX_SESSIONS: 52,
 
+  // Random greetings for variety lectures
+  VARIETY_GREETINGS: [
+    "Good day, everyone! 👋 I hope this message finds you well. Let's dive into something fascinating today.",
+    "Hello, class! 🎓 I trust you've all had a productive week. Today, we're exploring an exciting topic.",
+    "Greetings, brilliant minds! ✨ I've been looking forward to this session. Shall we begin?",
+    "Welcome back! 🌟 I hope you're ready for today's lecture because we have something special lined up.",
+    "Good morning/afternoon! ☀️ It's great to be here with you again. Let's make this session count.",
+    "Hey there, scholars! 📚 I'm excited to share today's lecture with you. Let's get started!",
+    "Warm greetings, everyone! 🤝 I trust you're all doing well. Today's topic is particularly interesting.",
+    "Hello again! 👓 I've prepared something thought-provoking for us today. Ready to learn?",
+  ],
+
+  // Random greetings for series lectures
+  SERIES_GREETINGS: [
+    "Welcome back to our continuing series! 🎓 I hope you've been reflecting on our last session.",
+    "Good day, everyone! 📖 It's wonderful to continue this journey with you all.",
+    "Hello again, class! 🌟 I'm glad to see us making steady progress together.",
+    "Greetings, dedicated learners! 💪 Let's pick up where we left off last week.",
+    "Welcome back! 🔄 I trust you've been thinking about what we covered previously.",
+    "Good to have you here again! 🎯 We're building something great together, one session at a time.",
+    "Hello, persistent scholars! 📈 Our journey continues today with the next piece of the puzzle.",
+  ],
+
+  // Random closings for variety lectures
+  VARIETY_CLOSINGS: [
+    "That's all for today, everyone! 🎓 I hope you found this valuable. Until next time, stay curious!",
+    "And with that, we conclude today's session. ✅ Keep thinking, keep learning. See you next week!",
+    "That wraps up our lecture! 🌟 Remember to apply what you've learned. Have a great week ahead!",
+    "Excellent! We've covered quite a lot today. 💡 Take some time to reflect on this. See you soon!",
+    "And that's a wrap for this week! 🎬 I hope this gave you new perspectives. Stay brilliant!",
+    "Thank you for your attention! 🙏 Keep exploring these ideas on your own. Until we meet again!",
+    "That concludes our session! 📚 I trust you'll put this knowledge to good use. Farewell for now!",
+    "Class dismissed! 🔔 Remember, learning doesn't stop here. Keep that curiosity alive!",
+  ],
+
+  // Random closings for series lectures (with next week tease)
+  SERIES_CLOSINGS: [
+    "That brings us to the end of Part {session}! 🎓 Next week, we'll explore {preview}. See you then!",
+    "Excellent work today! ✅ We've covered {session} parts so far. Next week: {preview}. Stay tuned!",
+    "And that's Part {session} complete! 🌟 Coming up next week: {preview}. Don't miss it!",
+    "Well done, everyone! 💪 We're making real progress. Next session, we tackle {preview}. See you!",
+    "That wraps up today's segment! 🎯 Next week's focus: {preview}. Keep building on what we've learned!",
+    "Part {session} is in the books! 📖 Up next: {preview}. I'm excited to continue this journey with you!",
+    "Great session today! ⭐ We're {session} steps in. Next week brings {preview}. Stay engaged!",
+  ],
+
   LECTURERS: [
     {
-    id: 'prof_alex',
+      id: 'prof_alex',
       name: 'Prof. Alex Macksyn',
       style: 'Witty Lagos Academic prof',
-      prompt: 'You\'re Prof. Alex - mordern naija intellectual. Makes complex topic relatable with contemporary nigerian realities. Natural flow, 5-7 emojis. Bold key terms.'
+      prompt: 'You\'re Prof. Alex - modern naija intellectual. Makes complex topics relatable with contemporary Nigerian realities. Natural flow, 5-7 emojis. Bold key terms.'
     },
     {
       id: 'dr_evelyn',
@@ -51,14 +100,27 @@ const CONFIG = {
       prompt: 'Role: Dr. Funke, a high-powered Lagos academic. Tone: Sophisticated, stern, and demanding. Zero tolerance for mediocrity. Speak impeccable, formal English. Offer **critical, direct advice** ("Tough Love"). Push the user to be ambitious. Phrases: "Sit up," "Do better." **Bold key commands**. 5 emojis 👠💼💅🏾⛔.'
     },
     {
-      id: 'mazi_obinna',
+      id: 'j.t_obinna',
       name: 'J.T Obinna',
       style: 'Shrewd Commercial Strategist',
       prompt: 'Role: J.T Obinna, an educated Business Mogul. Tone: Pragmatic, calculating, and value-driven. Analyze topics with **market street-smarts**. Dismiss fluff; ask "Is it viable?" **Bold financial/strategy terms**. 4 emojis 💼🤝🏾💰🏗️.'
     },
-    { name: 'Prof. Okon', prompt: 'Strict professor. "Open your books." Formal, authoritative. 3-5 emojis. Bold terms.' },
-    { name: 'Uncle Jide', prompt: 'Street philosopher. "See ehn..." Use pidgin. Hustle mindset. 6-8 emojis. Bold terms.' },
-    { name: 'Sister Grace', prompt: 'Deep thinker. "Let\'s reflect..." Philosophical, calm wisdom. 4-6 emojis. Bold terms.' }
+    {
+      id: 'wole_soyinka',
+      name: 'Wole Soyinka',
+      style: 'Grandiloquent Literary Icon',
+      prompt: 'Role: A Soyinka-esque literary giant. Tone: Operatic, sophisticated, and fierce. Use **esoteric vocabulary** (grandiloquence) and **dense metaphors**. Critique the topic with intense gravity. Avoid simplicity; embrace **linguistic complexity**. **Bold profound truths**. 3 emojis 🦁✍🏾🎭.'
+    },
+    {
+      id: 'uncle_jide',
+      name: 'Uncle Jide',
+      prompt: 'Street philosopher. "See ehn..." Use pidgin. Hustle mindset. 6-8 emojis. Bold terms.'
+    },
+    {
+      id: 'sister_grace',
+      name: 'Sister Grace',
+      prompt: 'Deep thinker. "Let\'s reflect..." Philosophical, calm wisdom. 4-6 emojis. Bold terms.'
+    }
   ]
 };
 
@@ -77,6 +139,10 @@ function randomLecturer() {
   return CONFIG.LECTURERS[Math.floor(Math.random() * CONFIG.LECTURERS.length)];
 }
 
+function randomFromArray(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 function cleanAIResponse(text) {
   if (!text) return '';
   let clean = text
@@ -87,44 +153,62 @@ function cleanAIResponse(text) {
     .replace(/let me know if.*?[\.\s]*/gi, '')
     .replace(/\*\*note:?\*\*[^\n]*/gi, '')
     .replace(/\*\*disclaimer:?\*\*[^\n]*/gi, '')
-    .replace(/in the style of.*?[:\s]*/gi, '' )
+    .replace(/in the style of.*?[:\s]*/gi, '')
     .replace(/as (prof|dr|uncle|sister|mallam|baba).*?[:\s]*/gi, '')
     .trim();
   return clean.replace(/\n{3,}/g, '\n\n');
 }
 
-async function generateLecture(lecturer, topic, mode, sessionNum, prevTopics) {
-  try {
-    let userPrompt = '';
+/**
+ * Helper to make the API call with specific parameters
+ */
+async function callAIEndpoint(url, prompt) {
+  return await axios.get(url, {
+    params: { text: prompt },
+    timeout: CONFIG.API_TIMEOUT
+  });
+}
 
-    if (mode === 'variety') {
-      const avoid = prevTopics.length > 0 ? `Avoid: ${prevTopics.slice(-3).join(', ')}. ` : '';
-      userPrompt = `${topic} - Session ${sessionNum}\n${avoid}Pick NEW engaging topic. 600-800 words. Structure: Warm conversational Welcome → Hook → 3 main points → tips → Engaging Sign-off. Start now.`;
-    } else {
-      // Progressive course - Logic for Recap and Teaser
-      const lastTopic = prevTopics.length > 0 ? prevTopics[prevTopics.length - 1] : null;
+async function generateLecture(lecturer, topic, mode, sessionNum, prevTopics, prevSummary = null) {
+  let userPrompt = '';
 
-      const recapInstruction = sessionNum > 1 
-        ? `Start with a warm conversational welcome and a brief 1-sentence recap of the previous session/topic.` 
-        : 'Start with a warm conversational welcome and a strong course introduction.';
-
-      userPrompt = `${topic} - Part ${sessionNum}\n${recapInstruction} Teach progressively. Build on previous concepts. 500-700 words. \nIMPORTANT: End the lecture with a specific, exciting teaser of exactly what we will cover in the next session (Part ${sessionNum + 1}).`;
-    }
-
-    const fullPrompt = `${lecturer.prompt}\n\n${userPrompt}`;
-
-    const response = await axios.get(CONFIG.API_URL, {
-      params: { text: fullPrompt },
-      timeout: CONFIG.API_TIMEOUT
-    });
-
-    const raw = response.data?.response || response.data?.result || response.data?.answer;
-    if (!raw || raw.length < 100) throw new Error('AI returned empty or too short response');
-
-    return cleanAIResponse(raw.trim());
-  } catch (error) {
-    throw new Error(`Generation failed: ${error.message}`);
+  if (mode === 'variety') {
+    const avoid = prevTopics.length > 0 ? `Avoid: ${prevTopics.slice(-3).join(', ')}. ` : '';
+    userPrompt = `${topic} - Session ${sessionNum}\n${avoid}Pick NEW engaging topic. 1600-1800 words. Hook → 5 points → tips → close. DO NOT include greeting or closing. Start directly with content.`;
+  } else {
+    const recap = prevSummary ? `Last week we covered: "${prevSummary}". ` : '';
+    userPrompt = `${topic} - Part ${sessionNum}\n${recap}Teach progressively. ${sessionNum === 1 ? 'Intro + roadmap.' : 'Build on previous.'} 1500-1700 words. DO NOT include greeting or closing. End with a brief teaser of what comes next (1 sentence). Start directly with content.`;
   }
+
+  const fullPrompt = `${lecturer.prompt}\n\n${userPrompt}`;
+
+  let rawResponse = null;
+  let usedSource = 'PRIMARY';
+
+  try {
+    // Attempt 1: Primary API
+    const response = await callAIEndpoint(CONFIG.PRIMARY_API_URL, fullPrompt);
+    rawResponse = response.data?.response || response.data?.result || response.data?.answer;
+  } catch (primaryError) {
+    // Log the failure but don't crash yet
+    console.warn(`[AI Lecturer] Primary API failed: ${primaryError.message}. Switching to fallback...`);
+
+    try {
+      // Attempt 2: Fallback API
+      usedSource = 'FALLBACK';
+      const response = await callAIEndpoint(CONFIG.FALLBACK_API_URL, fullPrompt);
+      rawResponse = response.data?.response || response.data?.result || response.data?.answer;
+    } catch (fallbackError) {
+      // Both failed, throw a combined error
+      throw new Error(`All AI sources failed. Primary: ${primaryError.message}, Fallback: ${fallbackError.message}`);
+    }
+  }
+
+  if (!rawResponse || rawResponse.length < 100) {
+    throw new Error(`AI (${usedSource}) returned empty or too short response`);
+  }
+
+  return cleanAIResponse(rawResponse.trim());
 }
 
 async function deliverWithTyping(sock, jid, text) {
@@ -200,71 +284,121 @@ async function runScheduledLecture(scheduleId) {
     schedule = await db.collection('lectures').findOne({ _id: scheduleId });
     if (!schedule) return;
 
-    // 1. Ack that cron fired (More engaging)
     await globalSock.sendMessage(schedule.groupId, { 
-      text: `⏳ *Stand by...*\n_${schedule.lecturer.name} is gathering materials for today's session on ${schedule.title}..._` 
+      text: `⏳ *${schedule.lecturer.name}* is preparing lecture notes...` 
     });
 
     if (schedule.session > CONFIG.MAX_SESSIONS) {
       await globalSock.sendMessage(schedule.groupId, {
-        text: `🎓 *Course Completed!*\n\nCongratulations! This concludes the ${schedule.title} series. 🎉`
+        text: `🎓 *${schedule.title}* complete!\nSeries finished.`
       });
       return;
     }
 
     const prevTopics = schedule.previousTopics || [];
+    const prevSummary = schedule.lastSummary || null;
 
-    // 2. Generate
+    // Generate lecture content
     const script = await generateLecture(
       schedule.lecturer,
       schedule.title,
       schedule.mode,
       schedule.session,
-      prevTopics
+      prevTopics,
+      prevSummary
     );
 
-    // 3. Extract topic for variety mode
+    // Extract current topic for variety mode
     let currentTopic = null;
     if (schedule.mode === 'variety') {
       const match = script.match(/(?:today|this week).{0,80}[:\n]/i);
       if (match) currentTopic = match[0].replace(/(?:today|this week)[:\s]*/i, '').trim();
     }
 
-    // 4. Deliver (More engaging Header)
-    const label = schedule.mode === 'variety' ? 'SESSION' : 'PART';
+    // Extract preview for series mode
+    let preview = 'the next topic in our series';
+    const previewMatch = script.match(/(?:next|coming up|up next|we'll explore|we'll cover|we'll discuss)[:\s]+([^.!?\n]+)/i);
+    if (previewMatch) {
+      preview = previewMatch[1].trim().slice(0, 60);
+    }
 
+    // Choose random greeting
+    const greeting = schedule.mode === 'variety' 
+      ? randomFromArray(CONFIG.VARIETY_GREETINGS)
+      : randomFromArray(CONFIG.SERIES_GREETINGS);
+
+    // Choose random closing
+    let closing;
+    if (schedule.mode === 'variety') {
+      closing = randomFromArray(CONFIG.VARIETY_CLOSINGS);
+    } else {
+      closing = randomFromArray(CONFIG.SERIES_CLOSINGS)
+        .replace('{session}', schedule.session)
+        .replace('{preview}', preview);
+    }
+
+    // Deliver header
+    const label = schedule.mode === 'variety' ? 'SESSION' : 'PART';
     await globalSock.sendMessage(schedule.groupId, {
-      text: `🔔 *Class is in Session!* 🔔\n\n📝 *Topic:* ${schedule.title}\n👨‍🏫 *Lecturer:* ${schedule.lecturer.name}\n${'─'.repeat(30)}\n\n_Everyone take your seats, the lecture is about to begin..._`
+      text: `🎓 *${schedule.title.toUpperCase()} - ${label} ${schedule.session}*\n\n*Professor:* ${schedule.lecturer.name}\n${'─'.repeat(35)}`
     });
 
+    await sleep(1000);
+
+    // Send greeting
+    await globalSock.sendMessage(schedule.groupId, { text: greeting });
+    await sleep(2000);
+
+    // Add recap for series lectures (not first session)
+    if (schedule.mode === 'course' && schedule.session > 1 && prevSummary) {
+      const recap = `📌 *Quick Recap:* Last week, we covered ${prevSummary}. Let's build on that today.`;
+      await globalSock.sendMessage(schedule.groupId, { text: recap });
+      await sleep(2000);
+    }
+
+    // Deliver main lecture content
     await deliverWithTyping(globalSock, schedule.groupId, script);
 
-    // 5. Close (More engaging Footer)
     await sleep(2000);
+
+    // Send closing
+    await globalSock.sendMessage(schedule.groupId, { text: closing });
+
+    await sleep(1000);
+
+    // Final footer
     const next = schedule.session + 1;
-
-    const footerMsg = next <= CONFIG.MAX_SESSIONS 
-      ? `👋 *Class Dismissed!*\n\n_Don't forget to review your notes. See you same time next week for ${label} ${next}!_` 
-      : `🎓 *Series Concluded!*\n\n_Thank you for attending the final session of ${schedule.title}. Class dismissed!_`;
-
     await globalSock.sendMessage(schedule.groupId, {
-      text: `${'─'.repeat(30)}\n${footerMsg}`
+      text: `${'─'.repeat(35)}\n🎓 *END ${label} ${schedule.session}*\n_${next <= CONFIG.MAX_SESSIONS ? 'See you next week!' : 'Course Complete!'}_`
     });
 
-    // 6. Update DB
-    // In course mode, we also want to track history even if generic, for the recap logic
-    const topicToLog = currentTopic || `${schedule.title} - Part ${schedule.session}`;
-    const newTopics = [...prevTopics, topicToLog].slice(-10);
+    // Generate summary for series mode
+    let summary = null;
+    if (schedule.mode === 'course') {
+      summary = script.slice(0, 150).replace(/[*_~`]/g, '') + '...';
+    }
+
+    // Update DB
+    const newTopics = schedule.mode === 'variety' && currentTopic 
+      ? [...prevTopics, currentTopic].slice(-10) 
+      : prevTopics;
 
     await db.collection('lectures').updateOne(
       { _id: scheduleId },
-      { $set: { session: next, previousTopics: newTopics, lastRun: new Date() } }
+      { 
+        $set: { 
+          session: next, 
+          previousTopics: newTopics, 
+          lastSummary: summary,
+          lastRun: new Date() 
+        } 
+      }
     );
 
     await db.collection('lecture_logs').insertOne({
       scheduleId,
       session: schedule.session,
-      topic: topicToLog,
+      topic: currentTopic,
       status: 'success',
       date: new Date()
     });
@@ -274,7 +408,7 @@ async function runScheduledLecture(scheduleId) {
 
     if (schedule && globalSock) {
       await globalSock.sendMessage(schedule.groupId, {
-        text: `❌ *Class Cancelled*\n\nProfessor ${schedule.lecturer.name} sent an owl: "Unavoidable delay."\n*Reason:* ${error.message || 'Network issues'}`
+        text: `❌ *Class Cancelled*\n\nProfessor ${schedule.lecturer.name} could not make it.\n*Reason:* ${error.message || 'Connection error'}`
       });
     }
 
@@ -293,23 +427,30 @@ async function runScheduledLecture(scheduleId) {
 // ============================================================================
 
 async function cmdLecture(context) {
-  const { msg, text, sock, config } = context;
+  const { msg, text, sock, config, logger } = context;
   if (!text) return msg.reply(`*Usage:* ${config.PREFIX}lecture <topic>`);
 
   const lecturer = randomLecturer();
   await msg.react('🎓');
-  const loading = await msg.reply(`⏳ *Prof ${lecturer.name}* is looking up "${text}" in the archives...`);
+  const loading = await msg.reply(`🎓 *Prof ${lecturer.name}* is preparing materials on:\n"${text}"...`);
 
   try {
     const script = await generateLecture(lecturer, text, 'variety', 1, []);
+    const greeting = randomFromArray(CONFIG.VARIETY_GREETINGS);
+    const closing = randomFromArray(CONFIG.VARIETY_CLOSINGS);
 
     await sock.sendMessage(msg.from, {
-      text: `🔔 *Lecture Starting...*\n\n*Topic:* ${text}\n*Prof:* ${lecturer.name}\n${'─'.repeat(30)}`,
+      text: `🎓 *LECTURE START*\n\n*Topic:* ${text}\n*Prof:* ${lecturer.name}\n${'─'.repeat(35)}`,
       edit: loading.key
     });
 
+    await sleep(1000);
+    await sock.sendMessage(msg.from, { text: greeting });
+    await sleep(2000);
     await deliverWithTyping(sock, msg.from, script);
-    await sock.sendMessage(msg.from, { text: `${'─'.repeat(30)}\n👋 *Lecture Ended. Any questions?*` });
+    await sleep(2000);
+    await sock.sendMessage(msg.from, { text: closing });
+    await sock.sendMessage(msg.from, { text: `${'─'.repeat(35)}\n🎓 *CLASS DISMISSED*` });
 
   } catch (error) {
     await sock.sendMessage(msg.from, {
@@ -320,27 +461,46 @@ async function cmdLecture(context) {
 }
 
 async function cmdSchedule(context) {
-  const { msg, text, sock } = context;
+  const { msg, text, sock, logger } = context;
   const db = await PluginHelpers.getDB();
 
   globalSock = sock;
 
   try {
     const parts = text.split('|').map(p => p.trim());
-    if (parts.length < 3) throw new Error('Format: Title | Day | Time');
+    if (parts.length < 3) throw new Error('Format: Title | Day | Time | Mode');
 
     const [title, dayStr, timeStr, modeStr] = parts;
     const mode = modeStr === 'course' ? 'course' : 'variety';
     const { day, time, timezone, cronTime } = parseDayTime(dayStr, timeStr, parts[4]);
 
-    const exists = await db.collection('lectures').findOne({ groupId: msg.from, title });
-    if (exists) throw new Error(`Lecture "${title}" already exists. Cancel it first.`);
+    // Check duplicates with case-insensitive match
+    const titleLower = title.toLowerCase().trim();
+    const exists = await db.collection('lectures').findOne({ 
+      groupId: msg.from
+    });
+
+    // Manual check for case-insensitive duplicate
+    if (exists) {
+      const allSchedules = await db.collection('lectures').find({ groupId: msg.from }).toArray();
+      const duplicate = allSchedules.find(s => s.title.toLowerCase().trim() === titleLower);
+
+      if (duplicate) {
+        throw new Error(
+          `Lecture "${duplicate.title}" already exists.\n\n` +
+          `Use: \`.cancel ${duplicate.title}\` to remove it first.`
+        );
+      }
+    }
 
     const lecturer = randomLecturer();
     const schedule = {
       groupId: msg.from,
-      title, mode, day, time, timezone,
-      session: 1, lecturer, previousTopics: [],
+      title: title.trim(), // Store cleaned title
+      mode, day, time, timezone,
+      session: 1, lecturer, 
+      previousTopics: [],
+      lastSummary: null,
       createdAt: new Date()
     };
 
@@ -359,21 +519,24 @@ async function cmdSchedule(context) {
     }
 
     const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day];
+    const modeLabel = mode === 'course' ? 'Course Series' : 'Weekly Topics';
+
     await msg.reply(
       `✅ *Class Scheduled!*\n\n` +
       `*Subject:* ${title}\n` +
+      `*Type:* ${modeLabel}\n` +
       `*Prof:* ${lecturer.name}\n` +
       `*Time:* Every ${dayName} @ ${time} (${timezone})\n` +
-      `*Next:* I will send a notification when class starts.`
+      `*Next:* I will send a message when class starts.`
     );
 
   } catch (error) {
-    await msg.reply(`❌ Schedule Failed:\n${error.message}\n\nTry: \`.schedule BizTalk | Friday | 14:00\``);
+    await msg.reply(`❌ Schedule Failed:\n${error.message}\n\nTry: \`.schedule BizTalk | Friday | 14:00 | variety\``);
   }
 }
 
 async function cmdTestSchedule(context) {
-  const { msg, sock } = context;
+  const { msg, text, sock } = context;
   if (!context.isAdmin) return;
 
   const db = await PluginHelpers.getDB();
@@ -382,7 +545,7 @@ async function cmdTestSchedule(context) {
   if (!schedule) return msg.reply('No schedules found in this group.');
 
   await msg.reply(`🧪 Force running: ${schedule.title}...`);
-  globalSock = sock; 
+  globalSock = sock;
   await runScheduledLecture(schedule._id);
 }
 
@@ -396,7 +559,8 @@ async function cmdList(context) {
   let reply = `📚 *Scheduled Classes (${schedules.length})*\n`;
   for (const s of schedules) {
     const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.day];
-    reply += `\n*${s.title}*\n├ 🕒 ${day} @ ${s.time}\n└ 👨‍🏫 ${s.lecturer.name}\n`;
+    const type = s.mode === 'course' ? '📖 Course' : '🎯 Weekly';
+    reply += `\n*${s.title}*\n├ 🕒 ${day} @ ${s.time}\n├ ${type}\n└ 👨‍🏫 ${s.lecturer.name}\n`;
   }
   await msg.reply(reply);
 }
@@ -406,27 +570,53 @@ async function cmdCancel(context) {
   if (!text) return msg.reply('Usage: .cancel <Title>');
 
   const db = await PluginHelpers.getDB();
-  const schedule = await db.collection('lectures').findOne({
-    groupId: msg.from,
-    title: { $regex: new RegExp(`^${text}$`, 'i') }
-  });
 
-  if (!schedule) return msg.reply('❌ Class not found.');
+  // First, let's see all schedules to debug
+  const allSchedules = await db.collection('lectures').find({ groupId: msg.from }).toArray();
 
+  if (allSchedules.length === 0) {
+    return msg.reply('❌ No lectures scheduled in this group.');
+  }
+
+  // Try exact case-insensitive match first
+  const searchTitle = text.trim().toLowerCase();
+  let schedule = allSchedules.find(s => s.title.toLowerCase() === searchTitle);
+
+  // If not found, try partial match
+  if (!schedule) {
+    schedule = allSchedules.find(s => s.title.toLowerCase().includes(searchTitle));
+  }
+
+  // If still not found, show available options
+  if (!schedule) {
+    const availableTitles = allSchedules.map(s => `• ${s.title}`).join('\n');
+    return msg.reply(
+      `❌ Lecture not found: "${text}"\n\n` +
+      `*Available lectures:*\n${availableTitles}\n\n` +
+      `*Tip:* Copy the exact title or use partial match.`
+    );
+  }
+
+  // Stop cron job
   if (cronJobs.has(`lec_${schedule._id}`)) {
     cronJobs.get(`lec_${schedule._id}`).stop();
     cronJobs.delete(`lec_${schedule._id}`);
   }
 
+  // Delete from database
   await db.collection('lectures').deleteOne({ _id: schedule._id });
-  await msg.reply(`✅ Cancelled: ${schedule.title}`);
+  await msg.reply(`✅ *Cancelled Successfully*\n\n*Lecture:* ${schedule.title}\n*Professor:* ${schedule.lecturer.name}`);
 }
+
+// ============================================================================
+// PLUGIN EXPORT
+// ============================================================================
 
 export default {
   name: 'AI Lecturer',
-  description: 'AI lecture system (Robust)',
+  description: 'AI lecture system with dynamic greetings, series continuity & fallback API',
   category: 'education',
-  version: '5.2.0',
+  version: '6.1.0',
 
   commands: ['lecture', 'schedule-lecture', 'lectures', 'cancel-lecture', 'testschedule'],
 
