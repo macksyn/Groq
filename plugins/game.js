@@ -8,10 +8,11 @@ import { PluginHelpers, safeOperation } from '../lib/pluginIntegration.js';
 
 const GAMES_COLLECTION = 'connect4_games';
 const STATS_COLLECTION = 'connect4_stats';
+const TRANSACTIONS_COLLECTION = 'economy_transactions';
 
 const GAME_CONFIG = {
-  ROWS: 6,
-  COLS: 7,
+  ROWS: 7,
+  COLS: 9,
   JOIN_TIMEOUT: 60000, // 60 seconds
   TURN_TIMEOUT: 120000, // 2 minutes
   MIN_WAGER: 10,
@@ -24,7 +25,7 @@ const EMOJIS = {
   PLAYER1: '🔴',
   PLAYER2: '🟡',
   WIN: '✨',
-  NUMBERS: ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣']
+  NUMBERS: ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣']
 };
 
 // ===================================
@@ -55,7 +56,8 @@ class Connect4Game {
     );
   }
 
-  async join(player2Id) {
+  // Synchronous join logic
+  join(player2Id) {
     if (this.status !== 'waiting') {
       return { success: false, message: 'Game already started or finished' };
     }
@@ -245,181 +247,8 @@ class Connect4Manager {
   }
 
   // Helper methods to interact with economy plugin's database
-  async getUserBalance(userId) {
-    try {
-      return await safeOperation(async (db, collection) => {
-        let user = await collection.findOne({ userId });
-
-        // Initialize user if doesn't exist
-        if (!user) {
-          console.log(chalk.yellow(`⚠️ User ${userId} not found in economy_users, initializing...`));
-          user = {
-            userId,
-            balance: 0,
-            bank: 0,
-            frozen: false,
-            inventory: [],
-            activeEffects: {},
-            stats: {
-              totalEarned: 0,
-              totalSpent: 0,
-              workCount: 0,
-              dailyStreak: 0
-            },
-            achievements: [],
-            investments: {
-              stocks: {},
-              crypto: {},
-              businesses: []
-            },
-            createdAt: new Date(),
-            updatedAt: new Date()
-          };
-          await collection.insertOne(user);
-        }
-
-        console.log(chalk.cyan(`💰 User ${userId.split('@')[0]} balance: ₦${user.balance}`));
-        return user || { balance: 0, bank: 0 };
-      }, 'economy_users');
-    } catch (error) {
-      console.error(chalk.red('Error getting user balance:'), error.message);
-      return { balance: 0, bank: 0 };
-    }
-  }
-
-  async deductMoney(userId, amount, reason) {
-    try {
-      return await safeOperation(async (db, collection) => {
-        const user = await collection.findOne({ userId });
-
-        if (!user) {
-          console.error(chalk.red(`❌ User ${userId} not found when trying to deduct money`));
-          return { success: false, message: 'User not found in economy system' };
-        }
-
-        console.log(chalk.cyan(`💸 Attempting to deduct ₦${amount} from ${userId.split('@')[0]}`));
-        console.log(chalk.cyan(`   Current balance: ₦${user.balance}`));
-
-        if (user.balance < amount) {
-          console.error(chalk.red(`❌ Insufficient balance: has ₦${user.balance}, needs ₦${amount}`));
-          return { success: false, message: `Insufficient balance: you have ₦${user.balance}, need ₦${amount}` };
-        }
-
-        // Check if account is frozen
-        if (user.frozen) {
-          console.error(chalk.red(`❌ Account ${userId} is frozen`));
-          return { success: false, message: 'Account is frozen' };
-        }
-
-        const newBalance = user.balance - amount;
-
-        await collection.updateOne(
-          { userId },
-          { 
-            $set: { 
-              balance: newBalance,
-              updatedAt: new Date() 
-            } 
-          }
-        );
-
-        // Log transaction
-        const transactionsCollection = db.collection('economy_transactions');
-        await transactionsCollection.insertOne({
-          userId,
-          type: 'debit',
-          amount,
-          reason,
-          balanceBefore: user.balance,
-          balanceAfter: newBalance,
-          timestamp: new Date()
-        });
-
-        console.log(chalk.green(`✅ Deducted ₦${amount}. New balance: ₦${newBalance}`));
-        return { success: true, newBalance };
-      }, 'economy_users');
-    } catch (error) {
-      console.error(chalk.red('Error deducting money:'), error.message);
-      return { success: false, message: 'Transaction failed: ' + error.message };
-    }
-  }
-
-  async addMoney(userId, amount, reason) {
-    try {
-      return await safeOperation(async (db, collection) => {
-        const user = await collection.findOne({ userId });
-
-        if (!user) {
-          return { success: false, message: 'User not found' };
-        }
-
-        const newBalance = user.balance + amount;
-
-        await collection.updateOne(
-          { userId },
-          { 
-            $set: { 
-              balance: newBalance,
-              updatedAt: new Date() 
-            } 
-          }
-        );
-
-        // Log transaction
-        const transactionsCollection = db.collection('economy_transactions');
-        await transactionsCollection.insertOne({
-          userId,
-          type: 'credit',
-          amount,
-          reason,
-          balanceBefore: user.balance,
-          balanceAfter: newBalance,
-          timestamp: new Date()
-        });
-
-        return { success: true, newBalance };
-      }, 'economy_users');
-    } catch (error) {
-      console.error(chalk.red('Error adding money:'), error.message);
-      return { success: false, message: 'Transaction failed' };
-    }
-  }
-
-  async initialize() {
-    try {
-      // Load active games from database
-      const games = await safeOperation(async (db, collection) => {
-        return await collection.find({ status: { $in: ['waiting', 'active'] } }).toArray();
-      }, GAMES_COLLECTION);
-
-      if (games && games.length > 0) {
-        for (const gameData of games) {
-          const game = Connect4Game.fromJSON(gameData);
-          this.activeGames.set(game.gameId, game);
-
-          // Cancel old games
-          if (game.status === 'waiting') {
-            const elapsed = Date.now() - new Date(game.createdAt).getTime();
-            if (elapsed > GAME_CONFIG.JOIN_TIMEOUT) {
-              await this.cancelGame(game.gameId, 'timeout');
-            }
-          }
-        }
-        console.log(chalk.green(`✅ Loaded ${this.activeGames.size} active Connect4 games`));
-      }
-
-      return true;
-    } catch (error) {
-      console.error(chalk.red('❌ Failed to initialize Connect4 manager:'), error.message);
-      return false;
-    }
-  }
-
-  generateGameId() {
-    return `c4_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  }
-
-  async createGame(player1Id, wager, chatId) {
+  // Refactored to handle multiple timers (reminders + expiration)
+  createGame(player1Id, wager, chatId, reminderCallback) {
     // Check if player already has an active game
     const existingGame = Array.from(this.activeGames.values()).find(g => 
       (g.player1.id === player1Id || (g.player2 && g.player2.id === player1Id)) && 
@@ -427,54 +256,83 @@ class Connect4Manager {
     );
 
     if (existingGame) {
-      return { 
+      return Promise.resolve({ 
         success: false, 
         message: 'You already have an active game! Finish it first or use `.c4cancel` to cancel.' 
-      };
+      });
     }
 
     // Validate wager
     if (wager < GAME_CONFIG.MIN_WAGER || wager > GAME_CONFIG.MAX_WAGER) {
-      return { 
+      return Promise.resolve({ 
         success: false, 
         message: `Wager must be between ₦${GAME_CONFIG.MIN_WAGER} and ₦${GAME_CONFIG.MAX_WAGER}` 
+      });
+    }
+
+    // Async wrapper for balance check and game creation
+    return (async () => {
+      // Check balance
+      const userData = await this.getUserBalance(player1Id);
+      if (!userData || userData.balance < wager) {
+        const currentBal = userData ? userData.balance : 0;
+        return { 
+          success: false, 
+          message: `Insufficient balance! Wallet: ${player1Id}\nHave: ₦${currentBal.toLocaleString()}\nNeed: ₦${wager.toLocaleString()}` 
+        };
+      }
+
+      // Deduct wager
+      const deducted = await this.deductMoney(player1Id, wager, 'Connect4 game wager');
+      if (!deducted.success) {
+        return { success: false, message: deducted.message || 'Failed to deduct wager from your account' };
+      }
+
+      // Create game
+      const gameId = this.generateGameId();
+      const game = new Connect4Game(gameId, player1Id, wager, chatId);
+      this.activeGames.set(gameId, game);
+
+      await this.saveGame(game);
+
+      // Schedule Reminders & Expiration
+      const timers = [];
+
+      // Helper to safely send reminders
+      const notify = (msg) => {
+        if (reminderCallback && typeof reminderCallback === 'function') {
+          reminderCallback(msg).catch(err => console.error('Failed to send C4 reminder:', err));
+        }
       };
-    }
 
-    // Check balance using economy plugin's system
-    const userData = await this.getUserBalance(player1Id);
-    if (!userData || userData.balance < wager) {
-      return { 
-        success: false, 
-        message: `Insufficient balance! You have ₦${userData ? userData.balance : 0}, need ₦${wager}` 
-      };
-    }
+      // 15 seconds elapsed (45s remaining)
+      timers.push(setTimeout(() => {
+        notify(`⏳ *45s Remaining!* \nSomeone join the Connect4 game!`);
+      }, 15000));
 
-    // Deduct wager from player1 using economy plugin's system
-    const deducted = await this.deductMoney(player1Id, wager, 'Connect4 game wager');
-    if (!deducted.success) {
-      return { success: false, message: deducted.message || 'Failed to deduct wager from your account' };
-    }
+      // 30 seconds elapsed (30s remaining)
+      timers.push(setTimeout(() => {
+        notify(`⏳ *30s Remaining!* \nWaiting for a challenger...`);
+      }, 30000));
 
-    // Create game
-    const gameId = this.generateGameId();
-    const game = new Connect4Game(gameId, player1Id, wager, chatId);
-    this.activeGames.set(gameId, game);
+      // 45 seconds elapsed (15s remaining)
+      timers.push(setTimeout(() => {
+        notify(`⏳ *15s Remaining!* \nLast call to join!`);
+      }, 45000));
 
-    // Save to database
-    await this.saveGame(game);
+      // 60 seconds elapsed (Expiration)
+      timers.push(setTimeout(async () => {
+        await this.cancelGame(gameId, 'timeout');
+        notify(`🚫 *Connect 4 Game Expired* \nNo one joined in time. Wager refunded.`);
+      }, GAME_CONFIG.JOIN_TIMEOUT));
 
-    // Set join timeout
-    const timeout = setTimeout(async () => {
-      await this.cancelGame(gameId, 'timeout');
-    }, GAME_CONFIG.JOIN_TIMEOUT);
+      this.timeouts.set(gameId, timers);
 
-    this.timeouts.set(gameId, timeout);
+      // Update stats
+      await this.updateStats(player1Id, 'gamesCreated');
 
-    // Update stats
-    await this.updateStats(player1Id, 'gamesCreated');
-
-    return { success: true, game };
+      return { success: true, game };
+    })();
   }
 
   async joinGame(gameId, player2Id) {
@@ -484,22 +342,21 @@ class Connect4Manager {
       return { success: false, message: 'Game not found!' };
     }
 
-    // Check balance using economy plugin's system
     const userData = await this.getUserBalance(player2Id);
     if (!userData || userData.balance < game.wager) {
+      const currentBal = userData ? userData.balance : 0;
       return { 
         success: false, 
-        message: `Insufficient balance! You need ₦${game.wager} to join` 
+        message: `Insufficient balance! Wallet: ${player2Id}\nHave: ₦${currentBal.toLocaleString()}\nNeed: ₦${game.wager.toLocaleString()}` 
       };
     }
 
-    // Attempt to join
     const joinResult = game.join(player2Id);
+
     if (!joinResult.success) {
       return joinResult;
     }
 
-    // Deduct wager from player2 using economy plugin's system
     const deducted = await this.deductMoney(player2Id, game.wager, 'Connect4 game wager');
     if (!deducted.success) {
       game.player2 = null;
@@ -507,20 +364,11 @@ class Connect4Manager {
       return { success: false, message: deducted.message || 'Failed to deduct wager from your account' };
     }
 
-    // Clear join timeout
-    const timeout = this.timeouts.get(gameId);
-    if (timeout) {
-      clearTimeout(timeout);
-      this.timeouts.delete(gameId);
-    }
+    // Clear all join timeouts (reminders + expiration)
+    this.clearTimeouts(gameId);
 
-    // Set turn timeout
     this.setTurnTimeout(gameId);
-
-    // Save to database
     await this.saveGame(game);
-
-    // Update stats
     await this.updateStats(player2Id, 'gamesJoined');
 
     return { success: true, game };
@@ -533,25 +381,20 @@ class Connect4Manager {
       return { success: false, message: 'Game not found!' };
     }
 
-    // Make the move
     const result = game.makeMove(playerId, column);
 
     if (!result.success) {
       return result;
     }
 
-    // Reset turn timeout if game is still active
     if (game.status === 'active') {
       this.setTurnTimeout(gameId);
     } else {
-      // Game finished
       this.clearTimeouts(gameId);
     }
 
-    // Save to database
     await this.saveGame(game);
 
-    // Handle game end
     if (game.status === 'finished') {
       await this.handleGameEnd(game);
     }
@@ -561,14 +404,12 @@ class Connect4Manager {
 
   async handleGameEnd(game) {
     if (game.winner === 0) {
-      // Draw - refund both players
       await this.addMoney(game.player1.id, game.wager, 'Connect4 draw refund');
       await this.addMoney(game.player2.id, game.wager, 'Connect4 draw refund');
 
       await this.updateStats(game.player1.id, 'draws');
       await this.updateStats(game.player2.id, 'draws');
     } else {
-      // Someone won
       const winnerId = game.winner === 1 ? game.player1.id : game.player2.id;
       const loserId = game.winner === 1 ? game.player2.id : game.player1.id;
 
@@ -580,7 +421,6 @@ class Connect4Manager {
       await this.updateStats(loserId, 'losses');
     }
 
-    // Update play count
     await this.updateStats(game.player1.id, 'gamesPlayed');
     await this.updateStats(game.player2.id, 'gamesPlayed');
   }
@@ -596,37 +436,27 @@ class Connect4Manager {
       return { success: false, message: 'Game already finished!' };
     }
 
-    // Refund player1
     await this.addMoney(game.player1.id, game.wager, 'Connect4 cancelled - refund');
 
-    // Refund player2 if they joined
     if (game.player2) {
       await this.addMoney(game.player2.id, game.wager, 'Connect4 cancelled - refund');
     }
 
-    // Clear timeouts
     this.clearTimeouts(gameId);
 
-    // Update status
     game.status = 'cancelled';
     await this.saveGame(game);
-
-    // Remove from active games
     this.activeGames.delete(gameId);
 
     return { success: true, game, reason };
   }
 
   setTurnTimeout(gameId) {
-    // Clear existing timeout
-    const existing = this.timeouts.get(gameId);
-    if (existing) clearTimeout(existing);
+    this.clearTimeouts(gameId); // Helper handles clearing previous
 
-    // Set new timeout
     const timeout = setTimeout(async () => {
       const game = this.activeGames.get(gameId);
       if (game && game.status === 'active') {
-        // Current player loses by timeout
         game.status = 'finished';
         game.winner = game.currentTurn === 1 ? 2 : 1;
 
@@ -637,13 +467,18 @@ class Connect4Manager {
       }
     }, GAME_CONFIG.TURN_TIMEOUT);
 
-    this.timeouts.set(gameId, timeout);
+    this.timeouts.set(gameId, [timeout]); // Store as array for consistency
   }
 
   clearTimeouts(gameId) {
-    const timeout = this.timeouts.get(gameId);
-    if (timeout) {
-      clearTimeout(timeout);
+    const timeouts = this.timeouts.get(gameId);
+    if (timeouts) {
+      // Handle both single timeout (legacy/turn) and array (new join logic)
+      if (Array.isArray(timeouts)) {
+        timeouts.forEach(t => clearTimeout(t));
+      } else {
+        clearTimeout(timeouts);
+      }
       this.timeouts.delete(gameId);
     }
   }
@@ -727,7 +562,6 @@ class Connect4Manager {
   }
 }
 
-// Create singleton instance
 const gameManager = new Connect4Manager();
 
 // ===================================
@@ -735,27 +569,41 @@ const gameManager = new Connect4Manager();
 // ===================================
 
 function getPlayerName(userId) {
-  return '@' + userId.split('@')[0];
+  // Returns formatted string that becomes a tag when paired with 'mentions'
+  return '@' + (userId ? userId.split('@')[0] : 'Unknown');
+}
+
+function getGameMentions(game) {
+  // Collects player IDs to pass to sock.sendMessage mentions
+  const mentions = [];
+  if (game?.player1?.id) mentions.push(game.player1.id);
+  if (game?.player2?.id) mentions.push(game.player2.id);
+  return mentions;
 }
 
 function formatGameInfo(game) {
+  if (!game) {
+    console.error("⚠️ formatGameInfo received undefined game object");
+    return "⚠️ Error: Game data not found.";
+  }
+
   const p1Name = getPlayerName(game.player1.id);
   const p2Name = game.player2 ? getPlayerName(game.player2.id) : 'Waiting...';
 
   let info = `🎮 *Connect Four Game*\n\n`;
   info += `${EMOJIS.PLAYER1} Player 1: ${p1Name}\n`;
   info += `${EMOJIS.PLAYER2} Player 2: ${p2Name}\n`;
-  info += `💰 Wager: ₦${game.wager}\n`;
-  info += `🏆 Prize: ₦${Math.floor(game.wager * 2 * GAME_CONFIG.WIN_MULTIPLIER)}\n\n`;
+  info += `💰 Bet: ₦${game.wager.toLocaleString()}\n`;
+  info += `🏆 Prize: ₦${Math.floor(game.wager * 2 * GAME_CONFIG.WIN_MULTIPLIER).toLocaleString()}\n\n`;
 
   if (game.status === 'waiting') {
     info += `⏳ Waiting for opponent...\n`;
-    info += `Type \`.c4join ${game.gameId}\` to join!\n`;
+    info += `Type \`Join\` to play with ${p1Name}!\n`;
   } else if (game.status === 'active') {
     const currentPlayer = game.currentTurn === 1 ? game.player1 : game.player2;
     info += `🎯 Current turn: ${getPlayerName(currentPlayer.id)} ${currentPlayer.disc}\n\n`;
     info += game.getBoardString();
-    info += `\nType \`.c4move <column>\" to play (1-7)`;
+    info += `\nType \`(1-9)\" to play.`;
   }
 
   return info;
@@ -767,7 +615,7 @@ function formatGameInfo(game) {
 
 export default {
   name: 'Connect Four',
-  version: '1.0.0',
+  version: '1.0.6', // Bumped version for tagging support
   author: 'Alex Macksyn',
   description: 'Multiplayer Connect Four game with economy integration',
   category: 'games',
@@ -775,14 +623,13 @@ export default {
   commands: ['c4', 'connect4', 'c4join', 'c4move', 'c4cancel', 'c4stats', 'c4help', 'c4board', 'c4leaderboard'],
   aliases: ['cfg'],
 
-  // CRITICAL: This flag allows the plugin to execute on ALL messages (not just commands)
   executeOnAllMessages: true,
 
   async init(context) {
     const { logger } = context;
     await gameManager.initialize();
     logger.info('✅ Connect Four game plugin initialized');
-    logger.info(`💰 Min wager: ₦${GAME_CONFIG.MIN_WAGER}, Max wager: ₦${GAME_CONFIG.MAX_WAGER}`);
+    logger.info(`💰 Min bet: ₦${GAME_CONFIG.MIN_WAGER}, Max bet: ₦${GAME_CONFIG.MAX_WAGER}`);
     logger.info(`⏱️ Join timeout: ${GAME_CONFIG.JOIN_TIMEOUT/1000}s, Turn timeout: ${GAME_CONFIG.TURN_TIMEOUT/1000}s`);
   },
 
@@ -790,7 +637,14 @@ export default {
     const { msg: m, sock, config, logger, command, args, text } = context;
 
     try {
-      const sender = m.sender;
+      // CRITICAL FIX FOR WALLET ID MISMATCH
+      const sender = m.key.participant || m.key.remoteJid || m.sender;
+
+      // Defensive: Ensure m.sender matches our calculated sender for helper compatibility
+      if (!m.sender || m.sender !== sender) {
+        m.sender = sender;
+      }
+
       const chatId = m.from;
       const isGroup = m.isGroup;
 
@@ -799,24 +653,17 @@ export default {
         return;
       }
 
-      const reply = async (text) => {
-        if (typeof m.reply === 'function') {
-          await m.reply(text);
-        } else {
-          await sock.sendMessage(chatId, { text }, { quoted: m });
-        }
+      // REFACTORED REPLY FUNCTION TO SUPPORT MENTIONS
+      const reply = async (text, mentions = []) => {
+        await sock.sendMessage(chatId, { text, mentions }, { quoted: m });
       };
 
-      // Get the raw message text (for non-prefix commands during active games)
       const rawText = (m.body || '').trim().toLowerCase();
-
-      // Check if there's an active game in this chat
       const activeGamesInChat = gameManager.getActiveGamesForChat(chatId);
       const activeGame = activeGamesInChat.find(g => g.status === 'waiting' || g.status === 'active');
 
       // ===== HANDLE NON-PREFIX COMMANDS DURING ACTIVE SESSION =====
 
-      // Handle "join" without prefix when game is waiting
       if (activeGame && activeGame.status === 'waiting' && rawText === 'join') {
         await sock.sendMessage(chatId, { react: { text: '⏳', key: m.key } });
 
@@ -835,20 +682,18 @@ export default {
           `✅ *Game Started!*\n\n` + 
           gameInfo +
           `\n\n${EMOJIS.PLAYER1} ${getPlayerName(result.game.player1.id)} goes first!` +
-          `\n\n💡 _Type a number (1-7) to drop your disc in that column!_`
+          `\n\n💡 _Type a number (1-9) to drop your disc in that column!_`,
+          getGameMentions(result.game) // MENTIONS ADDED
         );
         return;
       }
 
-      // Handle numeric input (1-7) during active game without prefix
       if (activeGame && activeGame.status === 'active') {
         const playerGame = gameManager.getPlayerGame(sender);
 
-        // Only process if sender is in this game
         if (playerGame && playerGame.gameId === activeGame.gameId) {
-          // Check if message is just a number 1-7
           if (/^[1-7]$/.test(rawText)) {
-            const column = parseInt(rawText) - 1; // Convert to 0-indexed
+            const column = parseInt(rawText) - 1;
 
             await sock.sendMessage(chatId, { react: { text: '⏳', key: m.key } });
 
@@ -872,8 +717,9 @@ export default {
                 `${EMOJIS.WIN} *CONNECT FOUR!* ${EMOJIS.WIN}\n\n` +
                 result.game.getBoardString() +
                 `\n🏆 Winner: ${getPlayerName(winner.id)} ${winner.disc}\n` +
-                `💰 Prize: ₦${winnings}\n\n` +
-                `Congratulations! 🎊`
+                `💰 Prize: ₦${winnings.toLocaleString()}\n\n` +
+                `Congratulations! 🎊`,
+                getGameMentions(result.game) // MENTIONS ADDED
               );
             } else if (moveResult.draw) {
               await sock.sendMessage(chatId, { react: { text: '🤝', key: m.key } });
@@ -882,7 +728,8 @@ export default {
                 `🤝 *DRAW!*\n\n` +
                 result.game.getBoardString() +
                 `\nThe board is full with no winner!\n` +
-                `💰 Both players refunded: ₦${result.game.wager}`
+                `💰 Both players refunded: ₦${result.game.wager.toLocaleString()}`,
+                getGameMentions(result.game) // MENTIONS ADDED
               );
             } else {
               await sock.sendMessage(chatId, { react: { text: '✅', key: m.key } });
@@ -892,7 +739,8 @@ export default {
                 `✅ *Move Made!*\n\n` +
                 result.game.getBoardString() +
                 `\n🎯 Next turn: ${getPlayerName(nextPlayer.id)} ${nextPlayer.disc}\n\n` +
-                `💡 _Type a number (1-7) to play_`
+                `💡 _Type a number (1-9) to play_`,
+                getGameMentions(result.game) // MENTIONS ADDED
               );
             }
             return;
@@ -900,38 +748,35 @@ export default {
         }
       }
 
-      // ===== HANDLE NORMAL PREFIX COMMANDS =====
-      // Only process prefix commands if command is defined
-      if (!command) {
-        return; // Not a command, ignore
-      }
-
-      // ===== COMMAND ROUTING =====
-
       // Create new game: .c4 <wager> or .cfg <wager>
       if (command === 'c4' || command === 'cfg' || command === 'connect4') {
         if (args.length === 0) {
           await reply(
             `🎮 *Connect Four Game*\n\n` +
-            `Create a new game:\n` +
-            `${config.PREFIX}c4 <wager>\n\n` +
-            `Example: ${config.PREFIX}c4 100\n\n` +
-            `Min wager: ₦${GAME_CONFIG.MIN_WAGER}\n` +
-            `Max wager: ₦${GAME_CONFIG.MAX_WAGER}\n\n` +
-            `Type ${config.PREFIX}c4help for all commands`
+            `Start a new game:\n` +
+            `${config.PREFIX}cfg <your-bet>\n\n` +
+            `Example: ${config.PREFIX}cfg 1000\n\n` +
+            `Min bet: ₦${GAME_CONFIG.MIN_WAGER}\n` +
+            `Max bet: ₦${GAME_CONFIG.MAX_WAGER}\n\n` +
+            `Type ${config.PREFIX}cfghelp for all commands`
           );
           return;
         }
 
         const wager = parseInt(args[0]);
         if (isNaN(wager)) {
-          await reply('❌ Invalid wager amount. Please provide a number.');
+          await reply('❌ Invalid bet amount. Please provide a number.');
           return;
         }
 
         await sock.sendMessage(chatId, { react: { text: '⏳', key: m.key } });
 
-        const result = await gameManager.createGame(sender, wager, chatId);
+        // Callback to send reminders to this specific chat
+        const reminderCallback = async (text) => {
+           await sock.sendMessage(chatId, { text });
+        };
+
+        const result = await gameManager.createGame(sender, wager, chatId, reminderCallback);
 
         if (!result.success) {
           await sock.sendMessage(chatId, { react: { text: '❌', key: m.key } });
@@ -946,32 +791,34 @@ export default {
           gameInfo + 
           `\n\n⏱️ Game will expire in ${GAME_CONFIG.JOIN_TIMEOUT/1000} seconds if no one joins.` +
           `\n\n*Game ID:* \`${result.game.gameId}\`` +
-          `\n\n💡 _Anyone can type "join" (without prefix) to join this game!_`
+          `\n\n💡 _Please type "join" to join this game!_`,
+          [sender] // MENTIONS ADDED
         );
         return;
       }
 
-      // Join a game: .c4join <gameId> (keeping this for backwards compatibility with gameId)
       if (command === 'c4join') {
         if (args.length === 0) {
-          // Show available games in this chat
           const availableGames = gameManager.getActiveGamesForChat(chatId).filter(g => g.status === 'waiting');
 
           if (availableGames.length === 0) {
-            await reply('❌ No games available to join in this chat!\n\nCreate one with `.c4 <wager>`');
+            await reply('❌ No games available to join in this chat!\n\nCreate one with `.cfg <your-bet>`');
             return;
           }
+
+          // Collect all creators for mentions
+          const creatorIds = availableGames.map(g => g.player1.id);
 
           let list = `🎮 *Available Games*\n\n`;
           availableGames.forEach((game, i) => {
             const creator = getPlayerName(game.player1.id);
-            list += `${i + 1}. ${creator} - ₦${game.wager}\n`;
+            list += `${i + 1}. ${creator} - ₦${game.wager.toLocaleString()}\n`;
             list += `   ID: \`${game.gameId}\`\n\n`;
           });
-          list += `Type \`.c4join <gameId>\` to join\n`;
+          list += `Type \`.cfgjoin <gameId>\` to join\n`;
           list += `💡 _Or just type "join" to join the active game!_`;
 
-          await reply(list);
+          await reply(list, creatorIds); // MENTIONS ADDED
           return;
         }
 
@@ -994,15 +841,15 @@ export default {
           `✅ *Game Started!*\n\n` + 
           gameInfo +
           `\n\n${EMOJIS.PLAYER1} ${getPlayerName(result.game.player1.id)} goes first!` +
-          `\n\n💡 _Just type a number (1-7) to drop your disc!_`
+          `\n\n💡 _Just type a number (1-9) to drop your disc!_`,
+          getGameMentions(result.game) // MENTIONS ADDED
         );
         return;
       }
 
-      // Make a move: .c4move <column> (keeping this for backwards compatibility)
       if (command === 'c4move') {
         if (args.length === 0) {
-          await reply('❌ Please specify a column (1-7)\n\nExample: `.c4move 4`\n\n💡 _During an active game, you can also just type the number without prefix!_');
+          await reply('❌ Please specify a column (1-9)\n\nExample: `4`\n\n💡 _During an active game, you can also just type the number without prefix!_');
           return;
         }
 
@@ -1013,10 +860,10 @@ export default {
           return;
         }
 
-        const column = parseInt(args[0]) - 1; // Convert to 0-indexed
+        const column = parseInt(args[0]) - 1;
 
         if (isNaN(column)) {
-          await reply('❌ Invalid column. Please provide a number between 1 and 7.');
+          await reply('❌ Invalid column. Please provide a number between 1 and 9.');
           return;
         }
 
@@ -1042,8 +889,9 @@ export default {
             `${EMOJIS.WIN} *CONNECT FOUR!* ${EMOJIS.WIN}\n\n` +
             result.game.getBoardString() +
             `\n🏆 Winner: ${getPlayerName(winner.id)} ${winner.disc}\n` +
-            `💰 Prize: ₦${winnings}\n\n` +
-            `Congratulations! 🎊`
+            `💰 Prize: ₦${winnings.toLocaleString()}\n\n` +
+            `Congratulations! 🎊`,
+            getGameMentions(result.game) // MENTIONS ADDED
           );
         } else if (moveResult.draw) {
           await sock.sendMessage(chatId, { react: { text: '🤝', key: m.key } });
@@ -1052,7 +900,8 @@ export default {
             `🤝 *DRAW!*\n\n` +
             result.game.getBoardString() +
             `\nThe board is full with no winner!\n` +
-            `💰 Both players refunded: ₦${result.game.wager}`
+            `💰 Both players refunded: ₦${result.game.wager.toLocaleString()}`,
+            getGameMentions(result.game) // MENTIONS ADDED
           );
         } else {
           await sock.sendMessage(chatId, { react: { text: '✅', key: m.key } });
@@ -1062,13 +911,13 @@ export default {
             `✅ *Move Made!*\n\n` +
             result.game.getBoardString() +
             `\n🎯 Next turn: ${getPlayerName(nextPlayer.id)} ${nextPlayer.disc}\n\n` +
-            `💡 _Type a number (1-7) to play_`
+            `💡 _Type a number (1-9) to play_`,
+            getGameMentions(result.game) // MENTIONS ADDED
           );
         }
         return;
       }
 
-      // Cancel game: .c4cancel
       if (command === 'c4cancel') {
         const game = gameManager.getPlayerGame(sender);
 
@@ -1077,9 +926,8 @@ export default {
           return;
         }
 
-        // Only allow cancel if waiting or if player created the game
         if (game.status === 'active' && game.player1.id !== sender) {
-          await reply('❌ Only the game creator can cancel an active game!\n\nOr wait for turn timeout.');
+          await reply('❌ Only the game creator can cancel an active game!\n\nOr wait for next turn.');
           return;
         }
 
@@ -1095,16 +943,20 @@ export default {
 
         await sock.sendMessage(chatId, { react: { text: '🚫', key: m.key } });
 
+        // Collect mentions for refund message
+        const mentions = [game.player1.id];
+        if (game.player2) mentions.push(game.player2.id);
+
         await reply(
           `🚫 *Game Cancelled*\n\n` +
           `Game ID: \`${game.gameId}\`\n` +
-          `💰 Wagers refunded to all players`
+          `💰 Bets refunded to all players`,
+          mentions
         );
         return;
       }
 
-      // Show current game board: .c4board
-      if (command === 'c4board') {
+      if (command === 'cfgboard') {
         const game = gameManager.getPlayerGame(sender);
 
         if (!game) {
@@ -1113,15 +965,13 @@ export default {
         }
 
         const gameInfo = formatGameInfo(game);
-        await reply(gameInfo);
+        await reply(gameInfo, getGameMentions(game)); // MENTIONS ADDED
         return;
       }
 
-      // Show player stats: .c4stats [mention]
-      if (command === 'c4stats') {
+      if (command === 'cfgstats') {
         let targetId = sender;
 
-        // Check if someone was mentioned
         const mentionedJids = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
         if (mentionedJids.length > 0) {
           targetId = mentionedJids[0];
@@ -1146,15 +996,15 @@ export default {
           `💔 Losses: ${stats.losses}\n` +
           `🤝 Draws: ${stats.draws}\n` +
           `📈 Win Rate: ${winRate}%\n\n` +
-          `💰 Total Winnings: ₦${stats.totalWinnings}\n` +
+          `💰 Total Winnings: ₦${stats.totalWinnings.toLocaleString()}\n` +
           `🎯 Games Created: ${stats.gamesCreated}\n` +
-          `🤝 Games Joined: ${stats.gamesJoined}`
+          `🤝 Games Joined: ${stats.gamesJoined}`,
+          [targetId] // MENTIONS ADDED
         );
         return;
       }
 
-      // Show leaderboard: .c4leaderboard
-      if (command === 'c4leaderboard') {
+      if (command === 'cfgleaderboard') {
         const leaderboard = await gameManager.getLeaderboard(10);
 
         if (leaderboard.length === 0) {
@@ -1163,6 +1013,7 @@ export default {
         }
 
         let leaderboardText = `🏆 *Connect Four Leaderboard*\n\n`;
+        const mentions = [];
 
         leaderboard.forEach((player, index) => {
           const rank = index + 1;
@@ -1173,35 +1024,36 @@ export default {
 
           leaderboardText += `${medal} ${getPlayerName(player.userId)}\n`;
           leaderboardText += `   🏆 ${player.wins}W ${player.losses}L ${player.draws}D (${winRate}%)\n`;
-          leaderboardText += `   💰 ₦${player.totalWinnings}\n\n`;
+          leaderboardText += `   💰 ₦${player.totalWinnings.toLocaleString()}\n\n`;
+
+          mentions.push(player.userId);
         });
 
-        await reply(leaderboardText);
+        await reply(leaderboardText, mentions); // MENTIONS ADDED
         return;
       }
 
-      // Show help: .c4help
       if (command === 'c4help') {
         await reply(
           `🎮 *Connect Four - Help*\n\n` +
           `*How to Play:*\n` +
-          `Drop colored discs into a 7-column, 6-row grid. The first player to get four discs in a row (horizontal, vertical, or diagonal) wins!\n\n` +
+          `Drop colored discs into a 9-column, 7-row grid. The first player to get four discs in a row (horizontal, vertical, or diagonal) wins!\n\n` +
           `*Commands:*\n` +
-          `• \`${config.PREFIX}c4 <wager>\` - Create a new game\n` +
-          `• \`join\` - Join active game (no prefix!)\n` +
-          `• \`1-7\` - Drop disc in column (no prefix!)\n` +
-          `• \`${config.PREFIX}c4board\` - Show current board\n` +
-          `• \`${config.PREFIX}c4cancel\` - Cancel your game\n` +
-          `• \`${config.PREFIX}c4stats\` - View your stats\n` +
-          `• \`${config.PREFIX}c4leaderboard\` - Top players\n\n` +
+          `• \`${config.PREFIX}cfg <your-bet>\` - Start a new game\n` +
+          `• \`join\` - Join active game.\n` +
+          `• \`1-9\` - Drop disc in column.\n` +
+          `• \`${config.PREFIX}cfgboard\` - Show current board\n` +
+          `• \`${config.PREFIX}cfgcancel\` - Cancel your game\n` +
+          `• \`${config.PREFIX}cfgstats\` - View your stats\n` +
+          `• \`${config.PREFIX}cfgleaderboard\` - Top players\n\n` +
           `*Rules:*\n` +
-          `• Wager: ₦${GAME_CONFIG.MIN_WAGER} - ₦${GAME_CONFIG.MAX_WAGER}\n` +
+          `• Bets: ₦${GAME_CONFIG.MIN_WAGER} - ₦${GAME_CONFIG.MAX_WAGER}\n` +
           `• Winner gets ${(GAME_CONFIG.WIN_MULTIPLIER * 100).toFixed(0)}% of pot\n` +
           `• ${((1 - GAME_CONFIG.WIN_MULTIPLIER) * 100).toFixed(0)}% house fee\n` +
           `• Join timeout: ${GAME_CONFIG.JOIN_TIMEOUT/1000}s\n` +
           `• Turn timeout: ${GAME_CONFIG.TURN_TIMEOUT/1000}s\n` +
           `• Draws refund both players\n\n` +
-          `💡 *Pro Tip:* During an active game, just type "join" or numbers (1-7) without any prefix!\n\n` +
+          `💡 *Pro Tip:* During an active game, just type "join" or numbers (1-9)!\n\n` +
           `${EMOJIS.PLAYER1} = Player 1 | ${EMOJIS.PLAYER2} = Player 2`
         );
         return;
