@@ -246,7 +246,107 @@ class Connect4Manager {
     this.timeouts = new Map();
   }
 
-  // Helper methods to interact with economy plugin's database
+  // RESTORED MISSING HELPER METHODS
+
+  async getUserBalance(userId) {
+    try {
+      // Use PluginHelpers to ensure consistency with other plugins
+      const user = await PluginHelpers.getUserData(userId);
+      if (user) {
+        console.log(chalk.cyan(`💰 Connect4 Check: ${userId} has balance ₦${user.balance}`));
+        return user;
+      }
+      return { balance: 0, bank: 0 };
+    } catch (error) {
+      console.error(chalk.red('Error getting user balance:'), error.message);
+      return { balance: 0, bank: 0 };
+    }
+  }
+
+  async deductMoney(userId, amount, reason) {
+    try {
+      const user = await PluginHelpers.getUserData(userId);
+
+      if (!user) {
+        return { success: false, message: 'User not found in economy system' };
+      }
+
+      if (user.balance < amount) {
+        return { 
+          success: false, 
+          message: `Insufficient balance! Wallet: ${userId}\nBalance: ₦${user.balance.toLocaleString()}\nRequired: ₦${amount.toLocaleString()}` 
+        };
+      }
+
+      if (user.frozen) {
+        return { success: false, message: 'Account is frozen' };
+      }
+
+      const newBalance = user.balance - amount;
+
+      await PluginHelpers.updateUser(userId, { balance: newBalance });
+
+      await safeOperation(async (db, collection) => {
+        await collection.insertOne({
+          userId,
+          type: 'debit',
+          amount,
+          reason,
+          balanceBefore: user.balance,
+          balanceAfter: newBalance,
+          timestamp: new Date()
+        });
+      }, TRANSACTIONS_COLLECTION);
+
+      console.log(chalk.green(`✅ Deducted ₦${amount} from ${userId.split('@')[0]}`));
+      return { success: true, newBalance };
+
+    } catch (error) {
+      console.error(chalk.red('Error deducting money:'), error.message);
+      return { success: false, message: 'Transaction failed: ' + error.message };
+    }
+  }
+
+  async addMoney(userId, amount, reason) {
+    try {
+      return await PluginHelpers.addMoney(userId, amount, reason);
+    } catch (error) {
+      console.error(chalk.red('Error adding money:'), error.message);
+      return { success: false, message: 'Transaction failed' };
+    }
+  }
+
+  async initialize() {
+    try {
+      const games = await safeOperation(async (db, collection) => {
+        return await collection.find({ status: { $in: ['waiting', 'active'] } }).toArray();
+      }, GAMES_COLLECTION);
+
+      if (games && games.length > 0) {
+        for (const gameData of games) {
+          const game = Connect4Game.fromJSON(gameData);
+          this.activeGames.set(game.gameId, game);
+
+          if (game.status === 'waiting') {
+            const elapsed = Date.now() - new Date(game.createdAt).getTime();
+            if (elapsed > GAME_CONFIG.JOIN_TIMEOUT) {
+              await this.cancelGame(game.gameId, 'timeout');
+            }
+          }
+        }
+        console.log(chalk.green(`✅ Loaded ${this.activeGames.size} active Connect4 games`));
+      }
+      return true;
+    } catch (error) {
+      console.error(chalk.red('❌ Failed to initialize Connect4 manager:'), error.message);
+      return false;
+    }
+  }
+
+  generateGameId() {
+    return `c4_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
   // Refactored to handle multiple timers (reminders + expiration)
   createGame(player1Id, wager, chatId, reminderCallback) {
     // Check if player already has an active game
