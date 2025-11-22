@@ -55,7 +55,7 @@ class Connect4Game {
     );
   }
 
-  join(player2Id) {
+  async join(player2Id) {
     if (this.status !== 'waiting') {
       return { success: false, message: 'Game already started or finished' };
     }
@@ -244,6 +244,147 @@ class Connect4Manager {
     this.timeouts = new Map();
   }
 
+  // Helper methods to interact with economy plugin's database
+  async getUserBalance(userId) {
+    try {
+      return await safeOperation(async (db, collection) => {
+        let user = await collection.findOne({ userId });
+
+        // Initialize user if doesn't exist
+        if (!user) {
+          console.log(chalk.yellow(`⚠️ User ${userId} not found in economy_users, initializing...`));
+          user = {
+            userId,
+            balance: 0,
+            bank: 0,
+            frozen: false,
+            inventory: [],
+            activeEffects: {},
+            stats: {
+              totalEarned: 0,
+              totalSpent: 0,
+              workCount: 0,
+              dailyStreak: 0
+            },
+            achievements: [],
+            investments: {
+              stocks: {},
+              crypto: {},
+              businesses: []
+            },
+            createdAt: new Date(),
+            updatedAt: new Date()
+          };
+          await collection.insertOne(user);
+        }
+
+        console.log(chalk.cyan(`💰 User ${userId.split('@')[0]} balance: ₦${user.balance}`));
+        return user || { balance: 0, bank: 0 };
+      }, 'economy_users');
+    } catch (error) {
+      console.error(chalk.red('Error getting user balance:'), error.message);
+      return { balance: 0, bank: 0 };
+    }
+  }
+
+  async deductMoney(userId, amount, reason) {
+    try {
+      return await safeOperation(async (db, collection) => {
+        const user = await collection.findOne({ userId });
+
+        if (!user) {
+          console.error(chalk.red(`❌ User ${userId} not found when trying to deduct money`));
+          return { success: false, message: 'User not found in economy system' };
+        }
+
+        console.log(chalk.cyan(`💸 Attempting to deduct ₦${amount} from ${userId.split('@')[0]}`));
+        console.log(chalk.cyan(`   Current balance: ₦${user.balance}`));
+
+        if (user.balance < amount) {
+          console.error(chalk.red(`❌ Insufficient balance: has ₦${user.balance}, needs ₦${amount}`));
+          return { success: false, message: `Insufficient balance: you have ₦${user.balance}, need ₦${amount}` };
+        }
+
+        // Check if account is frozen
+        if (user.frozen) {
+          console.error(chalk.red(`❌ Account ${userId} is frozen`));
+          return { success: false, message: 'Account is frozen' };
+        }
+
+        const newBalance = user.balance - amount;
+
+        await collection.updateOne(
+          { userId },
+          { 
+            $set: { 
+              balance: newBalance,
+              updatedAt: new Date() 
+            } 
+          }
+        );
+
+        // Log transaction
+        const transactionsCollection = db.collection('economy_transactions');
+        await transactionsCollection.insertOne({
+          userId,
+          type: 'debit',
+          amount,
+          reason,
+          balanceBefore: user.balance,
+          balanceAfter: newBalance,
+          timestamp: new Date()
+        });
+
+        console.log(chalk.green(`✅ Deducted ₦${amount}. New balance: ₦${newBalance}`));
+        return { success: true, newBalance };
+      }, 'economy_users');
+    } catch (error) {
+      console.error(chalk.red('Error deducting money:'), error.message);
+      return { success: false, message: 'Transaction failed: ' + error.message };
+    }
+  }
+
+  async addMoney(userId, amount, reason) {
+    try {
+      return await safeOperation(async (db, collection) => {
+        const user = await collection.findOne({ userId });
+
+        if (!user) {
+          return { success: false, message: 'User not found' };
+        }
+
+        const newBalance = user.balance + amount;
+
+        await collection.updateOne(
+          { userId },
+          { 
+            $set: { 
+              balance: newBalance,
+              updatedAt: new Date() 
+            } 
+          }
+        );
+
+        // Log transaction
+        const transactionsCollection = db.collection('economy_transactions');
+        await transactionsCollection.insertOne({
+          userId,
+          type: 'credit',
+          amount,
+          reason,
+          balanceBefore: user.balance,
+          balanceAfter: newBalance,
+          timestamp: new Date()
+        });
+
+        return { success: true, newBalance };
+      }, 'economy_users');
+    } catch (error) {
+      console.error(chalk.red('Error adding money:'), error.message);
+      return { success: false, message: 'Transaction failed' };
+    }
+  }
+
   async initialize() {
     try {
       // Load active games from database
@@ -300,19 +441,19 @@ class Connect4Manager {
       };
     }
 
-    // Check balance
-    const balance = await PluginHelpers.getBalance(player1Id);
-    if (balance.wallet < wager) {
+    // Check balance using economy plugin's system
+    const userData = await this.getUserBalance(player1Id);
+    if (!userData || userData.balance < wager) {
       return { 
         success: false, 
-        message: `Insufficient balance! You have ₦${balance.wallet}, need ₦${wager}` 
+        message: `Insufficient balance! You have ₦${userData ? userData.balance : 0}, need ₦${wager}` 
       };
     }
 
-    // Deduct wager from player1
-    const deducted = await PluginHelpers.removeMoney(player1Id, wager, 'Connect4 game wager');
-    if (!deducted) {
-      return { success: false, message: 'Failed to deduct wager from your account' };
+    // Deduct wager from player1 using economy plugin's system
+    const deducted = await this.deductMoney(player1Id, wager, 'Connect4 game wager');
+    if (!deducted.success) {
+      return { success: false, message: deducted.message || 'Failed to deduct wager from your account' };
     }
 
     // Create game
@@ -343,9 +484,9 @@ class Connect4Manager {
       return { success: false, message: 'Game not found!' };
     }
 
-    // Check balance
-    const balance = await PluginHelpers.getBalance(player2Id);
-    if (balance.wallet < game.wager) {
+    // Check balance using economy plugin's system
+    const userData = await this.getUserBalance(player2Id);
+    if (!userData || userData.balance < game.wager) {
       return { 
         success: false, 
         message: `Insufficient balance! You need ₦${game.wager} to join` 
@@ -358,12 +499,12 @@ class Connect4Manager {
       return joinResult;
     }
 
-    // Deduct wager from player2
-    const deducted = await PluginHelpers.removeMoney(player2Id, game.wager, 'Connect4 game wager');
-    if (!deducted) {
+    // Deduct wager from player2 using economy plugin's system
+    const deducted = await this.deductMoney(player2Id, game.wager, 'Connect4 game wager');
+    if (!deducted.success) {
       game.player2 = null;
       game.status = 'waiting';
-      return { success: false, message: 'Failed to deduct wager from your account' };
+      return { success: false, message: deducted.message || 'Failed to deduct wager from your account' };
     }
 
     // Clear join timeout
@@ -421,8 +562,8 @@ class Connect4Manager {
   async handleGameEnd(game) {
     if (game.winner === 0) {
       // Draw - refund both players
-      await PluginHelpers.addMoney(game.player1.id, game.wager, 'Connect4 draw refund');
-      await PluginHelpers.addMoney(game.player2.id, game.wager, 'Connect4 draw refund');
+      await this.addMoney(game.player1.id, game.wager, 'Connect4 draw refund');
+      await this.addMoney(game.player2.id, game.wager, 'Connect4 draw refund');
 
       await this.updateStats(game.player1.id, 'draws');
       await this.updateStats(game.player2.id, 'draws');
@@ -432,7 +573,7 @@ class Connect4Manager {
       const loserId = game.winner === 1 ? game.player2.id : game.player1.id;
 
       const winnings = Math.floor(game.wager * 2 * GAME_CONFIG.WIN_MULTIPLIER);
-      await PluginHelpers.addMoney(winnerId, winnings, 'Connect4 win');
+      await this.addMoney(winnerId, winnings, 'Connect4 win');
 
       await this.updateStats(winnerId, 'wins');
       await this.updateStats(winnerId, 'totalWinnings', winnings);
@@ -456,11 +597,11 @@ class Connect4Manager {
     }
 
     // Refund player1
-    await PluginHelpers.addMoney(game.player1.id, game.wager, 'Connect4 cancelled - refund');
+    await this.addMoney(game.player1.id, game.wager, 'Connect4 cancelled - refund');
 
     // Refund player2 if they joined
     if (game.player2) {
-      await PluginHelpers.addMoney(game.player2.id, game.wager, 'Connect4 cancelled - refund');
+      await this.addMoney(game.player2.id, game.wager, 'Connect4 cancelled - refund');
     }
 
     // Clear timeouts
