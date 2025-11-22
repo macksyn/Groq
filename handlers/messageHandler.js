@@ -1,4 +1,4 @@
-// handlers/messageHandler.js - V2 (Fully Refactored & Patched)
+// handlers/messageHandler.js - V2 (Fully Refactored)
 import { safeOperation } from '../lib/mongoManager.js';
 import { serializeMessage } from '../lib/serializer.js';
 import { PermissionHelpers, OwnerHelpers } from '../lib/helpers.js';
@@ -102,9 +102,7 @@ export default async function MessageHandler(messageUpdate, sock, loggerArg, con
     }
 
     // --- UPDATED RATE LIMITING WITH NOTIFICATION ---
-    // Ensure senderId is a valid string and trimmed.
-    const senderId = (m.sender && typeof m.sender === 'string') ? m.sender.trim() : 'unknown';
-
+    const senderId = m.sender || 'unknown';
     if (!isOwner && !isAdmin) { // Don't rate limit admins
       const limitCheck = checkLimit(senderId);
 
@@ -112,38 +110,29 @@ export default async function MessageHandler(messageUpdate, sock, loggerArg, con
         // User is rate limited
         if (limitCheck.shouldNotify) {
           // Send notification (only once per window)
-          // CRITICAL FIX: Check if m.chat exists to prevent crashes
-          if (m.chat) {
-            try {
-              // CRITICAL FIX: Only include in mentions if it's a valid JID (contains @)
-              // Passing 'unknown' to mentions causes jidDecode error in Baileys
-              const validMentions = senderId.includes('@') ? [senderId] : [];
-
-              await sock.sendMessage(m.chat, {
-                text: `Hi @${senderId.split('@')[0]}! You're sending commands too quickly.\n\n` +
-                      `⚠️ *Limit:* 10 commands per minute\n` +
-                      `⏳ *Wait:* ~${Math.ceil(60)} seconds before trying again\n\n` +
-                      `_This helps keep the bot running smoothly for everyone!_ 😊`,
-                mentions: validMentions
-              });
-              logger.info(`📢 Sent rate limit notification to ${senderId}`);
-            } catch (notifyErr) {
-              logger.error(notifyErr, 'Failed to send rate limit notification');
-            }
-          } else {
-            logger.warn('Cannot send rate limit notification: m.chat is undefined');
+          try {
+            const userName = m.pushName || senderId.split('@')[0];
+            await sock.sendMessage(m.chat, {
+              text: `Hi @${senderId.split('@')[0]}! You're sending commands too quickly.\n\n` +
+                    `⚠️ *Limit:* 10 commands per minute\n` +
+                    `⏳ *Wait:* ~${Math.ceil(60)} seconds before trying again\n\n` +
+                    `_This helps keep the bot running smoothly for everyone!_ 😊`,
+              mentions: [senderId]
+            });
+            logger.info(`📢 Sent rate limit notification to ${senderId}`);
+          } catch (notifyErr) {
+            logger.error(notifyErr, 'Failed to send rate limit notification');
           }
         }
         return; // Stop processing
       }
 
       // Optional: Warn users when they're getting close to the limit
-      if (limitCheck.remaining <= 2 && limitCheck.remaining > 0 && m.chat) {
+      if (limitCheck.remaining <= 2 && limitCheck.remaining > 0) {
         try {
-          const validMentions = senderId.includes('@') ? [senderId] : [];
           await sock.sendMessage(m.chat, {
             text: `⚠️ _You have ${limitCheck.remaining} commands remaining in this minute._`,
-            mentions: validMentions
+            mentions: [senderId]
           });
         } catch (e) {
           // Silently fail if warning can't be sent
@@ -165,7 +154,7 @@ export default async function MessageHandler(messageUpdate, sock, loggerArg, con
     // V2 ROUTING LOGIC
     if (isCommand) {
       const displayMessage = messageBody.length > 50 ? messageBody.substring(0, 50) + '...' : messageBody;
-      logger.info(`📨 Command from ${senderId.split('@')[0]}: ${displayMessage}`);
+      logger.info(`📨 Command from ${m.sender.split('@')[0]}: ${displayMessage}`);
       await PluginManager.handleCommand(m, sock, config, bot);
     } else {
       await PluginManager.executePlugins(m, sock, config, bot);
