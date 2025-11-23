@@ -316,7 +316,7 @@ const defaultSettings = {
   // Investment System
   investmentsEnabled: true,
   stockMarketVolatility: 0.15,
-  cryptoVolatility: 0.35,
+  cryptoVolatility: 0.15,
   businessROI: 0.08, // 8% daily return
 
   // Shop Settings

@@ -15,15 +15,15 @@ const GAME_CONFIG = {
   COLS: 9,
   JOIN_TIMEOUT: 60000, // 60 seconds
   TURN_TIMEOUT: 120000, // 2 minutes
-  MIN_WAGER: 10,
-  MAX_WAGER: 10000,
+  MIN_WAGER: 1000,
+  MAX_WAGER: 1000000,
   WIN_MULTIPLIER: 1.9, // Winner gets 1.9x the wager (10% house fee)
 };
 
 const EMOJIS = {
   EMPTY: '⚪',
   PLAYER1: '🔴',
-  PLAYER2: '🟡',
+  PLAYER2: '🔵',
   WIN: '✨',
   NUMBERS: ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣']
 };
@@ -694,7 +694,7 @@ function formatGameInfo(game) {
   info += `${EMOJIS.PLAYER1} Player 1: ${p1Name}\n`;
   info += `${EMOJIS.PLAYER2} Player 2: ${p2Name}\n`;
   info += `💰 Bet: ₦${game.wager.toLocaleString()}\n`;
-  info += `🏆 Prize: ₦${Math.floor(game.wager * 2 * GAME_CONFIG.WIN_MULTIPLIER).toLocaleString()}\n\n`;
+  info += `🏆 Prize: ₦${Math.floor(game.wager * 2, GAME_CONFIG.WIN_MULTIPLIER).toLocaleString()}\n\n`;
 
   if (game.status === 'waiting') {
     info += `⏳ Waiting for opponent...\n`;
@@ -792,7 +792,7 @@ export default {
         const playerGame = gameManager.getPlayerGame(sender);
 
         if (playerGame && playerGame.gameId === activeGame.gameId) {
-          if (/^[1-7]$/.test(rawText)) {
+          if (/^[1-9]$/.test(rawText)) {
             const column = parseInt(rawText) - 1;
 
             await sock.sendMessage(chatId, { react: { text: '⏳', key: m.key } });
