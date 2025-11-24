@@ -435,7 +435,8 @@ class Connect4Manager {
     })();
   }
 
-  async joinGame(gameId, player2Id) {
+  // Updated to accept notification callback for turn timeout
+  async joinGame(gameId, player2Id, notificationCallback) {
     const game = this.activeGames.get(gameId);
 
     if (!game) {
@@ -467,14 +468,15 @@ class Connect4Manager {
     // Clear all join timeouts (reminders + expiration)
     this.clearTimeouts(gameId);
 
-    this.setTurnTimeout(gameId);
+    this.setTurnTimeout(gameId, notificationCallback);
     await this.saveGame(game);
     await this.updateStats(player2Id, 'gamesJoined');
 
     return { success: true, game };
   }
 
-  async makeMove(gameId, playerId, column) {
+  // Updated to accept notification callback for turn timeout
+  async makeMove(gameId, playerId, column, notificationCallback) {
     const game = this.activeGames.get(gameId);
 
     if (!game) {
@@ -488,7 +490,7 @@ class Connect4Manager {
     }
 
     if (game.status === 'active') {
-      this.setTurnTimeout(gameId);
+      this.setTurnTimeout(gameId, notificationCallback);
     } else {
       this.clearTimeouts(gameId);
     }
@@ -551,19 +553,37 @@ class Connect4Manager {
     return { success: true, game, reason };
   }
 
-  setTurnTimeout(gameId) {
+  setTurnTimeout(gameId, notificationCallback) {
     this.clearTimeouts(gameId); // Helper handles clearing previous
 
     const timeout = setTimeout(async () => {
       const game = this.activeGames.get(gameId);
       if (game && game.status === 'active') {
         game.status = 'finished';
-        game.winner = game.currentTurn === 1 ? 2 : 1;
+        game.winner = game.currentTurn === 1 ? 2 : 1; // Current turn player lost
 
         await this.handleGameEnd(game);
         await this.saveGame(game);
 
         console.log(chalk.yellow(`⏱️ Game ${gameId} ended by turn timeout`));
+
+        // Notify chat via callback
+        if (notificationCallback && typeof notificationCallback === 'function') {
+          const loserId = game.currentTurn === 1 ? game.player1.id : game.player2.id;
+          const winnerId = game.currentTurn === 1 ? game.player2.id : game.player1.id;
+
+          const loserName = '@' + loserId.split('@')[0];
+          const winnerName = '@' + winnerId.split('@')[0];
+
+          await notificationCallback(
+            `⏱️ *TURN TIMEOUT!*\n\n` +
+            `${loserName} took too long to move!\n\n` +
+            `🏆 Winner: ${winnerName}\n` +
+            `💰 Prize: ₦${Math.floor(game.wager * 2 * GAME_CONFIG.WIN_MULTIPLIER).toLocaleString()}\n\n` +
+            `Game Over!`,
+            [loserId, winnerId] // Mentions
+          ).catch(err => console.error(chalk.red('Failed to send timeout notification:'), err));
+        }
       }
     }, GAME_CONFIG.TURN_TIMEOUT);
 
@@ -758,6 +778,12 @@ export default {
         await sock.sendMessage(chatId, { text, mentions }, { quoted: m });
       };
 
+      // NEW: GENERIC NOTIFICATION CALLBACK FOR TIMEOUTS
+      // This allows the game manager to send messages without having the socket object itself
+      const notificationCallback = async (text, mentions = []) => {
+        await sock.sendMessage(chatId, { text, mentions });
+      };
+
       const rawText = (m.body || '').trim().toLowerCase();
       const activeGamesInChat = gameManager.getActiveGamesForChat(chatId);
       const activeGame = activeGamesInChat.find(g => g.status === 'waiting' || g.status === 'active');
@@ -767,7 +793,7 @@ export default {
       if (activeGame && activeGame.status === 'waiting' && rawText === 'join') {
         await sock.sendMessage(chatId, { react: { text: '⏳', key: m.key } });
 
-        const result = await gameManager.joinGame(activeGame.gameId, sender);
+        const result = await gameManager.joinGame(activeGame.gameId, sender, notificationCallback);
 
         if (!result.success) {
           await sock.sendMessage(chatId, { react: { text: '❌', key: m.key } });
@@ -797,7 +823,7 @@ export default {
 
             await sock.sendMessage(chatId, { react: { text: '⏳', key: m.key } });
 
-            const result = await gameManager.makeMove(activeGame.gameId, sender, column);
+            const result = await gameManager.makeMove(activeGame.gameId, sender, column, notificationCallback);
 
             if (!result.success) {
               await sock.sendMessage(chatId, { react: { text: '❌', key: m.key } });
@@ -850,6 +876,27 @@ export default {
 
       // Create new game: .c4 <wager> or .cfg <wager>
       if (command === 'c4' || command === 'cfg' || command === 'connect4') {
+
+        // --- PREVENT MULTIPLE GAMES IN ONE CHAT ---
+        if (activeGame) {
+           const creatorName = getPlayerName(activeGame.player1.id);
+           if (activeGame.status === 'waiting') {
+              await reply(
+                `⚠️ *Game Already Waiting!*\n\n` +
+                `A game created by ${creatorName} is already waiting for an opponent.\n\n` +
+                `👉 *Type "JOIN" to play this game instead of creating a new one!*`
+              );
+           } else {
+              await reply(
+                `⚠️ *Game in Progress!*\n\n` +
+                `There is an active game running in this chat.\n` +
+                `Please wait for the current game to finish before starting a new one.`
+              );
+           }
+           return;
+        }
+        // ------------------------------------------
+
         if (args.length === 0) {
           await reply(
             `🎮 *Connect Four Game*\n\n` +
@@ -926,7 +973,7 @@ export default {
 
         await sock.sendMessage(chatId, { react: { text: '⏳', key: m.key } });
 
-        const result = await gameManager.joinGame(gameId, sender);
+        const result = await gameManager.joinGame(gameId, sender, notificationCallback);
 
         if (!result.success) {
           await sock.sendMessage(chatId, { react: { text: '❌', key: m.key } });
@@ -969,7 +1016,7 @@ export default {
 
         await sock.sendMessage(chatId, { react: { text: '⏳', key: m.key } });
 
-        const result = await gameManager.makeMove(game.gameId, sender, column);
+        const result = await gameManager.makeMove(game.gameId, sender, column, notificationCallback);
 
         if (!result.success) {
           await sock.sendMessage(chatId, { react: { text: '❌', key: m.key } });
@@ -983,7 +1030,7 @@ export default {
           await sock.sendMessage(chatId, { react: { text: '🎉', key: m.key } });
 
           const winner = result.game.winner === 1 ? result.game.player1 : result.game.player2;
-          const winnings = Math.floor(result.game.wager * 2 * GAME_CONFIG.WIN_MULTIPLIER);
+          const winnings = Math.floor(result.game.wager * 2, GAME_CONFIG.WIN_MULTIPLIER);
 
           await reply(
             `${EMOJIS.WIN} *CONNECT FOUR!* ${EMOJIS.WIN}\n\n` +
