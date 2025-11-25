@@ -5,7 +5,7 @@ import {
   fetchLatestBaileysVersion,
   DisconnectReason,
   makeCacheableSignalKeyStore
-} from 'baileys';
+} from '@whiskeysockets/baileys';
 import pino from 'pino';
 import logger from '../utils/logger.js';
 

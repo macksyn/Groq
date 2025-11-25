@@ -2,7 +2,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { useMultiFileAuthState, BufferJSON } from 'baileys';
+import { useMultiFileAuthState, BufferJSON } from '@whiskeysockets/baileys';
 import logger from '../utils/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
