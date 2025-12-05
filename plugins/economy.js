@@ -498,7 +498,7 @@ workBoost: {
   },
   robProtection: {
     name: "Bodyguard",
-    price: 8000,
+    price: 8000000,
     description: "Hire a bodyguard to prevent robberies for 48 hours",
     type: "consumable", 
     effect: "robProtection",

@@ -1,4 +1,4 @@
-// plugins/ai_lecturer.js - Enhanced with Fallback API System
+// plugins/ai_lecturer.js - Enhanced with Script Support & Fallback API
 import axios from 'axios';
 import cron from 'node-cron';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
@@ -169,7 +169,43 @@ async function callAIEndpoint(url, prompt) {
   });
 }
 
-async function generateLecture(lecturer, topic, mode, sessionNum, prevTopics, prevSummary = null) {
+/**
+ * NEW: Process custom script with lecturer's style
+ */
+async function processCustomScript(lecturer, script) {
+  const stylePrompt = `${lecturer.prompt}\n\nRewrite this lecture content in your style. Keep the information accurate but adapt the tone, add appropriate emojis (${lecturer.style.includes('Lagos') ? '5-7' : '4-6'}), and bold key terms. DO NOT add greeting or closing.\n\nContent:\n${script}`;
+
+  let rawResponse = null;
+  let usedSource = 'PRIMARY';
+
+  try {
+    const response = await callAIEndpoint(CONFIG.PRIMARY_API_URL, stylePrompt);
+    rawResponse = response.data?.response || response.data?.result || response.data?.answer;
+  } catch (primaryError) {
+    console.warn(`[AI Lecturer] Primary API failed: ${primaryError.message}. Switching to fallback...`);
+    try {
+      usedSource = 'FALLBACK';
+      const response = await callAIEndpoint(CONFIG.FALLBACK_API_URL, stylePrompt);
+      rawResponse = response.data?.response || response.data?.result || response.data?.answer;
+    } catch (fallbackError) {
+      throw new Error(`All AI sources failed. Primary: ${primaryError.message}, Fallback: ${fallbackError.message}`);
+    }
+  }
+
+  if (!rawResponse || rawResponse.length < 100) {
+    throw new Error(`AI (${usedSource}) returned empty or too short response`);
+  }
+
+  return cleanAIResponse(rawResponse.trim());
+}
+
+async function generateLecture(lecturer, topic, mode, sessionNum, prevTopics, prevSummary = null, customScript = null) {
+  // NEW: If custom script is provided, process it with lecturer's style
+  if (customScript) {
+    return await processCustomScript(lecturer, customScript);
+  }
+
+  // Original AI generation logic
   let userPrompt = '';
 
   if (mode === 'variety') {
@@ -186,20 +222,15 @@ async function generateLecture(lecturer, topic, mode, sessionNum, prevTopics, pr
   let usedSource = 'PRIMARY';
 
   try {
-    // Attempt 1: Primary API
     const response = await callAIEndpoint(CONFIG.PRIMARY_API_URL, fullPrompt);
     rawResponse = response.data?.response || response.data?.result || response.data?.answer;
   } catch (primaryError) {
-    // Log the failure but don't crash yet
     console.warn(`[AI Lecturer] Primary API failed: ${primaryError.message}. Switching to fallback...`);
-
     try {
-      // Attempt 2: Fallback API
       usedSource = 'FALLBACK';
       const response = await callAIEndpoint(CONFIG.FALLBACK_API_URL, fullPrompt);
       rawResponse = response.data?.response || response.data?.result || response.data?.answer;
     } catch (fallbackError) {
-      // Both failed, throw a combined error
       throw new Error(`All AI sources failed. Primary: ${primaryError.message}, Fallback: ${fallbackError.message}`);
     }
   }
@@ -298,6 +329,12 @@ async function runScheduledLecture(scheduleId) {
     const prevTopics = schedule.previousTopics || [];
     const prevSummary = schedule.lastSummary || null;
 
+    // NEW: Get current script if it's a scripted lecture series
+    let currentScript = null;
+    if (schedule.scriptMode && schedule.scripts && schedule.scripts[schedule.session - 1]) {
+      currentScript = schedule.scripts[schedule.session - 1];
+    }
+
     // Generate lecture content
     const script = await generateLecture(
       schedule.lecturer,
@@ -305,7 +342,8 @@ async function runScheduledLecture(scheduleId) {
       schedule.mode,
       schedule.session,
       prevTopics,
-      prevSummary
+      prevSummary,
+      currentScript // NEW: Pass custom script
     );
 
     // Extract current topic for variety mode
@@ -339,8 +377,9 @@ async function runScheduledLecture(scheduleId) {
 
     // Deliver header
     const label = schedule.mode === 'variety' ? 'SESSION' : 'PART';
+    const scriptBadge = schedule.scriptMode ? ' 📜' : '';
     await globalSock.sendMessage(schedule.groupId, {
-      text: `🎓 *${schedule.title.toUpperCase()} - ${label} ${schedule.session}*\n\n*Professor:* ${schedule.lecturer.name}\n${'─'.repeat(35)}`
+      text: `🎓 *${schedule.title.toUpperCase()} - ${label} ${schedule.session}${scriptBadge}*\n\n*Professor:* ${schedule.lecturer.name}\n${'─'.repeat(35)}`
     });
 
     await sleep(1000);
@@ -460,6 +499,59 @@ async function cmdLecture(context) {
   }
 }
 
+// NEW: Command to deliver a lecture from custom script
+async function cmdScriptLecture(context) {
+  const { msg, text, sock, config } = context;
+
+  if (!text) {
+    return msg.reply(
+      `*Usage:* ${config.PREFIX}script-lecture <topic> | <your script>\n\n` +
+      `*Example:*\n${config.PREFIX}script-lecture Python Basics | Python is a high-level programming language. It's known for its simple syntax...`
+    );
+  }
+
+  const parts = text.split('|').map(p => p.trim());
+  if (parts.length < 2) {
+    return msg.reply('❌ Format: .script-lecture <topic> | <your script>');
+  }
+
+  const [topic, userScript] = parts;
+
+  if (userScript.length < 200) {
+    return msg.reply('❌ Script too short. Please provide at least 200 characters of content.');
+  }
+
+  const lecturer = randomLecturer();
+  await msg.react('📜');
+  const loading = await msg.reply(`📜 *Prof ${lecturer.name}* is reviewing your script...`);
+
+  try {
+    // Process the custom script with lecturer's style
+    const styledScript = await processCustomScript(lecturer, userScript);
+    const greeting = randomFromArray(CONFIG.VARIETY_GREETINGS);
+    const closing = randomFromArray(CONFIG.VARIETY_CLOSINGS);
+
+    await sock.sendMessage(msg.from, {
+      text: `🎓 *LECTURE START* 📜\n\n*Topic:* ${topic}\n*Prof:* ${lecturer.name}\n*Mode:* Custom Script\n${'─'.repeat(35)}`,
+      edit: loading.key
+    });
+
+    await sleep(1000);
+    await sock.sendMessage(msg.from, { text: greeting });
+    await sleep(2000);
+    await deliverWithTyping(sock, msg.from, styledScript);
+    await sleep(2000);
+    await sock.sendMessage(msg.from, { text: closing });
+    await sock.sendMessage(msg.from, { text: `${'─'.repeat(35)}\n🎓 *CLASS DISMISSED*` });
+
+  } catch (error) {
+    await sock.sendMessage(msg.from, {
+      text: `❌ Lecture Failed: ${error.message}`,
+      edit: loading.key
+    });
+  }
+}
+
 async function cmdSchedule(context) {
   const { msg, text, sock, logger } = context;
   const db = await PluginHelpers.getDB();
@@ -468,39 +560,38 @@ async function cmdSchedule(context) {
 
   try {
     const parts = text.split('|').map(p => p.trim());
-    if (parts.length < 3) throw new Error('Format: Title | Day | Time | Mode');
+    if (parts.length < 3) throw new Error('Format: Title | Day | Time | Mode [| Script1, Script2, ...]');
 
-    const [title, dayStr, timeStr, modeStr] = parts;
+    const [title, dayStr, timeStr, modeStr, ...scriptParts] = parts;
     const mode = modeStr === 'course' ? 'course' : 'variety';
-    const { day, time, timezone, cronTime } = parseDayTime(dayStr, timeStr, parts[4]);
+    const { day, time, timezone, cronTime } = parseDayTime(dayStr, timeStr, parts[parts.length - 1]);
+
+    // NEW: Check if scripts are provided
+    const hasScripts = scriptParts.length > 0 && scriptParts[0].length > 50;
+    const scripts = hasScripts ? scriptParts : null;
 
     // Check duplicates with case-insensitive match
     const titleLower = title.toLowerCase().trim();
-    const exists = await db.collection('lectures').findOne({ 
-      groupId: msg.from
-    });
+    const allSchedules = await db.collection('lectures').find({ groupId: msg.from }).toArray();
+    const duplicate = allSchedules.find(s => s.title.toLowerCase().trim() === titleLower);
 
-    // Manual check for case-insensitive duplicate
-    if (exists) {
-      const allSchedules = await db.collection('lectures').find({ groupId: msg.from }).toArray();
-      const duplicate = allSchedules.find(s => s.title.toLowerCase().trim() === titleLower);
-
-      if (duplicate) {
-        throw new Error(
-          `Lecture "${duplicate.title}" already exists.\n\n` +
-          `Use: \`.cancel ${duplicate.title}\` to remove it first.`
-        );
-      }
+    if (duplicate) {
+      throw new Error(
+        `Lecture "${duplicate.title}" already exists.\n\n` +
+        `Use: \`.cancel ${duplicate.title}\` to remove it first.`
+      );
     }
 
     const lecturer = randomLecturer();
     const schedule = {
       groupId: msg.from,
-      title: title.trim(), // Store cleaned title
+      title: title.trim(),
       mode, day, time, timezone,
       session: 1, lecturer, 
       previousTopics: [],
       lastSummary: null,
+      scriptMode: hasScripts, // NEW
+      scripts: scripts, // NEW
       createdAt: new Date()
     };
 
@@ -520,18 +611,23 @@ async function cmdSchedule(context) {
 
     const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day];
     const modeLabel = mode === 'course' ? 'Course Series' : 'Weekly Topics';
+    const scriptBadge = hasScripts ? '\n*📜 Script Mode:* Using your custom content' : '';
 
     await msg.reply(
       `✅ *Class Scheduled!*\n\n` +
       `*Subject:* ${title}\n` +
       `*Type:* ${modeLabel}\n` +
       `*Prof:* ${lecturer.name}\n` +
-      `*Time:* Every ${dayName} @ ${time} (${timezone})\n` +
+      `*Time:* Every ${dayName} @ ${time} (${timezone})${scriptBadge}\n` +
       `*Next:* I will send a message when class starts.`
     );
 
   } catch (error) {
-    await msg.reply(`❌ Schedule Failed:\n${error.message}\n\nTry: \`.schedule BizTalk | Friday | 14:00 | variety\``);
+    await msg.reply(
+      `❌ Schedule Failed:\n${error.message}\n\n` +
+      `*AI-Generated:* \`.schedule BizTalk | Friday | 14:00 | variety\`\n` +
+      `*Custom Script:* \`.schedule Python 101 | Monday | 10:00 | course | Script for part 1 | Script for part 2\``
+    );
   }
 }
 
@@ -560,7 +656,8 @@ async function cmdList(context) {
   for (const s of schedules) {
     const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][s.day];
     const type = s.mode === 'course' ? '📖 Course' : '🎯 Weekly';
-    reply += `\n*${s.title}*\n├ 🕒 ${day} @ ${s.time}\n├ ${type}\n└ 👨‍🏫 ${s.lecturer.name}\n`;
+    const scriptBadge = s.scriptMode ? ' 📜' : '';
+    reply += `\n*${s.title}${scriptBadge}*\n├ 🕒 ${day} @ ${s.time}\n├ ${type}\n└ 👨‍🏫 ${s.lecturer.name}\n`;
   }
   await msg.reply(reply);
 }
@@ -570,24 +667,19 @@ async function cmdCancel(context) {
   if (!text) return msg.reply('Usage: .cancel <Title>');
 
   const db = await PluginHelpers.getDB();
-
-  // First, let's see all schedules to debug
   const allSchedules = await db.collection('lectures').find({ groupId: msg.from }).toArray();
 
   if (allSchedules.length === 0) {
     return msg.reply('❌ No lectures scheduled in this group.');
   }
 
-  // Try exact case-insensitive match first
   const searchTitle = text.trim().toLowerCase();
   let schedule = allSchedules.find(s => s.title.toLowerCase() === searchTitle);
 
-  // If not found, try partial match
   if (!schedule) {
     schedule = allSchedules.find(s => s.title.toLowerCase().includes(searchTitle));
   }
 
-  // If still not found, show available options
   if (!schedule) {
     const availableTitles = allSchedules.map(s => `• ${s.title}`).join('\n');
     return msg.reply(
@@ -597,13 +689,11 @@ async function cmdCancel(context) {
     );
   }
 
-  // Stop cron job
   if (cronJobs.has(`lec_${schedule._id}`)) {
     cronJobs.get(`lec_${schedule._id}`).stop();
     cronJobs.delete(`lec_${schedule._id}`);
   }
 
-  // Delete from database
   await db.collection('lectures').deleteOne({ _id: schedule._id });
   await msg.reply(`✅ *Cancelled Successfully*\n\n*Lecture:* ${schedule.title}\n*Professor:* ${schedule.lecturer.name}`);
 }
@@ -614,11 +704,11 @@ async function cmdCancel(context) {
 
 export default {
   name: 'AI Lecturer',
-  description: 'AI lecture system with dynamic greetings, series continuity & fallback API',
+  description: 'AI lecture system with custom script support, dynamic greetings & fallback API',
   category: 'education',
-  version: '6.1.0',
+  version: '7.0.0',
 
-  commands: ['lecture', 'schedule-lecture', 'lectures', 'cancel-lecture', 'testschedule'],
+  commands: ['lecture', 'script-lecture', 'schedule-lecture', 'lectures', 'cancel-lecture', 'testschedule'],
 
   async run(context) {
     globalSock = context.sock;
@@ -626,6 +716,7 @@ export default {
 
     switch (context.command) {
       case 'lecture': await cmdLecture(context); break;
+      case 'script-lecture': await cmdScriptLecture(context); break;
       case 'schedule-lecture': await cmdSchedule(context); break;
       case 'lectures': await cmdList(context); break;
       case 'cancel-lecture': await cmdCancel(context); break;
