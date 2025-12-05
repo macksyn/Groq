@@ -1,5 +1,7 @@
 // plugins/birthday.js - V3 Plugin Format with Scheduled Tasks Integration
 // FIXED: Removed globalSock and now uses the 'context' object passed by PluginManager.
+// FIXED: Group wishes now include birthday person in mentions array
+// ADDED: Test command for debugging
 import { PluginHelpers } from '../lib/pluginIntegration.js';
 import moment from 'moment-timezone';
 
@@ -35,8 +37,8 @@ let birthdaySettings = { ...defaultSettings };
 // ===== V3 PLUGIN EXPORT =====
 export default {
   name: 'Birthday System',
-  version: '3.0.1', // Incremented version
-  author: 'Alex Macksyn (with fix)',
+  version: '3.0.2', // Incremented version
+  author: 'Alex Macksyn (with fixes)',
   description: 'Advanced birthday system with automatic reminders and wishes using scheduled tasks',
   category: 'social',
 
@@ -50,42 +52,37 @@ export default {
       name: 'birthday_wishes',
       description: 'Send birthday wishes at midnight',
       schedule: '1 0 * * *', // 00:01 every day
-      // FIXED: Pass the 'context' object to the handler
       handler: (context) => scheduledBirthdayWishes(context)
     },
     {
       name: 'birthday_reminders_7d',
       description: 'Send 7-day birthday reminders',
       schedule: '0 9 * * *', // 09:00 every day
-      // FIXED: Pass the 'context' object and args
       handler: (context) => scheduledBirthdayReminders(context, 7)
     },
     {
       name: 'birthday_reminders_3d',
       description: 'Send 3-day birthday reminders',
       schedule: '0 9 * * *', // 09:00 every day
-      // FIXED: Pass the 'context' object and args
       handler: (context) => scheduledBirthdayReminders(context, 3)
     },
     {
       name: 'birthday_reminders_1d',
       description: 'Send 1-day birthday reminders',
       schedule: '0 9 * * *', // 09:00 every day
-      // FIXED: Pass the 'context' object and args
       handler: (context) => scheduledBirthdayReminders(context, 1)
     },
     {
       name: 'birthday_cleanup',
       description: 'Clean up old birthday records',
       schedule: '0 2 * * 0', // 02:00 every Sunday
-      // FIXED: Pass the 'context' object
       handler: (context) => scheduledCleanup(context)
     }
   ],
 
   // Main plugin handler
   async run(context) {
-    const { msg: m, args, text, command, sock, config, logger, helpers } = context;
+    const { msg: m, args, command } = context;
 
     // Load settings on first run
     if (!birthdaySettings.loaded) {
@@ -99,9 +96,8 @@ export default {
       case 'bday':
       case 'birthdays':
         if (args.length === 0) {
-          await showBirthdayMenu(m, config.PREFIX);
+          await showBirthdayMenu(m, context.config.PREFIX);
         } else {
-          // Pass the full context to sub-handlers
           await handleSubCommand(args[0], args.slice(1), context);
         }
         break;
@@ -112,7 +108,7 @@ export default {
         break;
 
       default:
-        await showBirthdayMenu(m, config.PREFIX);
+        await showBirthdayMenu(m, context.config.PREFIX);
     }
   }
 };
@@ -205,13 +201,9 @@ async function getGroupParticipants(sock, groupId, logger) {
     const metadata = await sock.groupMetadata(groupId);
     if (!metadata || !metadata.participants) return [];
 
-    // Get all participant JIDs
     const participants = metadata.participants.map(p => p.id);
-
-    // Get the bot's JID (handle potential device ID)
     const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
 
-    // Filter out the bot
     return participants.filter(jid => jid !== botJid);
   } catch (error) {
     if (logger) {
@@ -219,7 +211,7 @@ async function getGroupParticipants(sock, groupId, logger) {
     } else {
       console.error(`❌ Error fetching participants for group ${groupId}:`, error.message);
     }
-    return []; // Return empty array on failure
+    return [];
   }
 }
 
@@ -298,10 +290,6 @@ async function getUpcomingBirthdays(daysAhead) {
 
 // Generate birthday wish message
 function getBirthdayWishMessage(birthdayPerson) {
-  // ===== ⭐️ USER'S PREFERRED FIX ⭐️ =====
-  // We use the person's @tag in the text, as requested.
-  // The 'mentions' array in scheduledBirthdayWishes will be modified
-  // to EXCLUDE the birthday person to prevent a double tag.
   const userTag = `@${birthdayPerson.userId.split('@')[0]}`;
 
   const wishes = [
@@ -311,7 +299,6 @@ function getBirthdayWishMessage(birthdayPerson) {
     `🎈 BIRTHDAY ALERT! 🎈\n\nIt's ${userTag}'s special day! 🎂 Let's celebrate this wonderful person who brings joy to our group! 🎊🎉`,
     `🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday to you! 🎵\n🎵 Happy Birthday dear ${userTag}! 🎵\n🎵 Happy Birthday to you! 🎵\n\n🎂 Hope your day is as special as you are! 🌟`
   ];
-  // ===== ⭐️ END FIX ⭐️ =====
 
   const randomWish = wishes[Math.floor(Math.random() * wishes.length)];
   let message = randomWish;
@@ -345,7 +332,6 @@ function getReminderMessage(birthdayPerson, daysUntil) {
 
 // ==================== SCHEDULED TASK HANDLERS ====================
 
-// FIXED: Accept 'context' and destructure 'sock' and 'logger'
 async function scheduledBirthdayWishes(context) {
   const { sock, logger } = context;
 
@@ -371,7 +357,6 @@ async function scheduledBirthdayWishes(context) {
 
     for (const birthdayPerson of todaysBirthdays) {
       try {
-        // Check if already wished today
         const existingWish = await PluginHelpers.safeDBOperation(async (db) => {
           const collection = db.collection(COLLECTIONS.BIRTHDAY_WISHES);
           return await collection.findOne({ 
@@ -398,7 +383,6 @@ async function scheduledBirthdayWishes(context) {
           try {
             const privateMsg = `🎉 *HAPPY BIRTHDAY ${birthdayPerson.name}!* 🎉\n\nToday is your special day! 🎂\n\nWishing you all the happiness in the world! ✨🎈`;
 
-            // FIXED: Use 'sock' from context
             const success = await safeSend(sock, birthdayPerson.userId, { text: privateMsg });
             if (success) {
               successfulSends++;
@@ -417,18 +401,13 @@ async function scheduledBirthdayWishes(context) {
             try {
               if (!isConnectionHealthy(sock)) break;
 
-              // NEW: Get all participants for silent tag
               const allParticipants = await getGroupParticipants(sock, groupId, logger);
 
-              // ===== ⭐️ USER'S PREFERRED FIX ⭐️ =====
-              // Filter out the birthday person from the mentions array,
-              // as they are already tagged in the message text.
-              const mentions = allParticipants.filter(id => id !== birthdayPerson.userId);
+              // FIXED: Include birthday person in mentions array
+              const mentions = [...new Set([birthdayPerson.userId, ...allParticipants])];
 
-              // FIXED: Use 'sock' from context
               const success = await safeSend(sock, groupId, {
                 text: wishMessage,
-                // CHANGED: Use all participants for silent mention
                 mentions: mentions
               });
 
@@ -438,13 +417,12 @@ async function scheduledBirthdayWishes(context) {
               }
 
               await new Promise(resolve => setTimeout(resolve, 5000));
-            } catch (error) { // <--- ⭐️ SYNTAX FIX ⭐️ Added missing { and }
+            } catch (error) {
               logger.error(`❌ Group wish failed for ${groupId.split('@')[0]}:`, error.message);
             }
           }
         }
 
-        // Mark as sent if at least one succeeded
         if (successfulSends > 0) {
           await PluginHelpers.safeDBOperation(async (db) => {
             const collection = db.collection(COLLECTIONS.BIRTHDAY_WISHES);
@@ -471,7 +449,6 @@ async function scheduledBirthdayWishes(context) {
   }
 }
 
-// FIXED: Accept 'context' and destructure 'sock' and 'logger'
 async function scheduledBirthdayReminders(context, daysAhead) {
   const { sock, logger } = context;
 
@@ -499,7 +476,6 @@ async function scheduledBirthdayReminders(context, daysAhead) {
       const reminderKey = `${today}-${birthdayPerson.userId}-${daysAhead}`;
 
       try {
-        // Skip if reminder already sent
         const existingReminder = await PluginHelpers.safeDBOperation(async (db) => {
           const collection = db.collection(COLLECTIONS.BIRTHDAY_REMINDERS);
           return await collection.findOne({ reminderKey });
@@ -511,22 +487,16 @@ async function scheduledBirthdayReminders(context, daysAhead) {
 
         const reminderMessage = getReminderMessage(birthdayPerson, daysAhead);
 
-        // Send to configured groups
         if (birthdaySettings.enableGroupReminders && birthdaySettings.reminderGroups.length > 0) {
           for (const groupId of birthdaySettings.reminderGroups) {
             try {
               if (!isConnectionHealthy(sock)) break;
 
-              // NEW: Get all participants for silent tag
               const allParticipants = await getGroupParticipants(sock, groupId, logger);
-
-              // Add birthday person to mentions if not already in the list (should be)
               const mentions = [...new Set([birthdayPerson.userId, ...allParticipants])];
 
-              // FIXED: Use 'sock' from context
               const success = await safeSend(sock, groupId, {
                 text: reminderMessage,
-                // CHANGED: Use all participants for silent mention
                 mentions: mentions
               });
 
@@ -541,7 +511,6 @@ async function scheduledBirthdayReminders(context, daysAhead) {
           }
         }
 
-        // Mark reminder as sent
         await PluginHelpers.safeDBOperation(async (db) => {
           const collection = db.collection(COLLECTIONS.BIRTHDAY_REMINDERS);
           await collection.insertOne({
@@ -562,14 +531,12 @@ async function scheduledBirthdayReminders(context, daysAhead) {
   }
 }
 
-// FIXED: Accept 'context' and destructure 'logger'
 async function scheduledCleanup(context) {
   const { logger } = context;
 
   try {
     const cutoffDate = moment.tz('Africa/Lagos').subtract(30, 'days').toDate();
 
-    // Clean up old wishes and reminders
     const results = await PluginHelpers.safeDBOperation(async (db) => {
       const wishesCollection = db.collection(COLLECTIONS.BIRTHDAY_WISHES);
       const remindersCollection = db.collection(COLLECTIONS.BIRTHDAY_REMINDERS);
@@ -595,9 +562,7 @@ async function scheduledCleanup(context) {
 
 // ==================== COMMAND HANDLERS ====================
 
-// Handle sub commands
 async function handleSubCommand(subCommand, args, context) {
-  // context is already passed in full, no need to repackage
   switch (subCommand.toLowerCase()) {
     case 'today':
       await handleToday(context);
@@ -623,6 +588,9 @@ async function handleSubCommand(subCommand, args, context) {
     case 'status':
       await handleStatus(context);
       break;
+    case 'test':
+      await handleTestWish(context, args);
+      break;
     case 'help':
       await showBirthdayMenu(context.msg, context.config.PREFIX);
       break;
@@ -631,9 +599,8 @@ async function handleSubCommand(subCommand, args, context) {
   }
 }
 
-// Show birthday menu
 async function showBirthdayMenu(m, prefix) {
-  const menuText = `🎂 *BIRTHDAY SYSTEM v3.0* 🎂\n\n` +
+  const menuText = `🎂 *BIRTHDAY SYSTEM v3.0.2* 🎂\n\n` +
                   `📅 *View Commands:*\n` +
                   `• *today* - Today's birthdays\n` +
                   `• *upcoming [days]* - Upcoming birthdays (default: 7 days)\n` +
@@ -643,7 +610,8 @@ async function showBirthdayMenu(m, prefix) {
                   `👑 *Admin Commands:*\n` +
                   `• *settings* - View/modify settings\n` +
                   `• *groups* - Manage reminder groups\n` +
-                  `• *force* - Force birthday checks\n\n` +
+                  `• *force* - Force birthday checks\n` +
+                  `• *test [@user]* - Test birthday wish (in group)\n\n` +
                   `🤖 *Features:*\n` +
                   `• Scheduled wishes via cron tasks\n` +
                   `• Reliable reminder system\n` +
@@ -654,7 +622,86 @@ async function showBirthdayMenu(m, prefix) {
   await m.reply(menuText);
 }
 
-// Handle force wishes (admin only)
+async function handleTestWish(context, args) {
+  const { msg: m, sock, config, logger } = context;
+
+  if (!isAuthorized(m.sender, config)) {
+    await m.reply('🚫 Only admins can test birthday wishes.');
+    return;
+  }
+
+  if (!m.from.includes('@g.us')) {
+    await m.reply('⚠️ This test command must be used in a group.');
+    return;
+  }
+
+  let targetUserId = m.sender;
+  let targetName = 'Test User';
+
+  if (m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
+    targetUserId = m.message.extendedTextMessage.contextInfo.mentionedJid[0];
+
+    const birthdayData = await getBirthdayData(targetUserId);
+    if (birthdayData) {
+      targetName = birthdayData.name;
+    } else {
+      targetName = targetUserId.split('@')[0];
+    }
+  } else {
+    const birthdayData = await getBirthdayData(m.sender);
+    if (birthdayData) {
+      targetName = birthdayData.name;
+    } else {
+      targetName = m.sender.split('@')[0];
+    }
+  }
+
+  await m.reply(`🧪 Testing birthday wish for ${targetName}...\n\nSending to current group in 3 seconds...`);
+
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  try {
+    const testBirthdayPerson = {
+      userId: targetUserId,
+      name: targetName,
+      birthday: {
+        age: 25,
+        displayDate: moment.tz('Africa/Lagos').format('MMMM DD')
+      }
+    };
+
+    const wishMessage = getBirthdayWishMessage(testBirthdayPerson);
+    const groupId = m.from;
+
+    const allParticipants = await getGroupParticipants(sock, groupId, logger);
+
+    // FIXED: Include birthday person in mentions
+    const mentions = [...new Set([testBirthdayPerson.userId, ...allParticipants])];
+
+    const success = await safeSend(sock, groupId, {
+      text: `🧪 **TEST MODE** 🧪\n\n${wishMessage}\n\n_This is a test birthday wish. No actual birthday today._`,
+      mentions: mentions
+    });
+
+    if (success) {
+      logger.info(`✅ Test wish sent successfully for ${targetName}`);
+      await sock.sendMessage(m.sender, {
+        text: `✅ Test birthday wish sent successfully!\n\n👤 Target: ${targetName}\n📊 Mentions: ${mentions.length} users\n🎯 Group: ${groupId.split('@')[0]}`
+      });
+    } else {
+      await sock.sendMessage(m.sender, {
+        text: `❌ Test wish failed to send. Check logs for details.`
+      });
+    }
+
+  } catch (error) {
+    logger.error('❌ Test wish error:', error);
+    await sock.sendMessage(m.sender, {
+      text: `❌ Test wish error: ${error.message}`
+    });
+  }
+}
+
 async function handleForceWishes(context, args) {
   const { msg: m, sock, config, logger } = context;
 
@@ -673,7 +720,6 @@ async function handleForceWishes(context, args) {
   switch (forceType) {
     case 'wishes':
       await m.reply('🔧 Forcing birthday wishes...');
-      // FIXED: Pass the context
       await scheduledBirthdayWishes({ sock, logger });
       await m.reply('✅ Forced birthday wishes completed');
       break;
@@ -684,13 +730,11 @@ async function handleForceWishes(context, args) {
         return;
       }
       await m.reply(`🔧 Forcing ${days}-day reminders...`);
-      // FIXED: Pass the context
       await scheduledBirthdayReminders({ sock, logger }, days);
       await m.reply(`✅ Forced ${days}-day reminders completed`);
       break;
     case 'cleanup':
       await m.reply('🔧 Forcing cleanup...');
-      // FIXED: Pass the context
       await scheduledCleanup({ logger });
       await m.reply('✅ Forced cleanup completed');
       break;
@@ -699,7 +743,6 @@ async function handleForceWishes(context, args) {
   }
 }
 
-// Handle status command
 async function handleStatus(context) {
   const { msg: m, sock } = context;
 
@@ -737,7 +780,6 @@ async function handleStatus(context) {
   }
 }
 
-// Handle today's birthdays
 async function handleToday(context) {
   const { sock, msg: m, config } = context;
 
@@ -769,7 +811,6 @@ async function handleToday(context) {
   });
 }
 
-// Handle upcoming birthdays
 async function handleUpcoming(context, args) {
   const { sock, msg: m, config } = context;
 
@@ -842,11 +883,10 @@ async function handleUpcoming(context, args) {
   });
 }
 
-// Handle this month's birthdays
 async function handleThisMonth(context) {
   const { sock, msg: m, config } = context;
 
-  const currentMonth = moment.tz('Africa/Lagos').month() + 1; // moment months are 0-indexed
+  const currentMonth = moment.tz('Africa/Lagos').month() + 1;
   const allBirthdays = await getAllBirthdays();
   const thisMonthBirthdays = [];
 
@@ -864,7 +904,6 @@ async function handleThisMonth(context) {
     return;
   }
 
-  // Sort by day
   thisMonthBirthdays.sort((a, b) => a.birthday.day - b.birthday.day);
 
   const monthName = moment.tz('Africa/Lagos').format('MMMM YYYY');
@@ -879,8 +918,7 @@ async function handleThisMonth(context) {
       message += ` (${person.birthday.age} years old)`;
     }
 
-    // Check if birthday has passed this month
-    const today = moment.tz('Africa/LLagos');
+    const today = moment.tz('Africa/Lagos');
     if (person.birthday.month === today.month() + 1) {
       if (person.birthday.day === today.date()) {
         message += ` 🎊 TODAY!`;
@@ -901,7 +939,6 @@ async function handleThisMonth(context) {
   });
 }
 
-// Handle all birthdays (admin only)
 async function handleAll(context) {
   const { sock, msg: m, config } = context;
 
@@ -922,7 +959,6 @@ async function handleAll(context) {
     return;
   }
 
-  // Sort by month and day
   birthdayEntries.sort((a, b) => {
     if (a.birthday.month !== b.birthday.month) {
       return a.birthday.month - b.birthday.month;
@@ -938,7 +974,6 @@ async function handleAll(context) {
   birthdayEntries.forEach(person => {
     mentions.push(person.userId);
 
-    // Add month header
     if (currentMonth !== person.birthday.month) {
       currentMonth = person.birthday.month;
       message += `\n📅 *${person.birthday.monthName.toUpperCase()}*\n`;
@@ -959,7 +994,6 @@ async function handleAll(context) {
   });
 }
 
-// Handle my birthday command
 async function handleMyBirthday(context) {
   const { msg: m, config } = context;
 
@@ -988,7 +1022,6 @@ async function handleMyBirthday(context) {
 
     message += `💾 Last Updated: ${new Date(birthdayData.lastUpdated).toLocaleString()}\n`;
 
-    // Calculate days until next birthday
     const today = new Date();
     const thisYear = today.getFullYear();
     const nextBirthday = new Date(thisYear, birthday.month - 1, birthday.day);
@@ -1017,7 +1050,6 @@ async function handleMyBirthday(context) {
   }
 }
 
-// Handle settings command (admin only)
 async function handleSettings(context, args) {
   const { msg: m, config } = context;
 
@@ -1070,7 +1102,6 @@ async function handleSettings(context, args) {
   }
 }
 
-// Show settings
 async function showSettings(m, config) {
   const settings = birthdaySettings;
 
@@ -1102,7 +1133,6 @@ async function showSettings(m, config) {
   await m.reply(message);
 }
 
-// Settings helper functions
 async function toggleReminders(m, value, config) {
   if (!value) {
     await m.reply(`⚠️ Please specify: *on* or *off*\n\nExample: *${config.PREFIX}birthday settings reminders on*`);
@@ -1272,7 +1302,6 @@ async function reloadSettings(m, config) {
   }
 }
 
-// Handle groups command (admin only)
 async function handleGroups(context, args) {
   const { msg: m, config } = context;
 
@@ -1306,7 +1335,6 @@ async function handleGroups(context, args) {
   }
 }
 
-// Group management functions
 async function showGroups(m, config) {
   const groupCount = birthdaySettings.reminderGroups.length;
 
@@ -1392,7 +1420,6 @@ async function clearGroups(m, config) {
   await m.reply(`✅ Cleared all ${groupCount} group(s) from birthday reminders!`);
 }
 
-// Export functions for external use
 export {
   getAllBirthdays,
   getBirthdayData,
