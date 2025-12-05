@@ -339,7 +339,7 @@ const defaultSettings = {
   // Event Settings
   eventsEnabled: true,
   doubleMoneyDuration: 3600000, // 1 hour
-  marketCrashChance: 0.02, // 2% daily
+  marketCrashChance: 0.55, // 55% daily
 
   // Admin Settings
   adminCanModifyBalances: true,
