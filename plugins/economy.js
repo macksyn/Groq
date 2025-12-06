@@ -593,7 +593,7 @@ let cryptoData = {
 BTC: { name: "Bitcoin", price: 45000, volatility: 0.05, trend: 0.001, history: [], lastChange: 'stable' },
   ETH: { name: "Ethereum", price: 3200, volatility: 0.06, trend: -0.002, history: [], lastChange: 'stable' },
   SOL: { name: "Solana", price: 120, volatility: 0.08, trend: 0.005, history: [], lastChange: 'stable' },
-  SHIB: { name: "Shiba Inu", price: 0.00002, volatility: 0.12, trend: 0.01, history: [], lastChange: 'stable' },
+  SHIB: { name: "Shiba Inu", price: 0.0000002, volatility: 0.01, trend: 0.01, history: [], lastChange: 'stable' },
   GROQ: { name: "Groq Coin", price: 15, volatility: 0.10, trend: -0.003, history: [], lastChange: 'stable' },
   ADA: { name: "Cardano", price: 0.8, volatility: 0.07, trend: 0.002, history: [], lastChange: 'stable' },
   DOT: { name: "Polkadot", price: 25, volatility: 0.08, trend: 0.001, history: [], lastChange: 'stable' },
@@ -811,9 +811,17 @@ async function updateUserData(userId, data) {
   }
 }
 
-// ✅ REFACTORED: Money functions now use getCollection for direct, safe access.
+// ✅ REFACTORED & SECURED: Money functions with NaN Guard
 async function addMoney(userId, amount, reason = 'Unknown', applyEffects = true) {
   try {
+    // 🛡️ SECURITY: NaN Protection
+    // If amount is NaN, Infinite, or negative, freeze the account immediately
+    if (Number.isNaN(amount) || !Number.isFinite(amount) || amount < 0) {
+        console.error(`🚨 SECURITY: NaN detected for ${userId}. Freezing account.`);
+        await setFreezeStatus(userId, true, 'System - Anti-Corruption (NaN detected)');
+        return { success: false, message: '❌ Security Alert: Corrupt data detected. Account frozen.', balance: null };
+    }
+
     // ✅ ENHANCED: Check if account is frozen first
     const freezeCheck = await checkAccountFrozen(userId);
     if (freezeCheck.isFrozen) {
@@ -822,6 +830,14 @@ async function addMoney(userId, amount, reason = 'Unknown', applyEffects = true)
     }
 
     const user = await getUserData(userId);
+
+    // 🛡️ SECURITY: Database Integrity Check
+    // If the user's CURRENT balance is already NaN, freeze them to prevent spread
+    if (Number.isNaN(user.balance) || Number.isNaN(user.bank)) {
+        await setFreezeStatus(userId, true, 'System - Account already corrupted');
+        return { success: false, message: '❌ Critical Error: Your account data is corrupt. Account frozen.', balance: null };
+    }
+
     let finalAmount = amount;
 
     // Apply active effects if enabled (UNCHANGED LOGIC)
@@ -871,6 +887,13 @@ async function addMoney(userId, amount, reason = 'Unknown', applyEffects = true)
 
 async function removeMoney(userId, amount, reason = 'Unknown') {
   try {
+    // 🛡️ SECURITY: NaN Protection
+    if (Number.isNaN(amount) || !Number.isFinite(amount) || amount < 0) {
+        console.error(`🚨 SECURITY: NaN detected for ${userId} during deduction. Freezing account.`);
+        await setFreezeStatus(userId, true, 'System - Anti-Corruption (NaN detected)');
+        return { success: false, message: '❌ Security Alert: Corrupt data detected. Account frozen.' };
+    }
+
     // ✅ ENHANCED: Check if account is frozen first
     const freezeCheck = await checkAccountFrozen(userId);
     if (freezeCheck.isFrozen) {
@@ -879,6 +902,13 @@ async function removeMoney(userId, amount, reason = 'Unknown') {
     }
 
     const user = await getUserData(userId);
+
+    // 🛡️ SECURITY: Database Integrity Check
+    if (Number.isNaN(user.balance)) {
+        await setFreezeStatus(userId, true, 'System - Account already corrupted');
+        return { success: false, message: '❌ Critical Error: Your account data is corrupt. Account frozen.' };
+    }
+
     if (user.balance >= amount) {
       const newBalance = user.balance - amount;
 
@@ -907,6 +937,62 @@ async function removeMoney(userId, amount, reason = 'Unknown') {
   } catch (error) {
     console.error('Error removing money:', error);
     return { success: false, message: 'Transaction failed' };
+  }
+}
+
+async function handleDeposit(context, args) {
+  const { reply, senderId, config } = context;
+
+  try {
+    if (!args || args.length === 0) {
+      await reply(`🏦 *Bank Deposit*\n\n⚠️ *Usage:* ${config.PREFIX}deposit [amount]\n💡 *Example:* ${config.PREFIX}deposit 1000`);
+      return;
+    }
+
+    // Attempt to parse
+    const amount = parseInt(args[0]);
+
+    // 🛡️ SECURITY CHECK: Detect NaN or Double Space errors
+    if (isNaN(amount)) {
+        // If they typed ".deposit  500", args[0] is empty, parseInt is NaN.
+        // Or if they typed ".deposit abc"
+        await setFreezeStatus(senderId, true, 'System - Invalid Input Pattern (NaN)');
+        await reply(`🚨 *SECURITY ALERT* 🚨\n\n❌ *Invalid number format detected.*\n❄️ *Your account has been automatically frozen for security.*\n\n⚠️ Please contact an admin to unfreeze.`);
+        return;
+    }
+
+    if (amount <= 0) {
+      await reply('⚠️ *Please provide a valid amount greater than 0*');
+      return;
+    }
+
+    const userData = await getUserData(senderId);
+    if (userData.frozen) {
+      await reply('🚫 *Your account is frozen. You cannot deposit money.*');
+      return;
+    }
+
+    // ... rest of the deposit function remains the same ...
+    if (userData.balance < amount) {
+      await reply('🚫 *Insufficient wallet balance*');
+      return;
+    }
+
+    if (userData.bank + amount > ecoSettings.maxBankBalance) {
+      await reply(`🚫 *Bank deposit limit exceeded*\n\nMax bank balance: ${ecoSettings.currency}${ecoSettings.maxBankBalance.toLocaleString()}`);
+      return;
+    }
+
+    await updateUserData(senderId, {
+      balance: userData.balance - amount,
+      bank: userData.bank + amount
+    });
+
+    const updatedData = await getUserData(senderId);
+    await reply(`🏦 *Successfully deposited ${ecoSettings.currency}${amount.toLocaleString()} to your bank*\n\n💵 *Wallet:* ${ecoSettings.currency}${updatedData.balance.toLocaleString()}\n🏦 *Bank:* ${ecoSettings.currency}${updatedData.bank.toLocaleString()}`);
+  } catch (error) {
+    await reply('❌ *Error processing deposit. Please try again.*');
+    console.error('Deposit error:', error);
   }
 }
 
@@ -2705,6 +2791,13 @@ async function handleCrypto(context, args) {
         const buySymbol = args[1].toUpperCase();
         const buyAmount = parseFloat(args[2]);
 
+        // 🛡️ SECURITY CHECK
+        if (isNaN(buyAmount)) {
+            await setFreezeStatus(senderId, true, 'System - Invalid Crypto Input');
+            await reply(`🚨 *SECURITY ALERT* 🚨\n\n❌ *Invalid amount detected.*\n❄️ *Your account has been automatically frozen for security.*`);
+            return;
+        }
+
         if (!cryptoData[buySymbol]) {
           await reply('❌ *Invalid cryptocurrency symbol*');
           return;
@@ -2737,6 +2830,13 @@ async function handleCrypto(context, args) {
 
         const sellSymbol = args[1].toUpperCase();
         const sellAmount = parseFloat(args[2]);
+
+        // 🛡️ SECURITY CHECK
+        if (isNaN(sellAmount)) {
+             await setFreezeStatus(senderId, true, 'System - Invalid Crypto Input');
+             await reply(`🚨 *SECURITY ALERT* 🚨\n\n❌ *Invalid amount detected.*\n❄️ *Your account has been automatically frozen for security.*`);
+             return;
+        }
 
         if (!cryptoData[sellSymbol]) {
           await reply('❌ *Invalid cryptocurrency symbol*');
