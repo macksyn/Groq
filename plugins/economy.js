@@ -940,62 +940,6 @@ async function removeMoney(userId, amount, reason = 'Unknown') {
   }
 }
 
-async function handleDeposit(context, args) {
-  const { reply, senderId, config } = context;
-
-  try {
-    if (!args || args.length === 0) {
-      await reply(`🏦 *Bank Deposit*\n\n⚠️ *Usage:* ${config.PREFIX}deposit [amount]\n💡 *Example:* ${config.PREFIX}deposit 1000`);
-      return;
-    }
-
-    // Attempt to parse
-    const amount = parseInt(args[0]);
-
-    // 🛡️ SECURITY CHECK: Detect NaN or Double Space errors
-    if (isNaN(amount)) {
-        // If they typed ".deposit  500", args[0] is empty, parseInt is NaN.
-        // Or if they typed ".deposit abc"
-        await setFreezeStatus(senderId, true, 'System - Invalid Input Pattern (NaN)');
-        await reply(`🚨 *SECURITY ALERT* 🚨\n\n❌ *Invalid number format detected.*\n❄️ *Your account has been automatically frozen for security.*\n\n⚠️ Please contact an admin to unfreeze.`);
-        return;
-    }
-
-    if (amount <= 0) {
-      await reply('⚠️ *Please provide a valid amount greater than 0*');
-      return;
-    }
-
-    const userData = await getUserData(senderId);
-    if (userData.frozen) {
-      await reply('🚫 *Your account is frozen. You cannot deposit money.*');
-      return;
-    }
-
-    // ... rest of the deposit function remains the same ...
-    if (userData.balance < amount) {
-      await reply('🚫 *Insufficient wallet balance*');
-      return;
-    }
-
-    if (userData.bank + amount > ecoSettings.maxBankBalance) {
-      await reply(`🚫 *Bank deposit limit exceeded*\n\nMax bank balance: ${ecoSettings.currency}${ecoSettings.maxBankBalance.toLocaleString()}`);
-      return;
-    }
-
-    await updateUserData(senderId, {
-      balance: userData.balance - amount,
-      bank: userData.bank + amount
-    });
-
-    const updatedData = await getUserData(senderId);
-    await reply(`🏦 *Successfully deposited ${ecoSettings.currency}${amount.toLocaleString()} to your bank*\n\n💵 *Wallet:* ${ecoSettings.currency}${updatedData.balance.toLocaleString()}\n🏦 *Bank:* ${ecoSettings.currency}${updatedData.bank.toLocaleString()}`);
-  } catch (error) {
-    await reply('❌ *Error processing deposit. Please try again.*');
-    console.error('Deposit error:', error);
-  }
-}
-
 // Achievement checking system (UNCHANGED - relies on refactored functions)
 async function checkAchievements(userId, type, data = {}) {
   try {
