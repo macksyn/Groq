@@ -10,8 +10,8 @@ import pino from 'pino';
 import logger from '../utils/logger.js';
 
 // Optimized constants for better stability
-const MAX_RETRIES = 8;
-const BASE_RETRY_DELAY_MS = 2000; // Increased from 1000
+const MAX_RETRIES = 10; // Increased to allow more attempts during unstable periods
+const BASE_RETRY_DELAY_MS = 2000;
 const MAX_RETRY_DELAY_MS = 30000;
 
 export class SocketManager extends EventEmitter {
@@ -25,14 +25,14 @@ export class SocketManager extends EventEmitter {
     this.retryCount = 0;
     this.isConnecting = false;
     this.status = 'disconnected';
-
-    // Add keep-alive mechanism
-    this.keepAliveInterval = null;
-    this.lastPingTime = Date.now();
     this.consecutiveErrors = 0;
   }
 
   getReconnectDelay() {
+    // If it's a 428 error, we want to reconnect quickly, not exponentially
+    if (this.consecutiveErrors > 0 && this.consecutiveErrors < 3) {
+        return 2000; 
+    }
     const delay = BASE_RETRY_DELAY_MS * Math.pow(2, this.retryCount);
     return Math.min(delay, MAX_RETRY_DELAY_MS);
   }
@@ -55,30 +55,30 @@ export class SocketManager extends EventEmitter {
 
       this.socket = makeWASocket({
         version,
-        logger: pino({ level: 'silent' }),
+        logger: pino({ level: 'silent' }), // Keep silent to reduce log noise
         printQRInTerminal: !this.sessionManager.sessionId,
-        browser: [this.sessionManager.config?.BOT_NAME || 'Groq', 'Chrome', '4.0.0'],
+        browser: [this.sessionManager.config?.BOT_NAME || 'Malvin-XD', 'Chrome', '120.0.0'], // Updated Browser Version
         auth: {
           creds: state.creds,
           keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
         },
 
-        // ✅ ENHANCED CONNECTION SETTINGS FOR STABILITY
+        // ✅ STABILITY CONFIGURATION (Fixed)
         markOnlineOnConnect: true,
         syncFullHistory: false,
-        generateHighQualityLinkPreview: false,
+        generateHighQualityLinkPreview: true, // Re-enabled for better UX
 
-        // Increased timeouts to prevent premature disconnections
-        connectTimeoutMs: 60000, // 60 seconds (was 45s)
-        defaultQueryTimeoutMs: 60000, // 60 seconds (was 45s)
-        keepAliveIntervalMs: 25000, // 25 seconds (was 30s) - more frequent
-        qrTimeout: 60000,
+        // Standard Timeouts (Don't make these too long, or it hangs)
+        connectTimeoutMs: 60000, 
+        defaultQueryTimeoutMs: 60000,
 
-        // Retry configuration
-        retryRequestDelayMs: 1000, // Increased from 500
-        maxMsgRetryCount: 3, // Increased from 2
+        // Internal Keep Alive (Let Baileys handle it)
+        // 30s is the standard sweet spot. 25s is fine too.
+        keepAliveIntervalMs: 30000, 
 
-        // Message handling
+        retryRequestDelayMs: 2000,
+        maxMsgRetryCount: 5, // Increased for 428 resilience
+
         getMessage: async (key) => {
           if (this.socket?.msgRetryCache?.has(key.id)) {
             return this.socket.msgRetryCache.get(key.id).message;
@@ -86,12 +86,10 @@ export class SocketManager extends EventEmitter {
           return undefined;
         },
 
-        // Additional stability settings
         emitOwnEvents: true,
         shouldSyncHistoryMessage: () => false,
         shouldIgnoreJid: jid => jid === 'status@broadcast',
 
-        // Performance optimizations
         patchMessageBeforeSending: (message) => {
           const requiresPatch = !!(
             message.buttonsMessage ||
@@ -115,14 +113,12 @@ export class SocketManager extends EventEmitter {
         },
 
         mobile: false,
-        fireInitQueries: true,
       });
 
-      // Enhanced message retry cache with cleanup
       this.socket.msgRetryCache = new Map();
 
-      // Start custom keep-alive monitoring
-      this.startKeepAlive();
+      // REMOVED: this.startKeepAlive(); 
+      // Reason: Custom Keep-Alive + Internal Keep-Alive = Conflicts
 
       this.setupEventHandlers(saveCreds);
       this.setupConnectionListener();
@@ -137,102 +133,37 @@ export class SocketManager extends EventEmitter {
     }
   }
 
-  // ✅ NEW: Custom keep-alive mechanism
-  startKeepAlive() {
-    // Clear any existing interval
-    if (this.keepAliveInterval) {
-      clearInterval(this.keepAliveInterval);
-    }
-
-    // Send periodic pings to keep connection alive
-    this.keepAliveInterval = setInterval(async () => {
-      try {
-        if (!this.socket || !this.socket.ws || this.socket.ws.readyState !== 1) {
-          logger.debug('⚠️ Socket not ready for keep-alive ping');
-          return;
-        }
-
-        // Check if we've received any data recently
-        const timeSinceLastPing = Date.now() - this.lastPingTime;
-
-        if (timeSinceLastPing > 60000) { // 60 seconds without activity
-          logger.debug('📡 Sending keep-alive ping...');
-
-          // Send a lightweight query to keep connection active
-          await this.socket.query({
-            tag: 'iq',
-            attrs: {
-              to: '@s.whatsapp.net',
-              type: 'get',
-              xmlns: 'w:sync:app:state'
-            }
-          }).catch(() => {
-            // Ignore errors, this is just a keep-alive
-            logger.debug('Keep-alive ping failed (expected)');
-          });
-
-          this.lastPingTime = Date.now();
-        }
-      } catch (error) {
-        logger.debug('Keep-alive error:', error.message);
-      }
-    }, 20000); // Check every 20 seconds
-  }
-
   setupEventHandlers(saveCreds) {
-    // Save credentials
     this.socket.ev.on('creds.update', async () => {
       try {
         await saveCreds();
-        this.lastPingTime = Date.now(); // Update activity time
       } catch (error) {
         logger.safeError(error, '❌ Failed to save credentials');
       }
     });
 
-    // Forward core events
     this.socket.ev.on('messages.upsert', (messageUpdate) => {
-      this.lastPingTime = Date.now(); // Update activity time
-      this.consecutiveErrors = 0; // Reset error counter on successful message
+      this.consecutiveErrors = 0; // Reset error counter on success
       this.emit('message', { socket: this.socket, messageUpdate });
 
-      // Enhanced retry cache with size limit
       if (messageUpdate.messages) {
         for (const msg of messageUpdate.messages) {
           if (msg.key?.id) {
             this.socket.msgRetryCache?.set(msg.key.id, msg);
           }
         }
-
-        // Cleanup cache more aggressively
         if (this.socket.msgRetryCache?.size > 500) {
           const entries = Array.from(this.socket.msgRetryCache.entries());
           const toDelete = entries.slice(0, 250);
           toDelete.forEach(([key]) => this.socket.msgRetryCache.delete(key));
-          logger.debug(`🧹 Cleaned message cache: ${toDelete.length} entries removed`);
         }
       }
     });
 
-    this.socket.ev.on('call', (callUpdate) => {
-      this.lastPingTime = Date.now();
-      this.emit('call', { socket: this.socket, callUpdate });
-    });
-
-    this.socket.ev.on('groups.update', (groupUpdate) => {
-      this.lastPingTime = Date.now();
-      this.emit('groupUpdate', { socket: this.socket, groupUpdate });
-    });
-
-    this.socket.ev.on('group-participants.update', (event) => {
-      this.lastPingTime = Date.now();
-      this.emit('groupParticipants', { socket: this.socket, event });
-    });
-
-    // ✅ NEW: Monitor for connection health
-    this.socket.ev.on('connection.update', () => {
-      this.lastPingTime = Date.now();
-    });
+    // Forward other events
+    this.socket.ev.on('call', (callUpdate) => this.emit('call', { socket: this.socket, callUpdate }));
+    this.socket.ev.on('groups.update', (groupUpdate) => this.emit('groupUpdate', { socket: this.socket, groupUpdate }));
+    this.socket.ev.on('group-participants.update', (event) => this.emit('groupParticipants', { socket: this.socket, event }));
   }
 
   setupConnectionListener() {
@@ -241,26 +172,20 @@ export class SocketManager extends EventEmitter {
 
       if (qr) {
         logger.safeLog('info', '📱 QR Code Generated - Scan with WhatsApp');
-        logger.safeLog('info', '💡 QR codes expire in 60 seconds. Please scan quickly!');
         this.status = 'qr_ready';
         this.emit('statusChange', 'qr_ready');
       }
 
       if (connection === 'connecting') {
-        logger.safeLog('info', `🔄 Connecting to WhatsApp... (Attempt ${this.retryCount + 1}/${MAX_RETRIES})`);
         this.status = 'connecting';
         this.emit('statusChange', 'connecting', { attempt: this.retryCount + 1, max: MAX_RETRIES });
       }
 
       if (connection === 'open') {
-        logger.safeLog('info', '✅ Successfully connected to WhatsApp!');
-        logger.safeLog('info', `📱 Connected as: ${this.socket.user?.name || 'Unknown'}`);
-        logger.safeLog('info', `📞 Phone: ${this.socket.user?.id?.split(':')[0] || 'Unknown'}`);
-
+        logger.safeLog('info', '✅ Connected to WhatsApp!');
         this.status = 'connected';
         this.retryCount = 0;
-        this.consecutiveErrors = 0; // Reset error counter
-        this.lastPingTime = Date.now();
+        this.consecutiveErrors = 0;
         this.emit('statusChange', 'connected');
       }
 
@@ -268,122 +193,68 @@ export class SocketManager extends EventEmitter {
         this.status = 'disconnected';
         this.emit('statusChange', 'disconnected');
 
-        // Stop keep-alive when disconnected
-        if (this.keepAliveInterval) {
-          clearInterval(this.keepAliveInterval);
-          this.keepAliveInterval = null;
-        }
-
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const reason = lastDisconnect?.error?.message || 'Unknown';
 
-        logger.safeError(lastDisconnect?.error, `❌ Connection closed`);
-        logger.warn(`📝 Status Code: ${statusCode || 'undefined'}`);
-        logger.warn(`📝 Reason: ${reason}`);
+        logger.warn(`❌ Connection closed: ${statusCode} - ${reason}`);
 
         let shouldReconnect = true;
         let cleanSessionFirst = false;
 
-        // ✅ ENHANCED: Better handling of Stream Errored (ack)
-        if (statusCode === DisconnectReason.badSession) {
-          if (reason.includes('Stream Errored (ack)')) {
+        // ✅ HANDLE 428 SPECIFICALLY (The fix for your issue)
+        if (statusCode === 428) {
+            logger.warn('⚠️ Connection Terminated (428). Reconnecting immediately...');
+            // Do NOT clean session for 428, just reconnect fast
             this.consecutiveErrors++;
-
-            if (this.consecutiveErrors >= 3) {
-              // If we've had 3 consecutive ack errors, clean session
-              logger.warn('⚠️ Multiple consecutive Stream Ack errors. Cleaning session...');
-              cleanSessionFirst = true;
-              this.consecutiveErrors = 0;
-            } else {
-              logger.warn(`⚠️ Stream Ack error (${this.consecutiveErrors}/3). Reconnecting without cleaning session...`);
-            }
-          } else {
-            logger.safeError(lastDisconnect?.error, '🚫 Bad session file. Cleaning session...');
-            cleanSessionFirst = true;
-          }
+            shouldReconnect = true; 
         }
 
-        // Handle other disconnect reasons
-        switch (statusCode) {
-          case DisconnectReason.loggedOut:
-            logger.safeError(lastDisconnect?.error, '🚪 Logged out - Session invalid');
-            shouldReconnect = false;
-            this.status = 'error';
-            this.emit('statusChange', 'error', { error: 'Logged out', requiresScan: true });
-            cleanSessionFirst = true;
-            break;
-
-          case DisconnectReason.connectionReplaced:
-            logger.safeError(lastDisconnect?.error, '🔄 Connection replaced - Another instance detected');
-            shouldReconnect = false;
-            this.status = 'error';
-            this.emit('statusChange', 'error', { error: 'Connection replaced' });
-            break;
-
-          case DisconnectReason.restartRequired:
-            logger.warn('🔄 Server requires a restart. Retrying...');
-            break;
-
-          case DisconnectReason.timedOut:
-            logger.safeError(lastDisconnect?.error, '⏰ Connection timed out. Retrying...');
-            break;
+        // Handle Bad Session
+        if (statusCode === DisconnectReason.badSession) {
+          logger.safeError(lastDisconnect?.error, '🚫 Bad session file. Cleaning session...');
+          cleanSessionFirst = true;
+          shouldReconnect = true;
         }
 
-        // Reconnection logic
+        // Handle Logged Out
+        if (statusCode === DisconnectReason.loggedOut) {
+          logger.safeError(lastDisconnect?.error, '🚪 Logged out');
+          shouldReconnect = false;
+          cleanSessionFirst = true;
+          this.status = 'error';
+          this.emit('statusChange', 'error', { error: 'Logged out', requiresScan: true });
+        }
+
         if (shouldReconnect && this.retryCount < MAX_RETRIES) {
           this.retryCount++;
 
           if (cleanSessionFirst) {
-            logger.safeLog('info', '🧹 Cleaning session files...');
             this.sessionManager.cleanSession();
           }
 
           const delay = this.getReconnectDelay();
-          logger.safeLog('info', `🔄 Reconnecting in ${delay / 1000} seconds... (${this.retryCount}/${MAX_RETRIES})`);
+          logger.safeLog('info', `🔄 Reconnecting in ${delay / 1000}s...`);
 
           setTimeout(() => {
-            this.connect().catch(error => {
-              logger.safeError(error, '❌ Reconnection failed');
-            });
+            this.connect().catch(e => logger.safeError(e, 'Reconnection failed'));
           }, delay);
-
-        } else if (this.retryCount >= MAX_RETRIES) {
-          logger.safeError(lastDisconnect?.error, `💀 Maximum reconnection attempts (${MAX_RETRIES}) reached`);
-          this.status = 'error';
-          this.emit('statusChange', 'error', { error: 'Max retries reached' });
         }
       }
     });
   }
 
   async disconnect() {
-    // Stop keep-alive
-    if (this.keepAliveInterval) {
-      clearInterval(this.keepAliveInterval);
-      this.keepAliveInterval = null;
-    }
-
     if (this.socket) {
       try {
         this.socket.end();
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        this.socket = null;
       } catch (error) {
         logger.warn('⚠️ Socket disconnect warning:', error.message);
       }
     }
     this.status = 'disconnected';
-    this.socket = null;
-    logger.safeLog('info', '🔌 Socket disconnected');
   }
 
-  getSocket() { 
-    return this.socket; 
-  }
-
-  isReady() {
-    return this.socket && 
-           this.socket.user?.id && 
-           this.socket.ws?.readyState === 1 &&
-           this.status === 'connected';
-  }
+  getSocket() { return this.socket; }
+  isReady() { return this.socket && this.status === 'connected'; }
 }
