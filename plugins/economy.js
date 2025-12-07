@@ -1346,6 +1346,13 @@ async function handleStocks(context, args) {
         const buySymbol = args[1].toUpperCase();
         const buyAmount = parseInt(args[2]);
 
+        // 🛡️ SECURITY CHECK
+        if (isNaN(buyAmount)) {
+            await setFreezeStatus(senderId, true, 'System - Invalid Stock Input');
+            await reply(`🚨 *SECURITY ALERT* 🚨\n\n❌ *Invalid amount detected.*\n❄️ *Your account has been automatically frozen for security.*`);
+            return;
+        }
+
         if (!stocks[buySymbol]) {
           await reply('❌ *Invalid stock symbol*');
           return;
@@ -1378,6 +1385,13 @@ async function handleStocks(context, args) {
 
         const sellSymbol = args[1].toUpperCase();
         const sellAmount = parseInt(args[2]);
+
+        // 🛡️ SECURITY CHECK
+        if (isNaN(sellAmount)) {
+             await setFreezeStatus(senderId, true, 'System - Invalid Stock Input');
+             await reply(`🚨 *SECURITY ALERT* 🚨\n\n❌ *Invalid amount detected.*\n❄️ *Your account has been automatically frozen for security.*`);
+             return;
+        }
 
         if (!stocks[sellSymbol]) {
           await reply('❌ *Invalid stock symbol*');
