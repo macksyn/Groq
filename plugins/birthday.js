@@ -383,6 +383,7 @@ async function scheduledBirthdayWishes(context) {
           try {
             const privateMsg = `🎉 *HAPPY BIRTHDAY ${birthdayPerson.name}!* 🎉\n\nToday is your special day! 🎂\n\nWishing you all the happiness in the world! ✨🎈`;
 
+            // Only mention the user, not a huge list
             const success = await safeSend(sock, birthdayPerson.userId, { text: privateMsg });
             if (success) {
               successfulSends++;
@@ -401,10 +402,9 @@ async function scheduledBirthdayWishes(context) {
             try {
               if (!isConnectionHealthy(sock)) break;
 
-              const allParticipants = await getGroupParticipants(sock, groupId, logger);
-
-              // FIXED: Include birthday person in mentions array
-              const mentions = [...new Set([birthdayPerson.userId, ...allParticipants])];
+              // FIXED: Removed getGroupParticipants mass tagging
+              // Only mention the birthday person
+              const mentions = [birthdayPerson.userId];
 
               const success = await safeSend(sock, groupId, {
                 text: wishMessage,
@@ -492,8 +492,9 @@ async function scheduledBirthdayReminders(context, daysAhead) {
             try {
               if (!isConnectionHealthy(sock)) break;
 
-              const allParticipants = await getGroupParticipants(sock, groupId, logger);
-              const mentions = [...new Set([birthdayPerson.userId, ...allParticipants])];
+              // FIXED: Removed getGroupParticipants mass tagging
+              // Only mention the birthday person
+              const mentions = [birthdayPerson.userId];
 
               const success = await safeSend(sock, groupId, {
                 text: reminderMessage,
