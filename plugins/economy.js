@@ -792,9 +792,9 @@ const SUBSCRIPTION_TIERS = {
 // When new limits launch, players have a grace period to voluntarily sell excess holdings
 const GRACE_PERIOD_CONFIG = {
   ENABLED: true,
-  GRACE_PERIOD_DAYS: 2,  // Players have 14 days to adjust holdings
-  LAUNCH_DATE: new Date('2025-12-11T02:00:00+01:00'),  // Change to your launch date
-  AUTO_LIQUIDATION_REFUND_PERCENT: 10,  // Give 10% refund on auto-liquidated items
+  GRACE_PERIOD_DAYS: 14,  // Players have 14 days to adjust holdings
+  LAUNCH_DATE: new Date('2025-12-15T00:00:00+01:00'),  // Change to your launch date
+  AUTO_LIQUIDATION_REFUND_PERCENT: 80,  // Give 80% refund on auto-liquidated items
   WARNING_THRESHOLD_PERCENT: 100,  // Warn when over 100% of new limit
   IGNORE_BEFORE_LAUNCH: true  // Don't enforce until after launch
 };
@@ -1064,7 +1064,12 @@ async function addMoney(userId, amount, reason = 'Unknown', applyEffects = true)
     }
 
     finalAmount = Math.floor(finalAmount);
-    const newBalance = Math.min(user.balance + finalAmount, ecoSettings.maxWalletBalance);
+    
+    // ✅ FIXED: Use subscription tier wallet limit, not global max
+    const tier = user.subscription?.tier || 'free';
+    const tierConfig = SUBSCRIPTION_TIERS[tier];
+    const walletLimit = tierConfig.limits.walletLimit;
+    const newBalance = Math.min(user.balance + finalAmount, walletLimit);
 
     // REFACTORED DB CALL
     await updateUserData(userId, { 
@@ -1587,12 +1592,12 @@ async function handleStocks(context, args) {
         if (newShares > maxStockLimit) {
           const available = maxStockLimit - currentShares;
           let message = `⚠️ *Portfolio Limit Reached!*\n\n📊 *${buySymbol} Limit:* ${maxStockLimit} shares (${tierConfigStocks.name})\n📦 *You currently own:* ${currentShares}\n✅ *You can buy:* ${available} more shares\n\n💡 *Tip:* Upgrade to a Premium subscription for higher limits!`;
-
+          
           if (isInGracePeriod()) {
             const daysLeft = getDaysRemainingInGracePeriod();
             message += `\n\n⏰ *Grace Period:* You have ${daysLeft} days to adjust your portfolio.`;
           }
-
+          
           await reply(message);
           return;
         }
@@ -1642,7 +1647,8 @@ async function handleStocks(context, args) {
           [`investments.stocks.${sellSymbol}`]: shares - sellAmount
         });
 
-        await reply(`📈 *Stock Sale Successful!*\n\n🏢 *Company:* ${stocks[sellSymbol].name}\n📊 *Symbol:* ${sellSymbol}\n💰 *Price per share:* ${ecoSettings.currency}${sellPrice.toFixed(2)}\n📦 *Shares sold:* ${sellAmount}\n💸 *Total earned:* ${ecoSettings.currency}${totalEarned.toLocaleString()}`);
+        const updatedStockUserData = await getUserData(senderId);
+        await reply(`📈 *Stock Sale Successful!*\n\n🏢 *Company:* ${stocks[sellSymbol].name}\n📊 *Symbol:* ${sellSymbol}\n💰 *Price per share:* ${ecoSettings.currency}${sellPrice.toFixed(2)}\n📦 *Shares sold:* ${sellAmount}\n💸 *Total earned:* ${ecoSettings.currency}${totalEarned.toLocaleString()}\n\n💵 *Updated wallet:* ${ecoSettings.currency}${updatedStockUserData.balance.toLocaleString()}`);
         break;
 
       case 'portfolio':
@@ -2673,13 +2679,13 @@ async function enforcePortfolioLimits(userData, sock = null) {
 
   try {
     let updates = {};
-
+    
     // ========== CHECK WALLET LIMIT ==========
     const walletLimit = tierConfig.limits.walletLimit;
     if (userData.balance > walletLimit) {
       const excess = userData.balance - walletLimit;
       const refund = Math.floor(excess * (GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT / 100));
-
+      
       liquidationReport.liquidated = true;
       liquidationReport.items.push({
         type: 'wallet',
@@ -2698,7 +2704,7 @@ async function enforcePortfolioLimits(userData, sock = null) {
     if (currentBank > bankLimit) {
       const excess = currentBank - bankLimit;
       const refund = Math.floor(excess * (GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT / 100));
-
+      
       liquidationReport.liquidated = true;
       liquidationReport.items.push({
         type: 'bank',
@@ -2720,7 +2726,7 @@ async function enforcePortfolioLimits(userData, sock = null) {
           const excess = amount - maxCryptoPerToken;
           const price = cryptoData[symbol]?.price || 0;
           const refund = Math.floor(excess * price * (GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT / 100));
-
+          
           liquidationReport.liquidated = true;
           liquidationReport.items.push({
             type: 'crypto',
@@ -2746,7 +2752,7 @@ async function enforcePortfolioLimits(userData, sock = null) {
           const excess = shares - maxStocksPerStock;
           const price = stocks[symbol]?.price || 0;
           const refund = Math.floor(excess * price * (GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT / 100));
-
+          
           liquidationReport.liquidated = true;
           liquidationReport.items.push({
             type: 'stock',
@@ -2767,7 +2773,7 @@ async function enforcePortfolioLimits(userData, sock = null) {
     // ========== APPLY UPDATES IF ANY LIQUIDATIONS OCCURRED ==========
     if (liquidationReport.liquidated && Object.keys(updates).length > 0) {
       await updateUserData(userId, updates);
-
+      
       // Send liquidation notification if socket available
       if (sock && liquidationReport.items.length > 0) {
         await sendLiquidationNotification(userId, liquidationReport, sock);
@@ -2787,17 +2793,17 @@ async function enforcePortfolioLimits(userData, sock = null) {
 async function sendLiquidationNotification(userId, liquidationReport, sock) {
   try {
     if (!sock || !liquidationReport.liquidated) return;
-
+    
     const userData = await getUserData(userId);
     const tier = userData.subscription?.tier || 'free';
     const tierConfig = SUBSCRIPTION_TIERS[tier];
-
+    
     let itemsList = liquidationReport.items.map(item => {
       return `• ${item.description}\n  💰 *Refunded:* ₦${item.refund.toLocaleString()} (${GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT}%)`;
     }).join('\n');
-
+    
     const message = `⚠️ *PORTFOLIO LIMIT ENFORCED*\n\nYour holdings exceeded the new limits for your subscription tier.\n\n*Items Liquidated:*\n${itemsList}\n\n💰 *Total Refund:* ₦${liquidationReport.totalRefund.toLocaleString()}\n\n🎁 Refunds have been added to your wallet.\n\n💎 *Your Tier:* ${tierConfig.name}\n📊 *Wallet Limit:* ₦${tierConfig.limits.walletLimit.toLocaleString()}\n🏦 *Bank Limit:* ₦${tierConfig.limits.bankLimit.toLocaleString()}\n\n💡 *Tip:* Upgrade your subscription to increase limits!`;
-
+    
     await sock.sendMessage(userId, { text: message });
   } catch (error) {
     console.error('Error sending liquidation notification:', error);
@@ -2854,7 +2860,7 @@ async function handleSend(context, args) {
     }
 
     await initUser(targetUser);
-
+    
     // Check if recipient can receive the money (wallet limit)
     const targetData = await getUserData(targetUser);
     const targetLimits = getWalletBankLimits(targetData);
@@ -2863,7 +2869,7 @@ async function handleSend(context, args) {
       await reply(`🚫 *Recipient's wallet is full*\n\nRecipient can only receive ${ecoSettings.currency}${availableSpace.toLocaleString()} more\n💎 *Recipient tier:* ${SUBSCRIPTION_TIERS[targetData.subscription?.tier || 'free'].name}`);
       return;
     }
-
+    
     await removeMoney(senderId, totalCost, 'Transfer sent');
     await addMoney(targetUser, amount, 'Transfer received', false);
 
@@ -2908,14 +2914,28 @@ async function handleDeposit(context, args) {
     }
 
     const limits = getWalletBankLimits(userData);
+    
+    // Check if wallet is already at or exceeding limit
+    if (userData.balance > limits.walletLimit) {
+      let message = `🚫 *Wallet limit exceeded*\n\nYour wallet balance (${ecoSettings.currency}${userData.balance.toLocaleString()}) exceeds your tier limit (${ecoSettings.currency}${limits.walletLimit.toLocaleString()})\n💎 *Your tier:* ${SUBSCRIPTION_TIERS[userData.subscription?.tier || 'free'].name}\n\nYou must deposit funds to bring your wallet within the limit.`;
+      
+      if (isInGracePeriod()) {
+        const daysLeft = getDaysRemainingInGracePeriod();
+        message += `\n\n⏰ *Grace Period Warning:* You have ${daysLeft} days to reduce your wallet balance.\nAfter that, excess will be liquidated with ${GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT}% refund.`;
+      }
+      
+      await reply(message);
+      return;
+    }
+    
     if (userData.bank + amount > limits.bankLimit) {
       let message = `🚫 *Bank deposit limit exceeded*\n\nMax bank balance: ${ecoSettings.currency}${limits.bankLimit.toLocaleString()}\n💎 *Your tier:* ${SUBSCRIPTION_TIERS[userData.subscription?.tier || 'free'].name}`;
-
+      
       if (isInGracePeriod()) {
         const daysLeft = getDaysRemainingInGracePeriod();
         message += `\n\n⏰ *Grace Period Warning:* You have ${daysLeft} days to reduce your bank balance.\nAfter that, excess will be liquidated with ${GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT}% refund.`;
       }
-
+      
       await reply(message);
       return;
     }
@@ -2961,12 +2981,12 @@ async function handleWithdraw(context, args) {
     const limits = getWalletBankLimits(userData);
     if (userData.balance + amount > limits.walletLimit) {
       let message = `🚫 *Wallet limit exceeded*\n\nMax wallet balance: ${ecoSettings.currency}${limits.walletLimit.toLocaleString()}\n💎 *Your tier:* ${SUBSCRIPTION_TIERS[userData.subscription?.tier || 'free'].name}`;
-
+      
       if (isInGracePeriod()) {
         const daysLeft = getDaysRemainingInGracePeriod();
         message += `\n\n⏰ *Grace Period Warning:* You have ${daysLeft} days to reduce your wallet.\nAfter that, excess will be liquidated with ${GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT}% refund.`;
       }
-
+      
       await reply(message);
       return;
     }
@@ -3191,12 +3211,12 @@ async function handleCrypto(context, args) {
         if (newHolding > maxCryptoLimit) {
           const available = maxCryptoLimit - currentHolding;
           let message = `⚠️ *Portfolio Limit Reached!*\n\n📊 *${buySymbol} Limit:* ${maxCryptoLimit} coins (${tierConfig.name})\n🪙 *You currently own:* ${currentHolding}\n✅ *You can buy:* ${available} more coins\n\n💡 *Tip:* Upgrade to a Premium subscription for higher limits!`;
-
+          
           if (isInGracePeriod()) {
             const daysLeft = getDaysRemainingInGracePeriod();
             message += `\n\n⏰ *Grace Period:* You have ${daysLeft} days to adjust your portfolio.`;
           }
-
+          
           await reply(message);
           return;
         }
@@ -3246,7 +3266,8 @@ async function handleCrypto(context, args) {
           [`investments.crypto.${sellSymbol}`]: holding - sellAmount
         });
 
-        await reply(`₿ *Crypto Sale Successful!*\n\n🪙 *Coin:* ${cryptoData[sellSymbol].name}\n📊 *Symbol:* ${sellSymbol}\n💰 *Price per coin:* ${ecoSettings.currency}${sellPrice.toLocaleString()}\n🪙 *Amount sold:* ${sellAmount}\n💸 *Total earned:* ${ecoSettings.currency}${totalEarned.toLocaleString()}`);
+        const updatedUserData = await getUserData(senderId);
+        await reply(`₿ *Crypto Sale Successful!*\n\n🪙 *Coin:* ${cryptoData[sellSymbol].name}\n📊 *Symbol:* ${sellSymbol}\n💰 *Price per coin:* ${ecoSettings.currency}${sellPrice.toLocaleString()}\n🪙 *Amount sold:* ${sellAmount}\n💸 *Total earned:* ${ecoSettings.currency}${totalEarned.toLocaleString()}\n\n💵 *Updated wallet:* ${ecoSettings.currency}${updatedUserData.balance.toLocaleString()}`);
         break;
 
       case 'portfolio':
@@ -3512,15 +3533,15 @@ async function cancelSubscription(userId) {
 async function sendSubscriptionChargeNotification(userId, chargeResult, sock) {
   try {
     if (!sock) return; // Socket not available (might be in scheduled task)
-
+    
     const userData = await getUserData(userId);
     const tier = userData.subscription?.tier || 'free';
     const tierConfig = SUBSCRIPTION_TIERS[tier];
-
+    
     if (chargeResult.success) {
       // Success notification
       const notification = `✅ *SUBSCRIPTION CHARGED*\n\n💎 *Tier:* ${tierConfig.name}\n💳 *Amount:* ${ecoSettings.currency}${chargeResult.cost.toLocaleString()}\n\n📅 *Next charge:* ${new Date(userData.subscription.renewalDate).toLocaleDateString()}\n💰 *New balance:* ${ecoSettings.currency}${userData.balance.toLocaleString()}`;
-
+      
       await sock.sendMessage(userId, { text: notification });
     } else {
       // Failure notification
@@ -3530,7 +3551,7 @@ async function sendSubscriptionChargeNotification(userId, chargeResult, sock) {
       } else {
         message = `❌ *SUBSCRIPTION CHARGE FAILED*\n\n⚠️ *Reason:* ${chargeResult.reason}\n💎 *Tier:* ${tierConfig.name}\n\n📞 *Contact admin if this persists.*`;
       }
-
+      
       await sock.sendMessage(userId, { text: message });
     }
   } catch (error) {
@@ -3542,24 +3563,24 @@ async function sendSubscriptionChargeNotification(userId, chargeResult, sock) {
 async function sendBonusNotification(userId, bonuses, tierConfig, sock) {
   try {
     if (!sock) return; // Socket not available
-
+    
     let bonusText = `💰 *WEEKLY BONUSES APPLIED*\n\n💎 *Tier:* ${tierConfig.name}\n\n`;
     let totalBonus = 0;
-
+    
     if (bonuses.weeklyPassiveIncome > 0) {
       bonusText += `🏦 *Passive Income:* +${ecoSettings.currency}${bonuses.weeklyPassiveIncome.toLocaleString()}\n`;
       totalBonus += bonuses.weeklyPassiveIncome;
     }
-
+    
     const userData = await getUserData(userId);
     if (bonuses.interestPercent > 0) {
       const interest = Math.floor(userData.bank * bonuses.interestPercent / 100);
       bonusText += `📈 *Bank Interest:* +${ecoSettings.currency}${interest.toLocaleString()} (${bonuses.interestPercent}%)\n`;
       totalBonus += interest;
     }
-
+    
     bonusText += `\n✨ *Total bonus:* +${ecoSettings.currency}${totalBonus.toLocaleString()}`;
-
+    
     await sock.sendMessage(userId, { text: bonusText });
   } catch (error) {
     console.error('Error sending bonus notification:', error);
@@ -3582,14 +3603,14 @@ async function chargeSubscriptionFee(userId, sock = null) {
       // Insufficient funds - cancel subscription
       await cancelSubscription(userId);
       const result = { success: false, reason: 'Insufficient funds - subscription cancelled' };
-
+      
       // Send failure notification
       await sendSubscriptionChargeNotification(userId, result, sock);
       return result;
     }
 
     await removeMoney(userId, weeklyCost, `Subscription fee - ${tierConfig.name}`);
-
+    
     const renewalDate = new Date();
     renewalDate.setDate(renewalDate.getDate() + 7);
 
@@ -3599,7 +3620,7 @@ async function chargeSubscriptionFee(userId, sock = null) {
     });
 
     const result = { success: true, cost: weeklyCost };
-
+    
     // Get updated balance and send success notification
     const updatedUserData = await getUserData(userId);
     const chargeResultForNotification = {
@@ -3607,10 +3628,10 @@ async function chargeSubscriptionFee(userId, sock = null) {
       cost: weeklyCost,
       balance: updatedUserData.balance
     };
-
+    
     // Send success notification
     await sendSubscriptionChargeNotification(userId, chargeResultForNotification, sock);
-
+    
     return result;
   } catch (error) {
     console.error('Error charging subscription:', error);
@@ -3704,7 +3725,7 @@ async function handleSubscription(context, args) {
         menu += `  • Wallet: ${ecoSettings.currency}${tierConfig.limits.walletLimit.toLocaleString()}\n`;
         menu += `  • Bank: ${ecoSettings.currency}${tierConfig.limits.bankLimit.toLocaleString()}\n`;
         menu += `  • Crypto/Stock: ${tierConfig.limits.maxCryptoPerToken}/${tierConfig.limits.maxStocksPerStock}\n`;
-
+        
         if (tierConfig.bonuses.weeklyPassiveIncome > 0) {
           menu += `  • Passive: +${ecoSettings.currency}${tierConfig.bonuses.weeklyPassiveIncome.toLocaleString()}/week\n`;
         }
@@ -3714,7 +3735,7 @@ async function handleSubscription(context, args) {
         if (tierConfig.bonuses.interestPercent > 0) {
           menu += `  • Interest: ${tierConfig.bonuses.interestPercent}% weekly\n`;
         }
-
+        
         menu += `\n`;
       }
 
@@ -3747,7 +3768,7 @@ async function handleSubscription(context, args) {
 
         let details = `${viewConfig.name} *SUBSCRIPTION*\n\n`;
         details += `💰 *Cost:* ${viewConfig.weeklyCost > 0 ? ecoSettings.currency + viewConfig.weeklyCost.toLocaleString() + '/week' : 'FREE'}\n\n`;
-
+        
         details += `📊 *LIMITS:*\n`;
         details += `  • Wallet: ${ecoSettings.currency}${viewConfig.limits.walletLimit.toLocaleString()}\n`;
         details += `  • Bank: ${ecoSettings.currency}${viewConfig.limits.bankLimit.toLocaleString()}\n`;

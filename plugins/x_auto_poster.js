@@ -256,12 +256,12 @@ export default {
   commands: ['xpost', 'xposter'],
   aliases: [],
 
-  // Run every 5 minutes and internally respect per-account interval
+  // Run every 60 minutes and internally respect per-account interval
   scheduledTasks: [
     {
       name: 'x_auto_post_runner',
       description: 'Poll X accounts for new tweets and post them',
-      schedule: '*/5 * * * *',
+      schedule: '0 * * * *',
       handler: async (context) => {
         try {
           const accounts = await loadAccounts();
