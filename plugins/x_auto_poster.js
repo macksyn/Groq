@@ -207,7 +207,13 @@ async function processAccount(account, context) {
     logger?.info && logger.info(`X autoposter: Found ${tweets.length} new tweets for ${account.username}`);
 
     // Sort ascending by id so oldest first
-    tweets.sort((a, b) => BigInt(a.id) - BigInt(b.id));
+    tweets.sort((a, b) => {
+      const aId = BigInt(a.id);
+      const bId = BigInt(b.id);
+      if (aId < bId) return -1;
+      if (aId > bId) return 1;
+      return 0;
+    });
 
     for (const tw of tweets) {
       // Expand media
