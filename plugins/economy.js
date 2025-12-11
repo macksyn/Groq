@@ -637,14 +637,14 @@ function getItemId(inputId) {
 
 // MODIFIED: Cryptocurrency system with price fluctuation properties
 let cryptoData = {
-BTC: { name: "Bitcoin", price: 45000, volatility: 0.05, trend: 0.001, history: [], lastChange: 'stable' },
-  ETH: { name: "Ethereum", price: 3200, volatility: 0.06, trend: -0.002, history: [], lastChange: 'stable' },
-  SOL: { name: "Solana", price: 120, volatility: 0.08, trend: 0.005, history: [], lastChange: 'stable' },
-  SHIB: { name: "Shiba Inu", price: 0.0000002, volatility: 0.01, trend: 0.01, history: [], lastChange: 'stable' },
-  GROQ: { name: "Groq Coin", price: 15, volatility: 0.10, trend: -0.003, history: [], lastChange: 'stable' },
-  ADA: { name: "Cardano", price: 0.8, volatility: 0.07, trend: 0.002, history: [], lastChange: 'stable' },
-  DOT: { name: "Polkadot", price: 25, volatility: 0.08, trend: 0.001, history: [], lastChange: 'stable' },
-  MATIC: { name: "Polygon", price: 1.2, volatility: 0.09, trend: -0.001, history: [], lastChange: 'stable' }
+  BTC: { name: "Bitcoin", price: 45000, volatility: 0.015, trend: 0.0001, history: [], lastChange: 'stable', buyVolume: 0, sellVolume: 0 },
+  ETH: { name: "Ethereum", price: 3200, volatility: 0.018, trend: -0.00015, history: [], lastChange: 'stable', buyVolume: 0, sellVolume: 0 },
+  SOL: { name: "Solana", price: 120, volatility: 0.020, trend: 0.0002, history: [], lastChange: 'stable', buyVolume: 0, sellVolume: 0 },
+  SHIB: { name: "Shiba Inu", price: 0.0000002, volatility: 0.012, trend: 0.0001, history: [], lastChange: 'stable', buyVolume: 0, sellVolume: 0 },
+  GROQ: { name: "Groq Coin", price: 15, volatility: 0.022, trend: -0.00015, history: [], lastChange: 'stable', buyVolume: 0, sellVolume: 0 },
+  ADA: { name: "Cardano", price: 0.8, volatility: 0.017, trend: 0.0001, history: [], lastChange: 'stable', buyVolume: 0, sellVolume: 0 },
+  DOT: { name: "Polkadot", price: 25, volatility: 0.019, trend: 0.00008, history: [], lastChange: 'stable', buyVolume: 0, sellVolume: 0 },
+  MATIC: { name: "Polygon", price: 1.2, volatility: 0.021, trend: -0.0001, history: [], lastChange: 'stable', buyVolume: 0, sellVolume: 0 }
 };
 
 // Business system (UNCHANGED)
@@ -882,28 +882,57 @@ async function updateMarketConditions() {
 async function updateCryptoPrices() {
   try {
     for (const [symbol, data] of Object.entries(cryptoData)) {
-      // Base change on volatility
+      // ✅ NEW: Calculate supply/demand impact from buy/sell volumes
+      const totalVolume = (data.buyVolume || 0) + (data.sellVolume || 0);
+      let demandPressure = 0;
+
+      if (totalVolume > 0) {
+        // Net demand: positive if more buys, negative if more sells
+        const netDemand = ((data.buyVolume || 0) - (data.sellVolume || 0)) / totalVolume;
+        // Apply demand pressure to trend (max ±2% additional impact from supply/demand)
+        demandPressure = netDemand * 0.02;
+      }
+
+      // Base random volatility (now 1.5-2.2% instead of 5-10%)
       const randomVolatility = (Math.random() - 0.5) * data.volatility;
 
-      // Add the current trend
-      const trendEffect = data.trend || 0;
+      // Add gradual trend effect (very small, ~0.01% per tick) + supply/demand pressure
+      const trendEffect = (data.trend || 0) + demandPressure;
 
       // Calculate total change
-      const change = randomVolatility + trendEffect;
+      let change = randomVolatility + trendEffect;
+
+      // ✅ NEW: Moving average dampening
+      // Calculate 20-period moving average to anchor price
+      let priceHistory = cryptoData[symbol].history || [];
+      if (priceHistory.length > 0) {
+        const movingAverage = priceHistory.reduce((a, b) => a + b, 0) / priceHistory.length;
+        const currentPrice = data.price;
+        const deviationPercent = (currentPrice - movingAverage) / movingAverage;
+
+        // If price deviates >5% from MA, dampen the change proportionally
+        if (Math.abs(deviationPercent) > 0.05) {
+          change *= 0.5; // Reduce change momentum to pull price back to MA
+        }
+      }
+
+      // ✅ NEW: Maximum change cap (±3% per tick max for stability)
+      const maxChangePercent = 0.03;
+      change = Math.max(-maxChangePercent, Math.min(maxChangePercent, change));
 
       const oldPrice = data.price;
       let newPrice = oldPrice * (1 + change);
 
       // Prevent price from going to zero or negative
-      newPrice = Math.max(newPrice, 0.00000001); 
+      newPrice = Math.max(newPrice, 0.00000001);
 
       cryptoData[symbol].price = parseFloat(newPrice.toFixed(symbol === 'SHIB' ? 8 : 2));
 
-      // Track history (last 20 ticks)
+      // Track history (last 20 ticks = ~6.7 hours at default tick rate)
       if (!cryptoData[symbol].history) {
         cryptoData[symbol].history = [];
       }
-      cryptoData[symbol].history.push(oldPrice); // Store the price before the change for comparison
+      cryptoData[symbol].history.push(oldPrice);
       if (cryptoData[symbol].history.length > 20) {
         cryptoData[symbol].history.shift();
       }
@@ -914,8 +943,12 @@ async function updateCryptoPrices() {
       } else if (newPrice < oldPrice) {
         cryptoData[symbol].lastChange = 'down';
       } else {
-         cryptoData[symbol].lastChange = 'stable';
+        cryptoData[symbol].lastChange = 'stable';
       }
+
+      // Reset buy/sell volumes for next cycle
+      cryptoData[symbol].buyVolume = 0;
+      cryptoData[symbol].sellVolume = 0;
     }
 
     // Save updated prices to database
@@ -1064,7 +1097,7 @@ async function addMoney(userId, amount, reason = 'Unknown', applyEffects = true)
     }
 
     finalAmount = Math.floor(finalAmount);
-    
+
     // ✅ FIXED: Use subscription tier wallet limit, not global max
     const tier = user.subscription?.tier || 'free';
     const tierConfig = SUBSCRIPTION_TIERS[tier];
@@ -1592,12 +1625,12 @@ async function handleStocks(context, args) {
         if (newShares > maxStockLimit) {
           const available = maxStockLimit - currentShares;
           let message = `⚠️ *Portfolio Limit Reached!*\n\n📊 *${buySymbol} Limit:* ${maxStockLimit} shares (${tierConfigStocks.name})\n📦 *You currently own:* ${currentShares}\n✅ *You can buy:* ${available} more shares\n\n💡 *Tip:* Upgrade to a Premium subscription for higher limits!`;
-          
+
           if (isInGracePeriod()) {
             const daysLeft = getDaysRemainingInGracePeriod();
             message += `\n\n⏰ *Grace Period:* You have ${daysLeft} days to adjust your portfolio.`;
           }
-          
+
           await reply(message);
           return;
         }
@@ -2679,13 +2712,13 @@ async function enforcePortfolioLimits(userData, sock = null) {
 
   try {
     let updates = {};
-    
+
     // ========== CHECK WALLET LIMIT ==========
     const walletLimit = tierConfig.limits.walletLimit;
     if (userData.balance > walletLimit) {
       const excess = userData.balance - walletLimit;
       const refund = Math.floor(excess * (GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT / 100));
-      
+
       liquidationReport.liquidated = true;
       liquidationReport.items.push({
         type: 'wallet',
@@ -2704,7 +2737,7 @@ async function enforcePortfolioLimits(userData, sock = null) {
     if (currentBank > bankLimit) {
       const excess = currentBank - bankLimit;
       const refund = Math.floor(excess * (GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT / 100));
-      
+
       liquidationReport.liquidated = true;
       liquidationReport.items.push({
         type: 'bank',
@@ -2726,7 +2759,7 @@ async function enforcePortfolioLimits(userData, sock = null) {
           const excess = amount - maxCryptoPerToken;
           const price = cryptoData[symbol]?.price || 0;
           const refund = Math.floor(excess * price * (GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT / 100));
-          
+
           liquidationReport.liquidated = true;
           liquidationReport.items.push({
             type: 'crypto',
@@ -2752,7 +2785,7 @@ async function enforcePortfolioLimits(userData, sock = null) {
           const excess = shares - maxStocksPerStock;
           const price = stocks[symbol]?.price || 0;
           const refund = Math.floor(excess * price * (GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT / 100));
-          
+
           liquidationReport.liquidated = true;
           liquidationReport.items.push({
             type: 'stock',
@@ -2773,7 +2806,7 @@ async function enforcePortfolioLimits(userData, sock = null) {
     // ========== APPLY UPDATES IF ANY LIQUIDATIONS OCCURRED ==========
     if (liquidationReport.liquidated && Object.keys(updates).length > 0) {
       await updateUserData(userId, updates);
-      
+
       // Send liquidation notification if socket available
       if (sock && liquidationReport.items.length > 0) {
         await sendLiquidationNotification(userId, liquidationReport, sock);
@@ -2793,17 +2826,17 @@ async function enforcePortfolioLimits(userData, sock = null) {
 async function sendLiquidationNotification(userId, liquidationReport, sock) {
   try {
     if (!sock || !liquidationReport.liquidated) return;
-    
+
     const userData = await getUserData(userId);
     const tier = userData.subscription?.tier || 'free';
     const tierConfig = SUBSCRIPTION_TIERS[tier];
-    
+
     let itemsList = liquidationReport.items.map(item => {
       return `• ${item.description}\n  💰 *Refunded:* ₦${item.refund.toLocaleString()} (${GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT}%)`;
     }).join('\n');
-    
+
     const message = `⚠️ *PORTFOLIO LIMIT ENFORCED*\n\nYour holdings exceeded the new limits for your subscription tier.\n\n*Items Liquidated:*\n${itemsList}\n\n💰 *Total Refund:* ₦${liquidationReport.totalRefund.toLocaleString()}\n\n🎁 Refunds have been added to your wallet.\n\n💎 *Your Tier:* ${tierConfig.name}\n📊 *Wallet Limit:* ₦${tierConfig.limits.walletLimit.toLocaleString()}\n🏦 *Bank Limit:* ₦${tierConfig.limits.bankLimit.toLocaleString()}\n\n💡 *Tip:* Upgrade your subscription to increase limits!`;
-    
+
     await sock.sendMessage(userId, { text: message });
   } catch (error) {
     console.error('Error sending liquidation notification:', error);
@@ -2860,7 +2893,7 @@ async function handleSend(context, args) {
     }
 
     await initUser(targetUser);
-    
+
     // Check if recipient can receive the money (wallet limit)
     const targetData = await getUserData(targetUser);
     const targetLimits = getWalletBankLimits(targetData);
@@ -2869,7 +2902,7 @@ async function handleSend(context, args) {
       await reply(`🚫 *Recipient's wallet is full*\n\nRecipient can only receive ${ecoSettings.currency}${availableSpace.toLocaleString()} more\n💎 *Recipient tier:* ${SUBSCRIPTION_TIERS[targetData.subscription?.tier || 'free'].name}`);
       return;
     }
-    
+
     await removeMoney(senderId, totalCost, 'Transfer sent');
     await addMoney(targetUser, amount, 'Transfer received', false);
 
@@ -2914,28 +2947,28 @@ async function handleDeposit(context, args) {
     }
 
     const limits = getWalletBankLimits(userData);
-    
+
     // Check if wallet is already at or exceeding limit
     if (userData.balance > limits.walletLimit) {
       let message = `🚫 *Wallet limit exceeded*\n\nYour wallet balance (${ecoSettings.currency}${userData.balance.toLocaleString()}) exceeds your tier limit (${ecoSettings.currency}${limits.walletLimit.toLocaleString()})\n💎 *Your tier:* ${SUBSCRIPTION_TIERS[userData.subscription?.tier || 'free'].name}\n\nYou must deposit funds to bring your wallet within the limit.`;
-      
+
       if (isInGracePeriod()) {
         const daysLeft = getDaysRemainingInGracePeriod();
         message += `\n\n⏰ *Grace Period Warning:* You have ${daysLeft} days to reduce your wallet balance.\nAfter that, excess will be liquidated with ${GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT}% refund.`;
       }
-      
+
       await reply(message);
       return;
     }
-    
+
     if (userData.bank + amount > limits.bankLimit) {
       let message = `🚫 *Bank deposit limit exceeded*\n\nMax bank balance: ${ecoSettings.currency}${limits.bankLimit.toLocaleString()}\n💎 *Your tier:* ${SUBSCRIPTION_TIERS[userData.subscription?.tier || 'free'].name}`;
-      
+
       if (isInGracePeriod()) {
         const daysLeft = getDaysRemainingInGracePeriod();
         message += `\n\n⏰ *Grace Period Warning:* You have ${daysLeft} days to reduce your bank balance.\nAfter that, excess will be liquidated with ${GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT}% refund.`;
       }
-      
+
       await reply(message);
       return;
     }
@@ -2981,12 +3014,12 @@ async function handleWithdraw(context, args) {
     const limits = getWalletBankLimits(userData);
     if (userData.balance + amount > limits.walletLimit) {
       let message = `🚫 *Wallet limit exceeded*\n\nMax wallet balance: ${ecoSettings.currency}${limits.walletLimit.toLocaleString()}\n💎 *Your tier:* ${SUBSCRIPTION_TIERS[userData.subscription?.tier || 'free'].name}`;
-      
+
       if (isInGracePeriod()) {
         const daysLeft = getDaysRemainingInGracePeriod();
         message += `\n\n⏰ *Grace Period Warning:* You have ${daysLeft} days to reduce your wallet.\nAfter that, excess will be liquidated with ${GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT}% refund.`;
       }
-      
+
       await reply(message);
       return;
     }
@@ -3211,12 +3244,12 @@ async function handleCrypto(context, args) {
         if (newHolding > maxCryptoLimit) {
           const available = maxCryptoLimit - currentHolding;
           let message = `⚠️ *Portfolio Limit Reached!*\n\n📊 *${buySymbol} Limit:* ${maxCryptoLimit} coins (${tierConfig.name})\n🪙 *You currently own:* ${currentHolding}\n✅ *You can buy:* ${available} more coins\n\n💡 *Tip:* Upgrade to a Premium subscription for higher limits!`;
-          
+
           if (isInGracePeriod()) {
             const daysLeft = getDaysRemainingInGracePeriod();
             message += `\n\n⏰ *Grace Period:* You have ${daysLeft} days to adjust your portfolio.`;
           }
-          
+
           await reply(message);
           return;
         }
@@ -3225,6 +3258,9 @@ async function handleCrypto(context, args) {
         await updateUserData(senderId, {
           [`investments.crypto.${buySymbol}`]: newHolding
         });
+
+        // ✅ NEW: Track buy volume for supply/demand mechanics
+        cryptoData[buySymbol].buyVolume = (cryptoData[buySymbol].buyVolume || 0) + buyAmount;
 
         await reply(`₿ *Crypto Purchase Successful!*\n\n🪙 *Coin:* ${cryptoData[buySymbol].name}\n📊 *Symbol:* ${buySymbol}\n💰 *Price per coin:* ${ecoSettings.currency}${buyPrice.toLocaleString()}\n🪙 *Amount bought:* ${buyAmount}\n💸 *Total cost:* ${ecoSettings.currency}${totalCost.toLocaleString()}\n\n📈 *Portfolio:* ${newHolding}/${maxCryptoLimit} ${buySymbol}`);
         break;
@@ -3265,6 +3301,9 @@ async function handleCrypto(context, args) {
         await updateUserData(senderId, {
           [`investments.crypto.${sellSymbol}`]: holding - sellAmount
         });
+
+        // ✅ NEW: Track sell volume for supply/demand mechanics
+        cryptoData[sellSymbol].sellVolume = (cryptoData[sellSymbol].sellVolume || 0) + sellAmount;
 
         const updatedUserData = await getUserData(senderId);
         await reply(`₿ *Crypto Sale Successful!*\n\n🪙 *Coin:* ${cryptoData[sellSymbol].name}\n📊 *Symbol:* ${sellSymbol}\n💰 *Price per coin:* ${ecoSettings.currency}${sellPrice.toLocaleString()}\n🪙 *Amount sold:* ${sellAmount}\n💸 *Total earned:* ${ecoSettings.currency}${totalEarned.toLocaleString()}\n\n💵 *Updated wallet:* ${ecoSettings.currency}${updatedUserData.balance.toLocaleString()}`);
@@ -3533,15 +3572,15 @@ async function cancelSubscription(userId) {
 async function sendSubscriptionChargeNotification(userId, chargeResult, sock) {
   try {
     if (!sock) return; // Socket not available (might be in scheduled task)
-    
+
     const userData = await getUserData(userId);
     const tier = userData.subscription?.tier || 'free';
     const tierConfig = SUBSCRIPTION_TIERS[tier];
-    
+
     if (chargeResult.success) {
       // Success notification
       const notification = `✅ *SUBSCRIPTION CHARGED*\n\n💎 *Tier:* ${tierConfig.name}\n💳 *Amount:* ${ecoSettings.currency}${chargeResult.cost.toLocaleString()}\n\n📅 *Next charge:* ${new Date(userData.subscription.renewalDate).toLocaleDateString()}\n💰 *New balance:* ${ecoSettings.currency}${userData.balance.toLocaleString()}`;
-      
+
       await sock.sendMessage(userId, { text: notification });
     } else {
       // Failure notification
@@ -3551,7 +3590,7 @@ async function sendSubscriptionChargeNotification(userId, chargeResult, sock) {
       } else {
         message = `❌ *SUBSCRIPTION CHARGE FAILED*\n\n⚠️ *Reason:* ${chargeResult.reason}\n💎 *Tier:* ${tierConfig.name}\n\n📞 *Contact admin if this persists.*`;
       }
-      
+
       await sock.sendMessage(userId, { text: message });
     }
   } catch (error) {
@@ -3563,24 +3602,24 @@ async function sendSubscriptionChargeNotification(userId, chargeResult, sock) {
 async function sendBonusNotification(userId, bonuses, tierConfig, sock) {
   try {
     if (!sock) return; // Socket not available
-    
+
     let bonusText = `💰 *WEEKLY BONUSES APPLIED*\n\n💎 *Tier:* ${tierConfig.name}\n\n`;
     let totalBonus = 0;
-    
+
     if (bonuses.weeklyPassiveIncome > 0) {
       bonusText += `🏦 *Passive Income:* +${ecoSettings.currency}${bonuses.weeklyPassiveIncome.toLocaleString()}\n`;
       totalBonus += bonuses.weeklyPassiveIncome;
     }
-    
+
     const userData = await getUserData(userId);
     if (bonuses.interestPercent > 0) {
       const interest = Math.floor(userData.bank * bonuses.interestPercent / 100);
       bonusText += `📈 *Bank Interest:* +${ecoSettings.currency}${interest.toLocaleString()} (${bonuses.interestPercent}%)\n`;
       totalBonus += interest;
     }
-    
+
     bonusText += `\n✨ *Total bonus:* +${ecoSettings.currency}${totalBonus.toLocaleString()}`;
-    
+
     await sock.sendMessage(userId, { text: bonusText });
   } catch (error) {
     console.error('Error sending bonus notification:', error);
@@ -3603,14 +3642,14 @@ async function chargeSubscriptionFee(userId, sock = null) {
       // Insufficient funds - cancel subscription
       await cancelSubscription(userId);
       const result = { success: false, reason: 'Insufficient funds - subscription cancelled' };
-      
+
       // Send failure notification
       await sendSubscriptionChargeNotification(userId, result, sock);
       return result;
     }
 
     await removeMoney(userId, weeklyCost, `Subscription fee - ${tierConfig.name}`);
-    
+
     const renewalDate = new Date();
     renewalDate.setDate(renewalDate.getDate() + 7);
 
@@ -3620,7 +3659,7 @@ async function chargeSubscriptionFee(userId, sock = null) {
     });
 
     const result = { success: true, cost: weeklyCost };
-    
+
     // Get updated balance and send success notification
     const updatedUserData = await getUserData(userId);
     const chargeResultForNotification = {
@@ -3628,10 +3667,10 @@ async function chargeSubscriptionFee(userId, sock = null) {
       cost: weeklyCost,
       balance: updatedUserData.balance
     };
-    
+
     // Send success notification
     await sendSubscriptionChargeNotification(userId, chargeResultForNotification, sock);
-    
+
     return result;
   } catch (error) {
     console.error('Error charging subscription:', error);
@@ -3725,7 +3764,7 @@ async function handleSubscription(context, args) {
         menu += `  • Wallet: ${ecoSettings.currency}${tierConfig.limits.walletLimit.toLocaleString()}\n`;
         menu += `  • Bank: ${ecoSettings.currency}${tierConfig.limits.bankLimit.toLocaleString()}\n`;
         menu += `  • Crypto/Stock: ${tierConfig.limits.maxCryptoPerToken}/${tierConfig.limits.maxStocksPerStock}\n`;
-        
+
         if (tierConfig.bonuses.weeklyPassiveIncome > 0) {
           menu += `  • Passive: +${ecoSettings.currency}${tierConfig.bonuses.weeklyPassiveIncome.toLocaleString()}/week\n`;
         }
@@ -3735,7 +3774,7 @@ async function handleSubscription(context, args) {
         if (tierConfig.bonuses.interestPercent > 0) {
           menu += `  • Interest: ${tierConfig.bonuses.interestPercent}% weekly\n`;
         }
-        
+
         menu += `\n`;
       }
 
@@ -3768,7 +3807,7 @@ async function handleSubscription(context, args) {
 
         let details = `${viewConfig.name} *SUBSCRIPTION*\n\n`;
         details += `💰 *Cost:* ${viewConfig.weeklyCost > 0 ? ecoSettings.currency + viewConfig.weeklyCost.toLocaleString() + '/week' : 'FREE'}\n\n`;
-        
+
         details += `📊 *LIMITS:*\n`;
         details += `  • Wallet: ${ecoSettings.currency}${viewConfig.limits.walletLimit.toLocaleString()}\n`;
         details += `  • Bank: ${ecoSettings.currency}${viewConfig.limits.bankLimit.toLocaleString()}\n`;
