@@ -156,10 +156,16 @@ function extractHashtags(text) {
 async function processAccount(account, context) {
   const { sock, logger } = context;
   const targetChatId = account.targetChatId || context.config.ALLOWED_ECONOMY_GROUP_ID || context.config.DEFAULT_ANNOUNCE_CHAT;
-  if (!targetChatId) return; // nowhere to post
+  if (!targetChatId) {
+    logger?.warn && logger.warn(`X autoposter: No target chat for ${account.username}`);
+    return;
+  }
 
   const bearer = account.bearerToken || context.config.X_BEARER_TOKEN;
-  if (!bearer) return; // no credentials
+  if (!bearer) {
+    logger?.warn && logger.warn(`X autoposter: No bearer token for ${account.username}`);
+    return;
+  }
 
   try {
     // Throttle via intervalMinutes
@@ -169,13 +175,17 @@ async function processAccount(account, context) {
 
     // Ensure we have user id
     if (!account.userId) {
+      logger?.debug && logger.debug(`X autoposter: Resolving username ${account.username}...`);
       const uid = await getUserIdByUsername(account.username, bearer);
       if (!uid) throw new Error('Unable to resolve username to user id');
       account.userId = uid;
+      await saveAccount(account);
+      logger?.debug && logger.debug(`X autoposter: Resolved ${account.username} to user ID ${uid}`);
     }
 
     // Fetch tweets
     const since_id = account.lastTweetId || null;
+    logger?.debug && logger.debug(`X autoposter: Fetching tweets for ${account.username} (since ${since_id || 'start'})`);
     const resp = await fetchRecentTweets(account.userId, bearer, since_id);
 
     // If there are media included separately, mapping
@@ -188,10 +198,13 @@ async function processAccount(account, context) {
 
     const tweets = resp.data || [];
     if (!tweets.length) {
+      logger?.debug && logger.debug(`X autoposter: No new tweets for ${account.username}`);
       account._lastRunAt = nowMs();
       await saveAccount(account);
       return;
     }
+
+    logger?.info && logger.info(`X autoposter: Found ${tweets.length} new tweets for ${account.username}`);
 
     // Sort ascending by id so oldest first
     tweets.sort((a, b) => BigInt(a.id) - BigInt(b.id));
@@ -206,6 +219,7 @@ async function processAccount(account, context) {
         const url = m.url || m.preview_image_url || m.media_url || m.remote_url;
         if (!url) continue;
         try {
+          logger?.debug && logger.debug(`X autoposter: Downloading media from ${url}`);
           const item = await downloadMedia(url);
           mediaItems.push(item);
         } catch (err) {
@@ -218,16 +232,18 @@ async function processAccount(account, context) {
       tw._template = account.messageTemplate || DEFAULT_TEMPLATE;
 
       // Post to chat
+      logger?.debug && logger.debug(`X autoposter: Posting tweet ${tw.id} to ${targetChatId}`);
       await postTweetToChat(tw, mediaItems, targetChatId, sock, context.config);
 
       // Update lastTweetId
       account.lastTweetId = tw.id;
       account._lastRunAt = nowMs();
       await saveAccount(account);
+      logger?.info && logger.info(`X autoposter: Posted tweet ${tw.id} from ${account.username}`);
     }
   } catch (err) {
     console.error('Error processing X account', account.username, err.message);
-    if (context.logger) context.logger.error('X autoposter error', err.message);
+    if (context.logger) context.logger.error('X autoposter error processing', account.username, err.message);
   }
 }
 
@@ -249,12 +265,14 @@ export default {
       handler: async (context) => {
         try {
           const accounts = await loadAccounts();
+          if (!accounts.length) return;
+          console.log(`[X AutoPoster] Running scheduled task. Checking ${accounts.length} accounts...`);
           for (const acc of accounts) {
             if (acc.enabled === false) continue;
             await processAccount(acc, context);
           }
         } catch (err) {
-          console.error('Scheduled X autoposter error', err.message);
+          console.error('[X AutoPoster] Scheduled task error:', err.message);
         }
       }
     }
@@ -281,9 +299,37 @@ export default {
         const targetChatId = args[2] || from;
         const intervalMinutes = parseInt(args[3]) || DEFAULT_INTERVAL_MINUTES;
         const bearer = args[4] || config.X_BEARER_TOKEN || null;
-        const acc = { username, targetChatId, intervalMinutes, bearerToken: bearer, messageTemplate: DEFAULT_TEMPLATE, enabled: true, createdAt: new Date() };
-        await saveAccount(acc);
-        await sock.sendMessage(from, { text: `Added ${username} for auto-posting every ${intervalMinutes} minutes to ${targetChatId}` }, { quoted: m });
+
+        if (!bearer) {
+          await sock.sendMessage(from, { text: '❌ No X bearer token found. Set X_BEARER_TOKEN env var or provide it as 4th arg.' }, { quoted: m });
+          return;
+        }
+
+        // Validate bearer token by fetching user ID
+        await sock.sendMessage(from, { text: `🔍 Validating X account @${username}...` }, { quoted: m });
+        try {
+          const userId = await getUserIdByUsername(username, bearer);
+          if (!userId) {
+            await sock.sendMessage(from, { text: `❌ User @${username} not found or invalid bearer token.` }, { quoted: m });
+            return;
+          }
+
+          const acc = { 
+            username, 
+            userId,
+            targetChatId, 
+            intervalMinutes, 
+            bearerToken: bearer, 
+            messageTemplate: DEFAULT_TEMPLATE, 
+            enabled: true, 
+            createdAt: new Date() 
+          };
+          await saveAccount(acc);
+          await sock.sendMessage(from, { text: `✅ Added @${username} (ID: ${userId}) for auto-posting every ${intervalMinutes} minutes to ${targetChatId}` }, { quoted: m });
+        } catch (err) {
+          await sock.sendMessage(from, { text: `❌ Error validating @${username}: ${err.message}` }, { quoted: m });
+          logger?.error && logger.error('X autoposter add error', err.message);
+        }
         break;
       }
 
@@ -364,8 +410,58 @@ export default {
         break;
       }
 
+      case 'test': {
+        const username = args[1]?.replace(/^@/, '');
+        if (!username) {
+          await sock.sendMessage(from, { text: 'Usage: xpost test <username>' }, { quoted: m });
+          return;
+        }
+
+        const coll = await getCollection(ACCOUNTS_COLLECTION);
+        const acc = await coll.findOne({ username });
+        if (!acc) {
+          await sock.sendMessage(from, { text: `❌ Account @${username} not found.` }, { quoted: m });
+          return;
+        }
+
+        await sock.sendMessage(from, { text: `🧪 Testing @${username}...` }, { quoted: m });
+        try {
+          const bearer = acc.bearerToken || config.X_BEARER_TOKEN;
+          if (!bearer) {
+            await sock.sendMessage(from, { text: `❌ No bearer token for @${username}` }, { quoted: m });
+            return;
+          }
+
+          // Try to fetch user ID
+          const userId = acc.userId || await getUserIdByUsername(username, bearer);
+          if (!userId) {
+            await sock.sendMessage(from, { text: `❌ Could not find user ID for @${username}` }, { quoted: m });
+            return;
+          }
+
+          // Try to fetch recent tweets
+          const resp = await fetchRecentTweets(userId, bearer, null);
+          const tweets = resp.data || [];
+
+          let msg = `✅ Account test passed!\n\n`;
+          msg += `Username: @${username}\n`;
+          msg += `User ID: ${userId}\n`;
+          msg += `Enabled: ${acc.enabled !== false ? 'Yes' : 'No'}\n`;
+          msg += `Interval: ${acc.intervalMinutes || DEFAULT_INTERVAL_MINUTES} minutes\n`;
+          msg += `Target Chat: ${acc.targetChatId}\n`;
+          msg += `Recent tweets: ${tweets.length} found\n`;
+          msg += `\nLast run: ${acc._lastRunAt ? new Date(acc._lastRunAt).toLocaleString() : 'Never'}\n`;
+          msg += `Last posted: ${acc.lastTweetId ? `Tweet ID ${acc.lastTweetId}` : 'None yet'}`;
+
+          await sock.sendMessage(from, { text: msg }, { quoted: m });
+        } catch (err) {
+          await sock.sendMessage(from, { text: `❌ Test failed: ${err.message}` }, { quoted: m });
+        }
+        break;
+      }
+
       default:
-        await sock.sendMessage(from, { text: 'Unknown xpost subcommand.' }, { quoted: m });
+        await sock.sendMessage(from, { text: 'Unknown xpost subcommand. Use: add, remove, list, enable, disable, setinterval, settemplate, gettemplate, test' }, { quoted: m });
         break;
     }
   }
