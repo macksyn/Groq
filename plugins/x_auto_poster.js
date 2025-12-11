@@ -261,11 +261,12 @@ export default {
   ],
 
   async run(context) {
-    const { args, text, sock, m, config, logger } = context;
+    const { args, text, sock, msg: m, config, logger } = context;
     const sub = args[0] ? args[0].toLowerCase() : null;
+    const from = m.key.remoteJid;
 
     if (!sub) {
-      await sock.sendMessage(m.key.remoteJid, { text: 'X Auto Poster commands: add, remove, list, enable, disable, setinterval' }, { quoted: m });
+      await sock.sendMessage(from, { text: 'X Auto Poster commands: add, remove, list, enable, disable, setinterval, settemplate, gettemplate' }, { quoted: m });
       return;
     }
 
@@ -274,68 +275,68 @@ export default {
         // Usage: xpost add <username> <targetChatId?> <intervalMinutes?> <bearerToken?>
         const username = args[1]?.replace(/^@/, '');
         if (!username) {
-          await sock.sendMessage(m.key.remoteJid, { text: 'Usage: xpost add <username> [targetChatId] [intervalMinutes] [bearerToken]' }, { quoted: m });
+          await sock.sendMessage(from, { text: 'Usage: xpost add <username> [targetChatId] [intervalMinutes] [bearerToken]' }, { quoted: m });
           return;
         }
-        const targetChatId = args[2] || m.key.remoteJid;
+        const targetChatId = args[2] || from;
         const intervalMinutes = parseInt(args[3]) || DEFAULT_INTERVAL_MINUTES;
         const bearer = args[4] || config.X_BEARER_TOKEN || null;
         const acc = { username, targetChatId, intervalMinutes, bearerToken: bearer, messageTemplate: DEFAULT_TEMPLATE, enabled: true, createdAt: new Date() };
         await saveAccount(acc);
-        await sock.sendMessage(m.key.remoteJid, { text: `Added ${username} for auto-posting every ${intervalMinutes} minutes to ${targetChatId}` }, { quoted: m });
+        await sock.sendMessage(from, { text: `Added ${username} for auto-posting every ${intervalMinutes} minutes to ${targetChatId}` }, { quoted: m });
         break;
       }
 
       case 'remove': {
         const username = args[1]?.replace(/^@/, '');
         if (!username) {
-          await sock.sendMessage(m.key.remoteJid, { text: 'Usage: xpost remove <username>' }, { quoted: m });
+          await sock.sendMessage(from, { text: 'Usage: xpost remove <username>' }, { quoted: m });
           return;
         }
         await removeAccount(username);
-        await sock.sendMessage(m.key.remoteJid, { text: `Removed ${username} from auto-post list.` }, { quoted: m });
+        await sock.sendMessage(from, { text: `Removed ${username} from auto-post list.` }, { quoted: m });
         break;
       }
 
       case 'list': {
         const accounts = await loadAccounts();
         if (!accounts.length) {
-          await sock.sendMessage(m.key.remoteJid, { text: 'No accounts configured for auto-posting.' }, { quoted: m });
+          await sock.sendMessage(from, { text: 'No accounts configured for auto-posting.' }, { quoted: m });
           return;
         }
         let out = 'Configured X accounts:\n';
         for (const a of accounts) {
           out += `\n• @${a.username} → ${a.targetChatId} (every ${a.intervalMinutes || DEFAULT_INTERVAL_MINUTES}m) ${a.enabled === false ? '[disabled]' : ''}`;
         }
-        await sock.sendMessage(m.key.remoteJid, { text: out }, { quoted: m });
+        await sock.sendMessage(from, { text: out }, { quoted: m });
         break;
       }
 
       case 'enable': {
         const username = args[1]?.replace(/^@/, '');
-        if (!username) return await sock.sendMessage(m.key.remoteJid, { text: 'Usage: xpost enable <username>' }, { quoted: m });
+        if (!username) return await sock.sendMessage(from, { text: 'Usage: xpost enable <username>' }, { quoted: m });
         const coll = await getCollection(ACCOUNTS_COLLECTION);
         await coll.updateOne({ username }, { $set: { enabled: true } });
-        await sock.sendMessage(m.key.remoteJid, { text: `Enabled ${username}` }, { quoted: m });
+        await sock.sendMessage(from, { text: `Enabled ${username}` }, { quoted: m });
         break;
       }
 
       case 'disable': {
         const username = args[1]?.replace(/^@/, '');
-        if (!username) return await sock.sendMessage(m.key.remoteJid, { text: 'Usage: xpost disable <username>' }, { quoted: m });
+        if (!username) return await sock.sendMessage(from, { text: 'Usage: xpost disable <username>' }, { quoted: m });
         const coll = await getCollection(ACCOUNTS_COLLECTION);
         await coll.updateOne({ username }, { $set: { enabled: false } });
-        await sock.sendMessage(m.key.remoteJid, { text: `Disabled ${username}` }, { quoted: m });
+        await sock.sendMessage(from, { text: `Disabled ${username}` }, { quoted: m });
         break;
       }
 
       case 'setinterval': {
         const username = args[1]?.replace(/^@/, '');
         const minutes = parseInt(args[2]);
-        if (!username || !minutes) return await sock.sendMessage(m.key.remoteJid, { text: 'Usage: xpost setinterval <username> <minutes>' }, { quoted: m });
+        if (!username || !minutes) return await sock.sendMessage(from, { text: 'Usage: xpost setinterval <username> <minutes>' }, { quoted: m });
         const coll = await getCollection(ACCOUNTS_COLLECTION);
         await coll.updateOne({ username }, { $set: { intervalMinutes: minutes } });
-        await sock.sendMessage(m.key.remoteJid, { text: `Set ${username} interval to ${minutes} minutes` }, { quoted: m });
+        await sock.sendMessage(from, { text: `Set ${username} interval to ${minutes} minutes` }, { quoted: m });
         break;
       }
 
@@ -343,28 +344,28 @@ export default {
         // Usage: xpost settemplate <username> <template>
         // Example: xpost settemplate nasa "🚀 *{author}*\n{text}\n👍 {likes} 🔄 {retweets}\n{url}"
         const username = args[1]?.replace(/^@/, '');
-        if (!username) return await sock.sendMessage(m.key.remoteJid, { text: 'Usage: xpost settemplate <username> "<template>"' }, { quoted: m });
+        if (!username) return await sock.sendMessage(from, { text: 'Usage: xpost settemplate <username> "<template>"' }, { quoted: m });
         const template = args.slice(2).join(' ').replace(/^["']|["']$/g, '');
-        if (!template) return await sock.sendMessage(m.key.remoteJid, { text: 'Template cannot be empty.' }, { quoted: m });
+        if (!template) return await sock.sendMessage(from, { text: 'Template cannot be empty.' }, { quoted: m });
         const coll = await getCollection(ACCOUNTS_COLLECTION);
         await coll.updateOne({ username }, { $set: { messageTemplate: template } });
-        await sock.sendMessage(m.key.remoteJid, { text: `Template updated for ${username}.\n\nAvailable variables: {text}, {author}, {created_at}, {likes}, {retweets}, {reply_count}, {url}, {id}, {hashtags}` }, { quoted: m });
+        await sock.sendMessage(from, { text: `Template updated for ${username}.\n\nAvailable variables: {text}, {author}, {created_at}, {likes}, {retweets}, {reply_count}, {url}, {id}, {hashtags}` }, { quoted: m });
         break;
       }
 
       case 'gettemplate': {
         const username = args[1]?.replace(/^@/, '');
-        if (!username) return await sock.sendMessage(m.key.remoteJid, { text: 'Usage: xpost gettemplate <username>' }, { quoted: m });
+        if (!username) return await sock.sendMessage(from, { text: 'Usage: xpost gettemplate <username>' }, { quoted: m });
         const coll = await getCollection(ACCOUNTS_COLLECTION);
         const acc = await coll.findOne({ username });
-        if (!acc) return await sock.sendMessage(m.key.remoteJid, { text: `Account ${username} not found.` }, { quoted: m });
+        if (!acc) return await sock.sendMessage(from, { text: `Account ${username} not found.` }, { quoted: m });
         const tmpl = acc.messageTemplate || DEFAULT_TEMPLATE;
-        await sock.sendMessage(m.key.remoteJid, { text: `Template for ${username}:\n\n${tmpl}` }, { quoted: m });
+        await sock.sendMessage(from, { text: `Template for ${username}:\n\n${tmpl}` }, { quoted: m });
         break;
       }
 
       default:
-        await sock.sendMessage(m.key.remoteJid, { text: 'Unknown xpost subcommand.' }, { quoted: m });
+        await sock.sendMessage(from, { text: 'Unknown xpost subcommand.' }, { quoted: m });
         break;
     }
   }
