@@ -1,4 +1,3 @@
-import fetch from 'node-fetch';
 import { getCollection } from '../lib/pluginIntegration.js';
 
 // X (Twitter) -> WhatsApp auto-poster plugin (V3 format)
