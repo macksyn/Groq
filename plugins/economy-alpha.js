@@ -665,14 +665,14 @@ const SUBSCRIPTION_TIERS = {
     name: '🆓 Free',
     weeklyCost: 0,
     limits: {
-      walletLimit: 1000000,
-      bankLimit: 5000000,
+      walletLimit: 500000,
+      bankLimit: 2000000,
       maxCryptoPerToken: 100,
       maxStocksPerStock: 50
     },
     bonuses: {
-      workBonus: 1.0,
-      dailyBonus: 1.0,
+      workBonus: 1.0,      // 0% bonus
+      dailyBonus: 1.0,     // 0% bonus
       weeklyPassiveIncome: 0,
       robProtectionBlocks: 0,
       cashbackPercent: 0,
@@ -685,19 +685,18 @@ const SUBSCRIPTION_TIERS = {
       taxAvoidance: false
     }
   },
-
   plus: {
     name: '⭐ Plus',
-    weeklyCost: 100000,
+    weeklyCost: 1500,
     limits: {
-      walletLimit: 2000000,
-      bankLimit: 10000000,
+      walletLimit: 1500000,
+      bankLimit: 5000000,
       maxCryptoPerToken: 250,
       maxStocksPerStock: 150
     },
     bonuses: {
-      workBonus: 1.15,
-      dailyBonus: 1.20,
+      workBonus: 1.15,      // +15%
+      dailyBonus: 1.20,     // +20%
       weeklyPassiveIncome: 0,
       robProtectionBlocks: 1,
       cashbackPercent: 0,
@@ -710,23 +709,22 @@ const SUBSCRIPTION_TIERS = {
       taxAvoidance: false
     }
   },
-
   pro: {
     name: '🔥 Pro',
-    weeklyCost: 250000,
+    weeklyCost: 3500,
     limits: {
-      walletLimit: 5000000,
-      bankLimit: 100000000,
+      walletLimit: 3500000,
+      bankLimit: 10000000,
       maxCryptoPerToken: 500,
       maxStocksPerStock: 300
     },
     bonuses: {
-      workBonus: 1.30,
-      dailyBonus: 1.40,
+      workBonus: 1.30,      // +30%
+      dailyBonus: 1.40,     // +40%
       weeklyPassiveIncome: 0,
       robProtectionBlocks: 2,
-      cashbackPercent: 2,
-      interestPercent: 5
+      cashbackPercent: 2,   // 2% cashback
+      interestPercent: 5    // 5% weekly interest
     },
     features: {
       robProtection: true,
@@ -735,92 +733,56 @@ const SUBSCRIPTION_TIERS = {
       taxAvoidance: false
     }
   },
-
   smart: {
     name: '💎 Smart',
-    weeklyCost: 500000,
+    weeklyCost: 6500,
     limits: {
-      walletLimit: 50000000,
-      bankLimit: 1000000000,
+      walletLimit: 6000000,
+      bankLimit: 20000000,
       maxCryptoPerToken: 1000,
       maxStocksPerStock: 500
     },
     bonuses: {
-      workBonus: 1.50,
-      dailyBonus: 1.60,
-      weeklyPassiveIncome: 5000,
+      workBonus: 1.50,      // +50%
+      dailyBonus: 1.60,     // +60%
+      weeklyPassiveIncome: 5000,  // ₦5000/week
       robProtectionBlocks: 3,
-      cashbackPercent: 4,
-      interestPercent: 8
+      cashbackPercent: 4,   // 4% cashback
+      interestPercent: 8    // 8% weekly interest
     },
     features: {
       robProtection: true,
       passiveIncome: true,
       marketInsider: false,
-      taxAvoidance: true
+      taxAvoidance: true    // Skip 1 robbery per month
     }
   },
-
   ultra: {
     name: '👑 Ultra',
-    weeklyCost: 1000000,
+    weeklyCost: 12000,
     limits: {
-      walletLimit: 100000000,
-      bankLimit: 10000000000,
+      walletLimit: 10000000,
+      bankLimit: 50000000,
       maxCryptoPerToken: 2000,
       maxStocksPerStock: 1000
     },
     bonuses: {
-      workBonus: 1.75,
-      dailyBonus: 2.0,
-      weeklyPassiveIncome: 15000,
-      robProtectionBlocks: 999,
-      cashbackPercent: 6,
-      interestPercent: 12
+      workBonus: 1.75,      // +75%
+      dailyBonus: 2.0,      // +100% (doubled)
+      weeklyPassiveIncome: 15000,  // ₦15000/week
+      robProtectionBlocks: 999,    // Effectively unlimited
+      cashbackPercent: 6,   // 6% cashback
+      interestPercent: 12   // 12% weekly interest
     },
     features: {
       robProtection: true,
       passiveIncome: true,
       marketInsider: true,
       taxAvoidance: true,
-      monopolyBonus: true
+      monopolyBonus: true   // Earn from inactive users
     }
   }
 };
-
-// ===== GRACE PERIOD & AUTO-LIQUIDATION CONFIG =====
-// When new limits launch, players have a grace period to voluntarily sell excess holdings
-const GRACE_PERIOD_CONFIG = {
-  ENABLED: true,
-  GRACE_PERIOD_DAYS: 14,  // Players have 14 days to adjust holdings
-  LAUNCH_DATE: new Date('2025-12-15T00:00:00+01:00'),  // Change to your launch date
-  AUTO_LIQUIDATION_REFUND_PERCENT: 80,  // Give 80% refund on auto-liquidated items
-  WARNING_THRESHOLD_PERCENT: 100,  // Warn when over 100% of new limit
-  IGNORE_BEFORE_LAUNCH: true  // Don't enforce until after launch
-};
-
-// Calculate grace period end date
-function getGracePeriodEndDate() {
-  const endDate = new Date(GRACE_PERIOD_CONFIG.LAUNCH_DATE);
-  endDate.setDate(endDate.getDate() + GRACE_PERIOD_CONFIG.GRACE_PERIOD_DAYS);
-  return endDate;
-}
-
-// Check if we're still in grace period
-function isInGracePeriod() {
-  if (!GRACE_PERIOD_CONFIG.ENABLED) return false;
-  const now = new Date();
-  const endDate = getGracePeriodEndDate();
-  return now <= endDate;
-}
-
-// Get days remaining in grace period
-function getDaysRemainingInGracePeriod() {
-  const now = new Date();
-  const endDate = getGracePeriodEndDate();
-  const daysRemaining = Math.ceil((endDate - now) / (1000 * 60 * 60 * 24));
-  return Math.max(0, daysRemaining);
-}
 
 // ✅ REFACTORED: Auto-update business ROI using safeOperation
 async function updateBusinessROI() {
@@ -1586,14 +1548,7 @@ async function handleStocks(context, args) {
         const newShares = currentShares + buyAmount;
         if (newShares > maxStockLimit) {
           const available = maxStockLimit - currentShares;
-          let message = `⚠️ *Portfolio Limit Reached!*\n\n📊 *${buySymbol} Limit:* ${maxStockLimit} shares (${tierConfigStocks.name})\n📦 *You currently own:* ${currentShares}\n✅ *You can buy:* ${available} more shares\n\n💡 *Tip:* Upgrade to a Premium subscription for higher limits!`;
-
-          if (isInGracePeriod()) {
-            const daysLeft = getDaysRemainingInGracePeriod();
-            message += `\n\n⏰ *Grace Period:* You have ${daysLeft} days to adjust your portfolio.`;
-          }
-
-          await reply(message);
+          await reply(`⚠️ *Portfolio Limit Reached!*\n\n📊 *${buySymbol} Limit:* ${maxStockLimit} shares (${tierConfigStocks.name})\n📦 *You currently own:* ${currentShares}\n✅ *You can buy:* ${available} more shares\n\n💡 *Tip:* Upgrade to a Premium subscription for higher limits!`);
           return;
         }
 
@@ -2657,153 +2612,6 @@ function getWalletBankLimits(userData) {
   };
 }
 
-// ===== AUTO-LIQUIDATION SYSTEM =====
-// Enforce portfolio limits by liquidating excess holdings after grace period
-async function enforcePortfolioLimits(userData, sock = null) {
-  const userId = userData.id || userData._id;
-  const tier = userData.subscription?.tier || 'free';
-  const tierConfig = SUBSCRIPTION_TIERS[tier];
-  const liquidationReport = {
-    success: true,
-    liquidated: false,
-    items: [],
-    totalRefund: 0,
-    errors: []
-  };
-
-  try {
-    let updates = {};
-
-    // ========== CHECK WALLET LIMIT ==========
-    const walletLimit = tierConfig.limits.walletLimit;
-    if (userData.balance > walletLimit) {
-      const excess = userData.balance - walletLimit;
-      const refund = Math.floor(excess * (GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT / 100));
-
-      liquidationReport.liquidated = true;
-      liquidationReport.items.push({
-        type: 'wallet',
-        excess: excess,
-        refund: refund,
-        description: `Wallet excess (had ₦${excess.toLocaleString()}, limit ₦${walletLimit.toLocaleString()})`
-      });
-      liquidationReport.totalRefund += refund;
-      updates.balance = walletLimit;
-      updates['bank'] = (userData.bank || 0) + refund;  // Add refund to bank
-    }
-
-    // ========== CHECK BANK LIMIT ==========
-    const bankLimit = tierConfig.limits.bankLimit;
-    const currentBank = (updates.bank !== undefined) ? updates.bank : userData.bank || 0;
-    if (currentBank > bankLimit) {
-      const excess = currentBank - bankLimit;
-      const refund = Math.floor(excess * (GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT / 100));
-
-      liquidationReport.liquidated = true;
-      liquidationReport.items.push({
-        type: 'bank',
-        excess: excess,
-        refund: refund,
-        description: `Bank excess (had ₦${excess.toLocaleString()}, limit ₦${bankLimit.toLocaleString()})`
-      });
-      liquidationReport.totalRefund += refund;
-      updates.bank = bankLimit;
-      updates.balance = (updates.balance !== undefined) ? updates.balance : userData.balance || 0;
-      updates.balance += refund;  // Add refund to wallet
-    }
-
-    // ========== CHECK CRYPTO HOLDINGS ==========
-    const maxCryptoPerToken = tierConfig.limits.maxCryptoPerToken;
-    if (userData.investments?.crypto) {
-      for (const [symbol, amount] of Object.entries(userData.investments.crypto)) {
-        if (amount > maxCryptoPerToken) {
-          const excess = amount - maxCryptoPerToken;
-          const price = cryptoData[symbol]?.price || 0;
-          const refund = Math.floor(excess * price * (GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT / 100));
-
-          liquidationReport.liquidated = true;
-          liquidationReport.items.push({
-            type: 'crypto',
-            symbol: symbol,
-            excess: excess,
-            pricePerCoin: price,
-            refund: refund,
-            description: `${symbol} crypto excess (had ${excess.toLocaleString()}, limit ${maxCryptoPerToken})`
-          });
-          liquidationReport.totalRefund += refund;
-          updates[`investments.crypto.${symbol}`] = maxCryptoPerToken;
-          updates.balance = (updates.balance !== undefined) ? updates.balance : userData.balance || 0;
-          updates.balance += refund;  // Add refund to wallet
-        }
-      }
-    }
-
-    // ========== CHECK STOCK HOLDINGS ==========
-    const maxStocksPerStock = tierConfig.limits.maxStocksPerStock;
-    if (userData.investments?.stocks) {
-      for (const [symbol, shares] of Object.entries(userData.investments.stocks)) {
-        if (shares > maxStocksPerStock) {
-          const excess = shares - maxStocksPerStock;
-          const price = stocks[symbol]?.price || 0;
-          const refund = Math.floor(excess * price * (GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT / 100));
-
-          liquidationReport.liquidated = true;
-          liquidationReport.items.push({
-            type: 'stock',
-            symbol: symbol,
-            excess: excess,
-            pricePerShare: price,
-            refund: refund,
-            description: `${symbol} stock excess (had ${excess.toLocaleString()}, limit ${maxStocksPerStock})`
-          });
-          liquidationReport.totalRefund += refund;
-          updates[`investments.stocks.${symbol}`] = maxStocksPerStock;
-          updates.balance = (updates.balance !== undefined) ? updates.balance : userData.balance || 0;
-          updates.balance += refund;  // Add refund to wallet
-        }
-      }
-    }
-
-    // ========== APPLY UPDATES IF ANY LIQUIDATIONS OCCURRED ==========
-    if (liquidationReport.liquidated && Object.keys(updates).length > 0) {
-      await updateUserData(userId, updates);
-
-      // Send liquidation notification if socket available
-      if (sock && liquidationReport.items.length > 0) {
-        await sendLiquidationNotification(userId, liquidationReport, sock);
-      }
-    }
-
-    return liquidationReport;
-  } catch (error) {
-    console.error('Error enforcing portfolio limits:', error);
-    liquidationReport.success = false;
-    liquidationReport.errors.push(error.message);
-    return liquidationReport;
-  }
-}
-
-// Send notification when holdings are auto-liquidated
-async function sendLiquidationNotification(userId, liquidationReport, sock) {
-  try {
-    if (!sock || !liquidationReport.liquidated) return;
-
-    const userData = await getUserData(userId);
-    const tier = userData.subscription?.tier || 'free';
-    const tierConfig = SUBSCRIPTION_TIERS[tier];
-
-    let itemsList = liquidationReport.items.map(item => {
-      return `• ${item.description}\n  💰 *Refunded:* ₦${item.refund.toLocaleString()} (${GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT}%)`;
-    }).join('\n');
-
-    const message = `⚠️ *PORTFOLIO LIMIT ENFORCED*\n\nYour holdings exceeded the new limits for your subscription tier.\n\n*Items Liquidated:*\n${itemsList}\n\n💰 *Total Refund:* ₦${liquidationReport.totalRefund.toLocaleString()}\n\n🎁 Refunds have been added to your wallet.\n\n💎 *Your Tier:* ${tierConfig.name}\n📊 *Wallet Limit:* ₦${tierConfig.limits.walletLimit.toLocaleString()}\n🏦 *Bank Limit:* ₦${tierConfig.limits.bankLimit.toLocaleString()}\n\n💡 *Tip:* Upgrade your subscription to increase limits!`;
-
-    await sock.sendMessage(userId, { text: message });
-  } catch (error) {
-    console.error('Error sending liquidation notification:', error);
-  }
-}
-
 // Enhanced handleSend with transaction limits and fees
 async function handleSend(context, args) {
   const { reply, senderId, sock, m, from, config } = context;
@@ -2909,14 +2717,7 @@ async function handleDeposit(context, args) {
 
     const limits = getWalletBankLimits(userData);
     if (userData.bank + amount > limits.bankLimit) {
-      let message = `🚫 *Bank deposit limit exceeded*\n\nMax bank balance: ${ecoSettings.currency}${limits.bankLimit.toLocaleString()}\n💎 *Your tier:* ${SUBSCRIPTION_TIERS[userData.subscription?.tier || 'free'].name}`;
-
-      if (isInGracePeriod()) {
-        const daysLeft = getDaysRemainingInGracePeriod();
-        message += `\n\n⏰ *Grace Period Warning:* You have ${daysLeft} days to reduce your bank balance.\nAfter that, excess will be liquidated with ${GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT}% refund.`;
-      }
-
-      await reply(message);
+      await reply(`🚫 *Bank deposit limit exceeded*\n\nMax bank balance: ${ecoSettings.currency}${limits.bankLimit.toLocaleString()}\n💎 *Your tier:* ${SUBSCRIPTION_TIERS[userData.subscription?.tier || 'free'].name}`);
       return;
     }
 
@@ -2960,14 +2761,7 @@ async function handleWithdraw(context, args) {
 
     const limits = getWalletBankLimits(userData);
     if (userData.balance + amount > limits.walletLimit) {
-      let message = `🚫 *Wallet limit exceeded*\n\nMax wallet balance: ${ecoSettings.currency}${limits.walletLimit.toLocaleString()}\n💎 *Your tier:* ${SUBSCRIPTION_TIERS[userData.subscription?.tier || 'free'].name}`;
-
-      if (isInGracePeriod()) {
-        const daysLeft = getDaysRemainingInGracePeriod();
-        message += `\n\n⏰ *Grace Period Warning:* You have ${daysLeft} days to reduce your wallet.\nAfter that, excess will be liquidated with ${GRACE_PERIOD_CONFIG.AUTO_LIQUIDATION_REFUND_PERCENT}% refund.`;
-      }
-
-      await reply(message);
+      await reply(`🚫 *Wallet limit exceeded*\n\nMax wallet balance: ${ecoSettings.currency}${limits.walletLimit.toLocaleString()}\n💎 *Your tier:* ${SUBSCRIPTION_TIERS[userData.subscription?.tier || 'free'].name}`);
       return;
     }
 
@@ -3190,14 +2984,7 @@ async function handleCrypto(context, args) {
         const newHolding = currentHolding + buyAmount;
         if (newHolding > maxCryptoLimit) {
           const available = maxCryptoLimit - currentHolding;
-          let message = `⚠️ *Portfolio Limit Reached!*\n\n📊 *${buySymbol} Limit:* ${maxCryptoLimit} coins (${tierConfig.name})\n🪙 *You currently own:* ${currentHolding}\n✅ *You can buy:* ${available} more coins\n\n💡 *Tip:* Upgrade to a Premium subscription for higher limits!`;
-
-          if (isInGracePeriod()) {
-            const daysLeft = getDaysRemainingInGracePeriod();
-            message += `\n\n⏰ *Grace Period:* You have ${daysLeft} days to adjust your portfolio.`;
-          }
-
-          await reply(message);
+          await reply(`⚠️ *Portfolio Limit Reached!*\n\n📊 *${buySymbol} Limit:* ${maxCryptoLimit} coins (${tierConfig.name})\n🪙 *You currently own:* ${currentHolding}\n✅ *You can buy:* ${available} more coins\n\n💡 *Tip:* Upgrade to a Premium subscription for higher limits!`);
           return;
         }
 
