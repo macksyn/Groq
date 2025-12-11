@@ -161,7 +161,7 @@ async function processAccount(account, context) {
     return;
   }
 
-  const bearer = account.bearerToken || context.config.X_BEARER_TOKEN;
+  const bearer = account.bearerToken || context.config.X_BEARER_TOKEN || process.env.X_BEARER_TOKEN;
   if (!bearer) {
     logger?.warn && logger.warn(`X autoposter: No bearer token for ${account.username}`);
     return;
@@ -298,7 +298,7 @@ export default {
         }
         const targetChatId = args[2] || from;
         const intervalMinutes = parseInt(args[3]) || DEFAULT_INTERVAL_MINUTES;
-        const bearer = args[4] || config.X_BEARER_TOKEN || null;
+        const bearer = args[4] || config.X_BEARER_TOKEN || process.env.X_BEARER_TOKEN || null;
 
         if (!bearer) {
           await sock.sendMessage(from, { text: '❌ No X bearer token found. Set X_BEARER_TOKEN env var or provide it as 4th arg.' }, { quoted: m });
@@ -426,7 +426,7 @@ export default {
 
         await sock.sendMessage(from, { text: `🧪 Testing @${username}...` }, { quoted: m });
         try {
-          const bearer = acc.bearerToken || config.X_BEARER_TOKEN;
+          const bearer = acc.bearerToken || config.X_BEARER_TOKEN || process.env.X_BEARER_TOKEN;
           if (!bearer) {
             await sock.sendMessage(from, { text: `❌ No bearer token for @${username}` }, { quoted: m });
             return;
