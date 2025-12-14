@@ -1418,9 +1418,10 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
     const canSendAsDocument = fileSizeMB <= DOCUMENT_LIMIT_MB;
     const sendAsDocument = !canSendAsVideo && canSendAsDocument;
 
-    // Check if file is too large even for WhatsApp
-    if (!canSendAsDocument) {
-      console.log(chalk.yellow(`⚠️ File exceeds 2GB (${sizeMB}MB), sending link`));
+    // Prefer sending a direct link for files larger than 250MB to avoid upload issues
+    const PREFERRED_MAX_UPLOAD_MB = 250;
+    if (fileSizeMB > PREFERRED_MAX_UPLOAD_MB) {
+      console.log(chalk.yellow(`⚠️ File exceeds ${PREFERRED_MAX_UPLOAD_MB}MB (${sizeMB}MB), sending link`));
 
       await sock.sendMessage(m.from, { react: { text: '🔗', key: m.key } });
 
@@ -1445,7 +1446,7 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
         message += `🆓 *Remaining:* ${remaining}/${settings.rateLimitFree}\n`;
       }
 
-      message += `\n⚠️ *File Exceeds WhatsApp Limit* (2GB)\n\n`;
+      message += `\n⚠️ *File Exceeds Preferred Upload Limit* (${PREFERRED_MAX_UPLOAD_MB}MB)\n\n`;
       message += `*📥 Direct Download Link:*\n${shortUrl}\n\n`;
       message += `_Link valid for 24 hours • ⚡ Powered by Groq_`;
 
@@ -1858,6 +1859,40 @@ export default {
       }
 
       const isAdmin = movieDownloader.isAdmin(sender);
+
+      // Quick-reply: If the message is a plain number (e.g. "5") and it quotes
+      // a previous search results message, show the info for that numbered item.
+      try {
+        const plainText = (text || '').trim();
+        if (/^\d{1,2}$/.test(plainText) && m.quoted) {
+          const qtext = m.quoted.text || m.quoted.caption || '';
+          // Prefer explicit Search-ID token embedded in search replies
+          const tokenMatch = qtext.match(/\[Search-ID: (\S+)\]/);
+          let selectedSubjectId = null;
+          if (tokenMatch && tokenMatch[1]) {
+            const session = movieDownloader.getSessionByToken(tokenMatch[1]);
+            if (session && session.searchResults) {
+              const idx = Math.max(0, Math.min(session.searchResults.length - 1, parseInt(plainText) - 1));
+              const sel = session.searchResults[idx];
+              if (sel) selectedSubjectId = sel.subjectId || sel.subjectId;
+            }
+          }
+
+          // Fallback to user's last session
+          if (!selectedSubjectId) {
+            const movieFromSession = movieDownloader.getMovieByNumber(sender, plainText);
+            if (movieFromSession) selectedSubjectId = movieFromSession.subjectId;
+          }
+
+          if (selectedSubjectId) {
+            await handleMovieInfo(async (t) => reply(t), movieDownloader, config, selectedSubjectId, sender, sock, m);
+            return;
+          }
+        }
+      } catch (quickErr) {
+        // non-fatal — continue to normal command handling
+        logger.debug && logger.debug('Quick-reply parse failed: ' + quickErr?.message);
+      }
 
       const reply = async (text) => {
         if (typeof m.reply === 'function') {
