@@ -1580,13 +1580,16 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       // Read file in chunks to avoid memory issues
       console.log(chalk.cyan(`📤 Uploading to WhatsApp...`));
 
+      // Determine correct mimetype for MP4 files so WhatsApp treats it as video
+      const mimeType = 'video/mp4';
+
         if (canSendAsVideo) {
         // Send as video (≤ 64MB) - plays directly in chat
         try {
           await sock.sendMessage(m.from, {
             video: { url: tempFilePath }, // Provide file path object expected by Baileys
             caption: caption,
-            mimetype: 'application/octet-stream',
+            mimetype: mimeType,
             fileName: fileName
           }, { quoted: m });
 
@@ -1597,7 +1600,7 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
           await sock.sendMessage(m.from, {
             document: { url: tempFilePath },
             caption: caption,
-            mimetype: 'application/octet-stream', // Generic binary for documents
+            mimetype: mimeType, // Use video/mp4 so client recognises playable file
             fileName: fileName
           }, { quoted: m });
           console.log(chalk.green(`✅ Sent as document instead (${actualSizeMB}MB)`));
@@ -1608,7 +1611,7 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
         await sock.sendMessage(m.from, {
           document: { url: tempFilePath },
           caption: caption,
-          mimetype: 'application/octet-stream', // This prevents WhatsApp warnings
+          mimetype: mimeType, // This ensures WhatsApp recognises it as an MP4
           fileName: fileName
         }, { quoted: m });
 
