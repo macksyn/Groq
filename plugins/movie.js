@@ -1580,11 +1580,11 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
       // Read file in chunks to avoid memory issues
       console.log(chalk.cyan(`📤 Uploading to WhatsApp...`));
 
-      if (canSendAsVideo) {
+        if (canSendAsVideo) {
         // Send as video (≤ 64MB) - plays directly in chat
         try {
           await sock.sendMessage(m.from, {
-            video: fs.readFileSync(tempFilePath), // Use buffer for videos
+            video: fs.createReadStream(tempFilePath), // Stream file to avoid high memory usage
             caption: caption,
             mimetype: 'application/octet-stream',
             fileName: fileName
@@ -1593,9 +1593,9 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
           console.log(chalk.green(`✅ Video sent successfully! (${actualSizeMB}MB)`));
         } catch (videoError) {
           console.error(chalk.red('❌ Video send failed, trying as document...'), videoError.message);
-          // Fallback to document with correct mimetype
+          // Fallback to document with correct mimetype (stream)
           await sock.sendMessage(m.from, {
-            document: fs.readFileSync(tempFilePath),
+            document: fs.createReadStream(tempFilePath),
             caption: caption,
             mimetype: 'application/octet-stream', // Generic binary for documents
             fileName: fileName
@@ -1604,9 +1604,9 @@ async function handleMovieDownload(reply, downloader, config, sock, m, sender, i
         }
       } else {
         // Send as document (64MB - 2GB) - user downloads then watches
-        // Use generic mimetype to avoid WhatsApp blocking
+        // Use streaming to avoid loading entire file into memory
         await sock.sendMessage(m.from, {
-          document: fs.readFileSync(tempFilePath),
+          document: fs.createReadStream(tempFilePath),
           caption: caption,
           mimetype: 'application/octet-stream', // This prevents WhatsApp warnings
           fileName: fileName
