@@ -843,7 +843,7 @@ const SUBSCRIPTION_TIERS = {
     // ========== NEW: SUPREME TIER ==========
       supreme: {
         name: '🌟 Supreme',
-        weeklyCost: 2500000, // ₦2.5M/week
+        weeklyCost: 5000000, // ₦5M/week
         limits: {
           walletLimit: 500000000,        // ₦500M
           bankLimit: 50000000000,        // ₦50B
@@ -874,7 +874,7 @@ const SUBSCRIPTION_TIERS = {
       // ========== NEW: TITAN TIER ==========
       titan: {
         name: '🔱 Titan',
-        weeklyCost: 5000000, // ₦5M/week
+        weeklyCost: 10000000, // ₦10M/week
         limits: {
           walletLimit: 1000000000,       // ₦1B
           bankLimit: 100000000000,       // ₦100B
