@@ -43,7 +43,7 @@ module.exports = {
       },
       
       // Health monitoring for PM2
-      kill_timeout: 10000,
+      kill_timeout: 5000, // ✅ Give app 5 seconds to shut down gracefully
       listen_timeout: 8000,
       shutdown_with_message: true,
       

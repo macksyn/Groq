@@ -86,9 +86,9 @@ export class WhatsAppBot extends EventEmitter {
       this.status = 'stopping';
 
       // ✅ FIXED: Stop all monitors in correct order
+      if (this.socketManager) await this.socketManager.disconnect();
       if (this.connectionMonitor) this.connectionMonitor.stop();
       if (this.healthMonitor) await this.healthMonitor.stop();
-      if (this.socketManager) await this.socketManager.disconnect();
       if (this.webServer) await this.webServer.stop();
       if (this.mongoManager) await this.mongoManager.close();
 
