@@ -616,7 +616,7 @@ workBoost: {
     effect: "marketTip",
     emoji: "📊"
   }
-},
+}
   // ========== NEW EXCLUSIVE SHOP ITEMS FOR SUPREME/TITAN ==========
   // Add these to your SHOP_ITEMS object
 
