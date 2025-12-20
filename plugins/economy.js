@@ -2395,46 +2395,28 @@ async function handleLeaderboard(context, args) {
 // ... All remaining functions like handleAdminSettings, handleSubCommand, etc., remain UNCHANGED.
 // They already use the refactored helper functions.
 
-async function setFreezeStatusEnhanced(userId, freeze, adminId = null) {
+async function setFreezeStatus(userId, freeze, adminId = null) {
   try {
     await initUser(userId);
-    const usersCollection = await getCollection(COLLECTIONS.USERS);
 
+    const updates = {
+      frozen: freeze,
+      updatedAt: new Date()
+    };
+
+    // Add freeze/unfreeze metadata
     if (freeze) {
-      // ===== FREEZING AN ACCOUNT =====
-      const result = await usersCollection.updateOne(
-        { userId },
-        {
-          $set: {
-            frozen: true,
-            freezeInfo: {
-              frozenAt: new Date(),
-              frozenBy: adminId,
-              reason: 'Account frozen by administrator'
-            },
-            updatedAt: new Date()
-          }
-        }
-      );
-
-      console.log(`✅ Freeze successful for ${userId}. Modified: ${result.modifiedCount}`);
+      updates.freezeInfo = {
+        frozenAt: new Date(),
+        frozenBy: adminId,
+        reason: 'Account frozen by administrator'
+      };
     } else {
-      // ===== UNFREEZING AN ACCOUNT =====
-      // Step 1: Verify the account is actually frozen
-      const user = await usersCollection.findOne({ userId });
+// ===== UNFREEZING AN ACCOUNT =====
+      // FIXED: Use direct database access to properly unset freezeInfo
+      const usersCollection = await getCollection(COLLECTIONS.USERS);
 
-      if (!user) {
-        console.error(`❌ User ${userId} not found in database`);
-        return { success: false, message: 'User not found' };
-      }
-
-      if (!user.frozen) {
-        console.warn(`⚠️ User ${userId} was not frozen`);
-        return { success: true, message: 'Account was not frozen' };
-      }
-
-      // Step 2: Unfreeze the account
-      const result = await usersCollection.updateOne(
+      await usersCollection.updateOne(
         { userId },
         {
           $set: {
@@ -2446,22 +2428,10 @@ async function setFreezeStatusEnhanced(userId, freeze, adminId = null) {
             updatedAt: new Date()
           },
           $unset: {
-            freezeInfo: ""
+            freezeInfo: "" // Remove the freezeInfo field
           }
         }
       );
-
-      console.log(`✅ Unfreeze successful for ${userId}. Modified: ${result.modifiedCount}`);
-
-      // Step 3: Verify the unfreeze worked
-      const updatedUser = await usersCollection.findOne({ userId });
-      if (updatedUser.frozen === true) {
-        console.error(`❌ CRITICAL: User ${userId} still shows frozen after unfreeze!`);
-        console.error(`User data:`, JSON.stringify(updatedUser, null, 2));
-        return { success: false, message: 'Unfreeze failed - account still frozen' };
-      }
-
-      console.log(`✅ Verification passed: ${userId} is now unfrozen`);
     }
 
     // Log the freeze/unfreeze action
@@ -2477,7 +2447,7 @@ async function setFreezeStatusEnhanced(userId, freeze, adminId = null) {
 
     return { success: true };
   } catch (error) {
-    console.error(`❌ Error setting freeze status for ${userId}:`, error);
+    console.error(`Error setting freeze status for ${userId}:`, error);
     return { success: false, message: 'Could not update account status' };
   }
 }
