@@ -616,7 +616,61 @@ workBoost: {
     effect: "marketTip",
     emoji: "📊"
   }
-};
+},
+  // ========== NEW EXCLUSIVE SHOP ITEMS FOR SUPREME/TITAN ==========
+  // Add these to your SHOP_ITEMS object
+
+  const SUPREME_TITAN_SHOP_ITEMS = {
+    // Supreme Tier Exclusive
+    moneyMagnet: {
+      name: "Money Magnet",
+      price: 50000000,
+      description: "Attract 5% of all group transactions for 7 days (Supreme+)",
+      type: "consumable",
+      effect: "moneyMagnet",
+      emoji: "🧲",
+      requiredTier: "supreme"
+    },
+    inflationShield: {
+      name: "Inflation Shield",
+      price: 300000000,
+      description: "Protects portfolio from market crashes for 14 days (Supreme+)",
+      type: "consumable",
+      effect: "inflationShield",
+      emoji: "🛡️",
+      requiredTier: "supreme"
+    },
+
+    // Titan Tier Exclusive
+    goldenParachute: {
+      name: "Golden Parachute",
+      price: 100000000,
+      description: "One-time protection from bankruptcy - Auto-saves you (Titan only)",
+      type: "permanent",
+      effect: "goldenParachute",
+      emoji: "🪂",
+      requiredTier: "titan"
+    },
+    marketManipulator: {
+      name: "Market Manipulator",
+      price: 1500000000,
+      description: "Force a specific crypto/stock price up or down once (Titan only)",
+      type: "consumable",
+      effect: "marketManipulator",
+      emoji: "📊",
+      requiredTier: "titan",
+      uses: 1
+    },
+    royalCrown: {
+      name: "Royal Crown",
+      price: 500000000,
+      description: "Shows 🔱 next to your name + immunity to robberies (Titan only)",
+      type: "permanent",
+      effect: "royalCrown",
+      emoji: "🔱",
+      requiredTier: "titan"
+    }
+  };
 
 // Helper function to map lowercase item IDs to camelCase (UNCHANGED)
 function getItemId(inputId) {
@@ -785,8 +839,72 @@ const SUBSCRIPTION_TIERS = {
       taxAvoidance: true,
       monopolyBonus: true
     }
-  }
-};
+  },
+    // ========== NEW: SUPREME TIER ==========
+      supreme: {
+        name: '🌟 Supreme',
+        weeklyCost: 2500000, // ₦2.5M/week
+        limits: {
+          walletLimit: 500000000,        // ₦500M
+          bankLimit: 50000000000,        // ₦50B
+          maxCryptoPerToken: 5000,       // 5,000 per token
+          maxStocksPerStock: 2500        // 2,500 per stock
+        },
+        bonuses: {
+          workBonus: 2.0,                // 100% boost
+          dailyBonus: 2.5,               // 150% boost
+          weeklyPassiveIncome: 50000,    // ₦50k/week
+          robProtectionBlocks: 999,      // Unlimited
+          cashbackPercent: 10,           // 10% cashback
+          interestPercent: 15            // 15% weekly interest
+        },
+        features: {
+          robProtection: true,
+          passiveIncome: true,
+          marketInsider: true,
+          taxAvoidance: true,
+          monopolyBonus: true,
+          prioritySupport: true,         // NEW: Admin priority
+          exclusiveItems: true,          // NEW: Supreme-only items
+          investmentInsights: true,      // NEW: See trends
+          doubleAchievementRewards: true // NEW: 2x achievements
+        }
+      },
+
+      // ========== NEW: TITAN TIER ==========
+      titan: {
+        name: '🔱 Titan',
+        weeklyCost: 5000000, // ₦5M/week
+        limits: {
+          walletLimit: 1000000000,       // ₦1B
+          bankLimit: 100000000000,       // ₦100B
+          maxCryptoPerToken: 10000,      // 10,000 per token
+          maxStocksPerStock: 5000        // 5,000 per stock
+        },
+        bonuses: {
+          workBonus: 2.5,                // 150% boost
+          dailyBonus: 3.0,               // 200% boost
+          weeklyPassiveIncome: 100000,   // ₦100k/week
+          robProtectionBlocks: 999,      // Unlimited
+          cashbackPercent: 15,           // 15% cashback
+          interestPercent: 20            // 20% weekly interest
+        },
+        features: {
+          robProtection: true,
+          passiveIncome: true,
+          marketInsider: true,
+          taxAvoidance: true,
+          monopolyBonus: true,
+          prioritySupport: true,
+          exclusiveItems: true,
+          investmentInsights: true,
+          doubleAchievementRewards: true,
+          immuneToMarketCrashes: true,   // NEW: Immune to crashes
+          instantBusinessPayouts: true,  // NEW: Collect anytime
+          vipLeaderboardBadge: true      // NEW: 🔱 badge
+        }
+      }
+    };
 
 // ===== GRACE PERIOD & AUTO-LIQUIDATION CONFIG =====
 // When new limits launch, players have a grace period to voluntarily sell excess holdings
@@ -1188,7 +1306,9 @@ async function removeMoney(userId, amount, reason = 'Unknown') {
   }
 }
 
-// Achievement checking system (UNCHANGED - relies on refactored functions)
+// ========== UPDATED ACHIEVEMENTS WITH BONUS MULTIPLIERS ==========
+// Modify checkAchievements function to apply doubleAchievementRewards
+
 async function checkAchievements(userId, type, data = {}) {
   try {
     const user = await getUserData(userId);
@@ -1242,7 +1362,7 @@ async function checkAchievements(userId, type, data = {}) {
         achievements: [...user.achievements, ...newAchievements]
       });
 
-      // Give rewards
+      // Give rewards with Supreme/Titan multiplier
       let totalReward = 0;
       for (const achName of newAchievements) {
         if (ACHIEVEMENTS[achName]) {
@@ -1251,6 +1371,14 @@ async function checkAchievements(userId, type, data = {}) {
       }
 
       if (totalReward > 0) {
+        // ✨ NEW: Check if user has doubleAchievementRewards feature
+        const subscription = user.subscription || { tier: 'free' };
+        const tierConfig = SUBSCRIPTION_TIERS[subscription.tier];
+
+        if (tierConfig.features.doubleAchievementRewards) {
+          totalReward *= 2; // Double rewards for Supreme/Titan
+        }
+
         await addMoney(userId, totalReward, 'Achievement rewards', false);
       }
 
@@ -1740,50 +1868,67 @@ async function handleShop(context, args) {
 
     const action = args[0].toLowerCase();
 
-    if (action === 'buy') {
-      if (args.length < 2) {
-        await reply('⚠️ *Usage: shop buy [item_id]*');
-        return;
-      }
+      if (action === 'buy') {
+        if (args.length < 2) {
+          await reply('⚠️ *Usage: shop buy [item_id]*');
+          return;
+        }
 
-      const itemId = getItemId(args[1]);
-      const item = SHOP_ITEMS[itemId];
+        const itemId = getItemId(args[1]);
+        const item = { ...SHOP_ITEMS[itemId], ...SUPREME_TITAN_SHOP_ITEMS[itemId] }[itemId];
 
-      if (!item) {
-        await reply('❌ *Item not found*');
-        return;
-      }
+        if (!item) {
+          await reply('❌ *Item not found*');
+          return;
+        }
 
-      const userData = await getUserData(senderId);
-      if (userData.balance < item.price) {
-        await reply(`🚫 *Insufficient funds*\n\nRequired: ${ecoSettings.currency}${item.price.toLocaleString()}\nAvailable: ${ecoSettings.currency}${userData.balance.toLocaleString()}`);
-        return;
-      }
+        // ✨ NEW: Check tier requirement
+        if (item.requiredTier) {
+          const userData = await getUserData(senderId);
+          const userTier = userData.subscription?.tier || 'free';
 
-      // Check if user already has permanent item
-      if (item.type === 'permanent' && userData.activeEffects?.[item.effect]) {
-        await reply('⚠️ *You already own this permanent upgrade*');
-        return;
-      }
+          // Define tier hierarchy
+          const tierHierarchy = ['free', 'plus', 'pro', 'smart', 'ultra', 'supreme', 'titan'];
+          const userTierLevel = tierHierarchy.indexOf(userTier);
+          const requiredTierLevel = tierHierarchy.indexOf(item.requiredTier);
 
-      await removeMoney(senderId, item.price, 'Shop purchase');
+          if (userTierLevel < requiredTierLevel) {
+            const requiredTierConfig = SUBSCRIPTION_TIERS[item.requiredTier];
+            await reply(`🔒 *Tier Locked Item*\n\n${item.emoji} *${item.name}*\n\n⚠️ *Requires:* ${requiredTierConfig.name} subscription or higher\n💡 *Your tier:* ${SUBSCRIPTION_TIERS[userTier].name}\n\nUpgrade with: ${config.PREFIX}subscription upgrade ${item.requiredTier}`);
+            return;
+          }
+        }
 
-      // Add to inventory
-      const existingItem = userData.inventory.find(invItem => invItem.id === itemId);
-      if (existingItem) {
-        existingItem.quantity += 1;
-      } else {
-        userData.inventory.push({
-          id: itemId,
-          name: item.name,
-          quantity: 1,
-          uses: item.uses || null
-        });
-      }
+        const userData = await getUserData(senderId);
+        if (userData.balance < item.price) {
+          await reply(`🚫 *Insufficient funds*\n\nRequired: ${ecoSettings.currency}${item.price.toLocaleString()}\nAvailable: ${ecoSettings.currency}${userData.balance.toLocaleString()}`);
+          return;
+        }
 
-      await updateUserData(senderId, { inventory: userData.inventory });
+        // Check if user already has permanent item
+        if (item.type === 'permanent' && userData.activeEffects?.[item.effect]) {
+          await reply('⚠️ *You already own this permanent upgrade*');
+          return;
+        }
 
-      await reply(`✅ *Purchase Successful!*\n\n${item.emoji} *${item.name}*\n💰 *Price:* ${ecoSettings.currency}${item.price.toLocaleString()}\n📝 *Description:* ${item.description}\n\n💡 *Use with:* ${config.PREFIX}use ${itemId}`);
+        await removeMoney(senderId, item.price, 'Shop purchase');
+
+        // Add to inventory
+        const existingItem = userData.inventory.find(invItem => invItem.id === itemId);
+        if (existingItem) {
+          existingItem.quantity += 1;
+        } else {
+          userData.inventory.push({
+            id: itemId,
+            name: item.name,
+            quantity: 1,
+            uses: item.uses || null
+          });
+        }
+
+        await updateUserData(senderId, { inventory: userData.inventory });
+
+        await reply(`✅ *Purchase Successful!*\n\n${item.emoji} *${item.name}*\n💰 *Price:* ${ecoSettings.currency}${item.price.toLocaleString()}\n📝 *Description:* ${item.description}\n\n💡 *Use with:* ${config.PREFIX}use ${itemId}`);
     } else {
       // Show category items
       const categories = {
@@ -2201,29 +2346,38 @@ async function handleLeaderboard(context, args) {
 
     let leaderboard = `${emoji} *${title}* ${emoji}\n\n`;
 
-    users.forEach((user, index) => {
-      const rank = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
-      const userName = user.userId.split('@')[0];
-      const crown = user.activeEffects?.crown ? '👑 ' : '';
+      users.forEach((user, index) => {
+        const rank = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+        const userName = user.userId.split('@')[0];
 
-      leaderboard += `${rank} ${crown}@${userName}\n`;
+        // ✨ NEW: Show tier badges
+        let badge = '';
+        if (user.activeEffects?.royalCrown || user.subscription?.tier === 'titan') {
+          badge = '🔱 ';
+        } else if (user.subscription?.tier === 'supreme') {
+          badge = '🌟 ';
+        } else if (user.activeEffects?.crown) {
+          badge = '👑 ';
+        }
 
-      switch (category) {
-        case 'wealth':
-          const wealth = user.balance + user.bank;
-          leaderboard += `   💰 ${ecoSettings.currency}${wealth.toLocaleString()}\n`;
-          break;
-        case 'work':
-          leaderboard += `   💼 ${user.stats?.workCount || 0} jobs\n`;
-          break;
-        case 'streak':
-          leaderboard += `   🔥 ${user.stats?.maxDailyStreak || 0} days\n`;
-          break;
-        case 'achievements':
-          leaderboard += `   🏆 ${user.achievements?.length || 0} achievements\n`;
-          break;
-      }
-      leaderboard += '\n';
+        leaderboard += `${rank} ${badge}@${userName}\n`;
+
+        switch (category) {
+          case 'wealth':
+            const wealth = user.balance + user.bank;
+            leaderboard += `   💰 ${ecoSettings.currency}${wealth.toLocaleString()}\n`;
+            break;
+          case 'work':
+            leaderboard += `   💼 ${user.stats?.workCount || 0} jobs\n`;
+            break;
+          case 'streak':
+            leaderboard += `   🔥 ${user.stats?.maxDailyStreak || 0} days\n`;
+            break;
+          case 'achievements':
+            leaderboard += `   🏆 ${user.achievements?.length || 0} achievements\n`;
+            break;
+        }
+        leaderboard += '\n';
     });
 
     leaderboard += `💡 Try: ${config.PREFIX}leaderboard [category]`;
@@ -3446,58 +3600,70 @@ async function handleBusiness(context, args) {
         await reply(businessPortfolio);
         break;
 
-      case 'collect':
-        const collectData = await getUserData(senderId);
-        const userBusinesses = collectData.investments?.businesses || [];
+case 'collect':
+const collectData = await getUserData(senderId);
+const userBusinesses = collectData.investments?.businesses || [];
 
-        if (userBusinesses.length === 0) {
-          await reply('🏢 *You don\'t have any businesses to collect profits from.*');
-          return;
-        }
+if (userBusinesses.length === 0) {
+  await reply('🏢 *You don\'t have any businesses to collect profits from.*');
+  return;
+}
 
-        let totalProfit = 0;
-        const now = new Date();
-        const updatedBusinesses = [];
-        const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
+// ✨ NEW: Check if user has instant payout feature (Titan tier)
+const subscription = collectData.subscription || { tier: 'free' };
+const tierConfig = SUBSCRIPTION_TIERS[subscription.tier];
+const hasInstantPayout = tierConfig.features.instantBusinessPayouts;
 
-        userBusinesses.forEach(business => {
-          const lastCollected = new Date(business.lastCollected);
-          const timeSince = now.getTime() - lastCollected.getTime();
+let totalProfit = 0;
+const now = new Date();
+const updatedBusinesses = [];
+const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
 
-          if (timeSince >= twentyFourHoursInMs) {
-            const daysToCollect = Math.floor(timeSince / twentyFourHoursInMs);
-            const currentROI = businessData[business.id]?.roi || business.roi;
-            const profit = business.price * currentROI * daysToCollect;
-            totalProfit += profit;
+userBusinesses.forEach(business => {
+  const lastCollected = new Date(business.lastCollected);
+  const timeSince = now.getTime() - lastCollected.getTime();
 
-            business.lastCollected = new Date(lastCollected.getTime() + daysToCollect * twentyFourHoursInMs);
-          }
+  if (hasInstantPayout || timeSince >= twentyFourHoursInMs) {
+    const daysToCollect = hasInstantPayout ? Math.max(1, Math.floor(timeSince / twentyFourHoursInMs)) : Math.floor(timeSince / twentyFourHoursInMs);
+    const currentROI = businessData[business.id]?.roi || business.roi;
+    const profit = business.price * currentROI * daysToCollect;
+    totalProfit += profit;
 
-          updatedBusinesses.push(business);
-        });
+    business.lastCollected = new Date(lastCollected.getTime() + daysToCollect * twentyFourHoursInMs);
+  }
 
-        if (totalProfit === 0) {
-          let soonestNextCollection = Infinity;
-          userBusinesses.forEach(business => {
-            const nextCollectionTime = new Date(business.lastCollected).getTime() + twentyFourHoursInMs;
-            if (nextCollectionTime < soonestNextCollection) {
-              soonestNextCollection = nextCollectionTime;
-            }
-          });
+  updatedBusinesses.push(business);
+});
 
-          const timeString = helpers.TimeHelpers.formatFutureTime(soonestNextCollection);
+if (totalProfit === 0 && !hasInstantPayout) {
+  let soonestNextCollection = Infinity;
+  userBusinesses.forEach(business => {
+    const nextCollectionTime = new Date(business.lastCollected).getTime() + twentyFourHoursInMs;
+    if (nextCollectionTime < soonestNextCollection) {
+      soonestNextCollection = nextCollectionTime;
+    }
+  });
 
-          await reply(`⏰ *No profits to collect yet*\n\nPlease come back *${timeString}*`);
-          return;
-        }
+  const timeString = helpers.TimeHelpers.formatFutureTime(soonestNextCollection);
+  await reply(`⏰ *No profits to collect yet*\n\nPlease come back *${timeString}*`);
+  return;
+}
 
-        await addMoney(senderId, totalProfit, 'Business profits', false);
-        await updateUserData(senderId, {
-          'investments.businesses': updatedBusinesses
-        });
+await addMoney(senderId, totalProfit, 'Business profits', false);
+await updateUserData(senderId, {
+  'investments.businesses': updatedBusinesses
+});
 
-        await reply(`🏢 *Business Profits Collected!* 🏢\n\n💰 *Total Profit:* ${ecoSettings.currency}${Math.floor(totalProfit).toLocaleString()}\n🏪 *From:* ${userBusinesses.length} businesses\n\n💡 *Your next profits will be available in 24 hours!*`);
-        break;
+let collectMsg = `🏢 *Business Profits Collected!* 🏢\n\n💰 *Total Profit:* ${ecoSettings.currency}${Math.floor(totalProfit).toLocaleString()}\n🏪 *From:* ${userBusinesses.length} businesses\n`;
+
+if (hasInstantPayout) {
+  collectMsg += `\n🔱 *Titan Perk:* Instant collection anytime!`;
+} else {
+  collectMsg += `\n💡 *Your next profits will be available in 24 hours!*`;
+}
+
+await reply(collectMsg);
+break;
 
       default:
         await reply('❓ *Unknown business command*');
