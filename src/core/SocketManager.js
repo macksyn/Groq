@@ -1,4 +1,4 @@
-// src/core/SocketManager.js - Enhanced stability version
+// src/core/SocketManager.js - FIXED: Better conflict handling
 import { EventEmitter } from 'events';
 import {
   makeWASocket,
@@ -9,10 +9,10 @@ import {
 import pino from 'pino';
 import logger from '../utils/logger.js';
 
-// Optimized constants for better stability
-const MAX_RETRIES = 10; // Increased to allow more attempts during unstable periods
+const MAX_RETRIES = 10;
 const BASE_RETRY_DELAY_MS = 2000;
 const MAX_RETRY_DELAY_MS = 30000;
+const CONFLICT_RETRY_DELAY_MS = 8000; // ✅ Special delay for conflicts
 
 export class SocketManager extends EventEmitter {
   constructor(sessionManager, pluginManager, mongoManager) {
@@ -26,13 +26,21 @@ export class SocketManager extends EventEmitter {
     this.isConnecting = false;
     this.status = 'disconnected';
     this.consecutiveErrors = 0;
+    this.lastDisconnectReason = null; // ✅ Track last disconnect
   }
 
   getReconnectDelay() {
-    // If it's a 428 error, we want to reconnect quickly, not exponentially
-    if (this.consecutiveErrors > 0 && this.consecutiveErrors < 3) {
-        return 2000; 
+    // ✅ CONFLICT-SPECIFIC DELAY
+    if (this.lastDisconnectReason === 'conflict') {
+      return CONFLICT_RETRY_DELAY_MS;
     }
+
+    // For 428 errors, reconnect quickly
+    if (this.consecutiveErrors > 0 && this.consecutiveErrors < 3) {
+      return 2000;
+    }
+
+    // Standard exponential backoff
     const delay = BASE_RETRY_DELAY_MS * Math.pow(2, this.retryCount);
     return Math.min(delay, MAX_RETRY_DELAY_MS);
   }
@@ -46,7 +54,10 @@ export class SocketManager extends EventEmitter {
     try {
       this.isConnecting = true;
       this.status = 'connecting';
-      this.emit('statusChange', 'connecting', { attempt: this.retryCount + 1, max: MAX_RETRIES });
+      this.emit('statusChange', 'connecting', { 
+        attempt: this.retryCount + 1, 
+        max: MAX_RETRIES 
+      });
 
       const { state, saveCreds } = await this.sessionManager.getAuthState();
       const { version } = await fetchLatestBaileysVersion();
@@ -55,29 +66,29 @@ export class SocketManager extends EventEmitter {
 
       this.socket = makeWASocket({
         version,
-        logger: pino({ level: 'silent' }), // Keep silent to reduce log noise
+        logger: pino({ level: 'silent' }),
         printQRInTerminal: !this.sessionManager.sessionId,
-        browser: [this.sessionManager.config?.BOT_NAME || 'Malvin-XD', 'Chrome', '120.0.0'], // Updated Browser Version
+        browser: [
+          this.sessionManager.config?.BOT_NAME || 'Malvin-XD', 
+          'Chrome', 
+          '120.0.0'
+        ],
         auth: {
           creds: state.creds,
           keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
         },
 
-        // ✅ STABILITY CONFIGURATION (Fixed)
+        // ✅ OPTIMIZED FOR CONFLICT HANDLING
         markOnlineOnConnect: true,
         syncFullHistory: false,
-        generateHighQualityLinkPreview: true, // Re-enabled for better UX
+        generateHighQualityLinkPreview: true,
 
-        // Standard Timeouts (Don't make these too long, or it hangs)
-        connectTimeoutMs: 60000, 
+        connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
-
-        // Internal Keep Alive (Let Baileys handle it)
-        // 30s is the standard sweet spot. 25s is fine too.
-        keepAliveIntervalMs: 30000, 
+        keepAliveIntervalMs: 30000,
 
         retryRequestDelayMs: 2000,
-        maxMsgRetryCount: 5, // Increased for 428 resilience
+        maxMsgRetryCount: 5,
 
         getMessage: async (key) => {
           if (this.socket?.msgRetryCache?.has(key.id)) {
@@ -117,9 +128,6 @@ export class SocketManager extends EventEmitter {
 
       this.socket.msgRetryCache = new Map();
 
-      // REMOVED: this.startKeepAlive(); 
-      // Reason: Custom Keep-Alive + Internal Keep-Alive = Conflicts
-
       this.setupEventHandlers(saveCreds);
       this.setupConnectionListener();
 
@@ -129,7 +137,7 @@ export class SocketManager extends EventEmitter {
       this.emit('statusChange', 'error', { error: error.message });
       logger.safeError(error, '❌ Failed to initiate connection');
     } finally {
-      this.isConnecting = false; 
+      this.isConnecting = false;
     }
   }
 
@@ -143,7 +151,7 @@ export class SocketManager extends EventEmitter {
     });
 
     this.socket.ev.on('messages.upsert', (messageUpdate) => {
-      this.consecutiveErrors = 0; // Reset error counter on success
+      this.consecutiveErrors = 0;
       this.emit('message', { socket: this.socket, messageUpdate });
 
       if (messageUpdate.messages) {
@@ -160,10 +168,17 @@ export class SocketManager extends EventEmitter {
       }
     });
 
-    // Forward other events
-    this.socket.ev.on('call', (callUpdate) => this.emit('call', { socket: this.socket, callUpdate }));
-    this.socket.ev.on('groups.update', (groupUpdate) => this.emit('groupUpdate', { socket: this.socket, groupUpdate }));
-    this.socket.ev.on('group-participants.update', (event) => this.emit('groupParticipants', { socket: this.socket, event }));
+    this.socket.ev.on('call', (callUpdate) => {
+      this.emit('call', { socket: this.socket, callUpdate });
+    });
+
+    this.socket.ev.on('groups.update', (groupUpdate) => {
+      this.emit('groupUpdate', { socket: this.socket, groupUpdate });
+    });
+
+    this.socket.ev.on('group-participants.update', (event) => {
+      this.emit('groupParticipants', { socket: this.socket, event });
+    });
   }
 
   setupConnectionListener() {
@@ -178,7 +193,10 @@ export class SocketManager extends EventEmitter {
 
       if (connection === 'connecting') {
         this.status = 'connecting';
-        this.emit('statusChange', 'connecting', { attempt: this.retryCount + 1, max: MAX_RETRIES });
+        this.emit('statusChange', 'connecting', { 
+          attempt: this.retryCount + 1, 
+          max: MAX_RETRIES 
+        });
       }
 
       if (connection === 'open') {
@@ -186,6 +204,7 @@ export class SocketManager extends EventEmitter {
         this.status = 'connected';
         this.retryCount = 0;
         this.consecutiveErrors = 0;
+        this.lastDisconnectReason = null; // ✅ Clear disconnect reason
         this.emit('statusChange', 'connected');
       }
 
@@ -201,43 +220,114 @@ export class SocketManager extends EventEmitter {
         let shouldReconnect = true;
         let cleanSessionFirst = false;
 
-        // ✅ HANDLE 428 SPECIFICALLY (The fix for your issue)
-        if (statusCode === 428) {
-            logger.warn('⚠️ Connection Terminated (428). Reconnecting immediately...');
-            // Do NOT clean session for 428, just reconnect fast
-            this.consecutiveErrors++;
-            shouldReconnect = true; 
+        // ✅ HANDLE 440 CONFLICT SPECIFICALLY
+        if (statusCode === 440 && reason.includes('conflict')) {
+          this.consecutiveErrors++;
+          this.lastDisconnectReason = 'conflict'; // ✅ Mark as conflict
+
+          if (this.consecutiveErrors >= 3) {
+            logger.warn('⚠️ Multiple conflicts detected. This may indicate another instance is running.');
+            logger.warn('💡 Waiting longer before retry to let old session expire...');
+          } else {
+            logger.warn(`⚠️ Connection conflict (${this.consecutiveErrors}/3). Another session may be active.`);
+            logger.warn('💡 Waiting for old session to expire before reconnecting...');
+          }
+
+          shouldReconnect = true;
+          // Don't clean session on conflict - we just need to wait
+          cleanSessionFirst = false;
+        }
+
+        // ✅ HANDLE 428 SPECIFICALLY
+        else if (statusCode === 428) {
+          this.consecutiveErrors++;
+          this.lastDisconnectReason = '428';
+
+          if (this.consecutiveErrors >= 3) {
+            logger.warn('⚠️ Multiple 428 errors. Cleaning session...');
+            cleanSessionFirst = true;
+            this.consecutiveErrors = 0;
+          } else {
+            logger.warn(`⚠️ Stream error (${this.consecutiveErrors}/3). Reconnecting...`);
+          }
+          shouldReconnect = true;
         }
 
         // Handle Bad Session
-        if (statusCode === DisconnectReason.badSession) {
+        else if (statusCode === DisconnectReason.badSession) {
           logger.safeError(lastDisconnect?.error, '🚫 Bad session file. Cleaning session...');
+          this.lastDisconnectReason = 'badSession';
           cleanSessionFirst = true;
           shouldReconnect = true;
         }
 
         // Handle Logged Out
-        if (statusCode === DisconnectReason.loggedOut) {
+        else if (statusCode === DisconnectReason.loggedOut) {
           logger.safeError(lastDisconnect?.error, '🚪 Logged out');
+          this.lastDisconnectReason = 'loggedOut';
           shouldReconnect = false;
           cleanSessionFirst = true;
           this.status = 'error';
-          this.emit('statusChange', 'error', { error: 'Logged out', requiresScan: true });
+          this.emit('statusChange', 'error', { 
+            error: 'Logged out', 
+            requiresScan: true 
+          });
         }
 
+        // Handle Connection Replaced
+        else if (statusCode === DisconnectReason.connectionReplaced) {
+          logger.warn('🔄 Connection replaced by another instance');
+          this.lastDisconnectReason = 'replaced';
+          shouldReconnect = false;
+          this.status = 'error';
+          this.emit('statusChange', 'error', { 
+            error: 'Connection replaced' 
+          });
+        }
+
+        // Other disconnects
+        else {
+          this.lastDisconnectReason = 'other';
+        }
+
+        // Reconnection logic
         if (shouldReconnect && this.retryCount < MAX_RETRIES) {
           this.retryCount++;
 
           if (cleanSessionFirst) {
+            logger.safeLog('info', '🧹 Cleaning session files...');
             this.sessionManager.cleanSession();
           }
 
           const delay = this.getReconnectDelay();
-          logger.safeLog('info', `🔄 Reconnecting in ${delay / 1000}s...`);
+          const delaySeconds = (delay / 1000).toFixed(1);
+
+          // ✅ IMPROVED LOGGING
+          if (this.lastDisconnectReason === 'conflict') {
+            logger.safeLog('info', 
+              `🔄 Waiting ${delaySeconds}s for old session to expire... (${this.retryCount}/${MAX_RETRIES})`
+            );
+          } else {
+            logger.safeLog('info', 
+              `🔄 Reconnecting in ${delaySeconds}s... (${this.retryCount}/${MAX_RETRIES})`
+            );
+          }
 
           setTimeout(() => {
-            this.connect().catch(e => logger.safeError(e, 'Reconnection failed'));
+            this.connect().catch(e => 
+              logger.safeError(e, 'Reconnection failed')
+            );
           }, delay);
+
+        } else if (this.retryCount >= MAX_RETRIES) {
+          logger.safeError(
+            lastDisconnect?.error, 
+            `💀 Maximum reconnection attempts (${MAX_RETRIES}) reached`
+          );
+          this.status = 'error';
+          this.emit('statusChange', 'error', { 
+            error: 'Max retries reached' 
+          });
         }
       }
     });
@@ -246,6 +336,13 @@ export class SocketManager extends EventEmitter {
   async disconnect() {
     if (this.socket) {
       try {
+        // ✅ PROPER CLEANUP: Send logout signal
+        if (this.socket.ws?.readyState === 1) {
+          logger.info('📤 Sending logout signal to WhatsApp...');
+          await this.socket.logout();
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+
         this.socket.end();
         this.socket = null;
       } catch (error) {
@@ -255,6 +352,11 @@ export class SocketManager extends EventEmitter {
     this.status = 'disconnected';
   }
 
-  getSocket() { return this.socket; }
-  isReady() { return this.socket && this.status === 'connected'; }
+  getSocket() {
+    return this.socket;
+  }
+
+  isReady() {
+    return this.socket && this.status === 'connected';
+  }
 }
