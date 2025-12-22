@@ -1874,9 +1874,9 @@ async function handleShop(context, args) {
           return;
         }
 
-        const itemId = getItemId(args[1]);
-        const item = { ...SHOP_ITEMS[itemId], ...SUPREME_TITAN_SHOP_ITEMS[itemId] }[itemId];
-
+      const itemId = getItemId(args[1]);
+      const item = SHOP_ITEMS[itemId];
+        
         if (!item) {
           await reply('❌ *Item not found*');
           return;
