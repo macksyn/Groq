@@ -912,7 +912,7 @@ const GRACE_PERIOD_CONFIG = {
   ENABLED: true,
   GRACE_PERIOD_DAYS: 14,  // Players have 14 days to adjust holdings
   LAUNCH_DATE: new Date('2025-12-15T00:00:00+01:00'),  // Change to your launch date
-  AUTO_LIQUIDATION_REFUND_PERCENT: 80,  // Give 80% refund on auto-liquidated items
+  AUTO_LIQUIDATION_REFUND_PERCENT: 5,  // Give 5% refund on auto-liquidated items
   WARNING_THRESHOLD_PERCENT: 100,  // Warn when over 100% of new limit
   IGNORE_BEFORE_LAUNCH: true  // Don't enforce until after launch
 };
