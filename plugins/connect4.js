@@ -16,7 +16,7 @@ const GAME_CONFIG = {
   JOIN_TIMEOUT: 60000, // 60 seconds
   TURN_TIMEOUT: 120000, // 2 minutes
   MIN_WAGER: 1000,
-  MAX_WAGER: 1000000,
+  MAX_WAGER: 1000000000,
   WIN_MULTIPLIER: 1.9, // Winner gets 1.9x the wager (10% house fee)
 };
 
