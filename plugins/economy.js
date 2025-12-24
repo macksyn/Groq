@@ -3612,70 +3612,58 @@ async function handleBusiness(context, args) {
         await reply(businessPortfolio);
         break;
 
-case 'collect':
-const collectData = await getUserData(senderId);
-const userBusinesses = collectData.investments?.businesses || [];
+      case 'collect':
+        const collectData = await getUserData(senderId);
+        const userBusinesses = collectData.investments?.businesses || [];
 
-if (userBusinesses.length === 0) {
-  await reply('🏢 *You don\'t have any businesses to collect profits from.*');
-  return;
-}
+        if (userBusinesses.length === 0) {
+          await reply('🏢 *You don\'t have any businesses to collect profits from.*');
+          return;
+        }
 
-// ✨ NEW: Check if user has instant payout feature (Titan tier)
-const subscription = collectData.subscription || { tier: 'free' };
-const tierConfig = SUBSCRIPTION_TIERS[subscription.tier];
-const hasInstantPayout = tierConfig.features.instantBusinessPayouts;
+        let totalProfit = 0;
+        const now = new Date();
+        const updatedBusinesses = [];
+        const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
 
-let totalProfit = 0;
-const now = new Date();
-const updatedBusinesses = [];
-const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
+        userBusinesses.forEach(business => {
+          const lastCollected = new Date(business.lastCollected);
+          const timeSince = now.getTime() - lastCollected.getTime();
 
-userBusinesses.forEach(business => {
-  const lastCollected = new Date(business.lastCollected);
-  const timeSince = now.getTime() - lastCollected.getTime();
+          if (timeSince >= twentyFourHoursInMs) {
+            const daysToCollect = Math.floor(timeSince / twentyFourHoursInMs);
+            const currentROI = businessData[business.id]?.roi || business.roi;
+            const profit = business.price * currentROI * daysToCollect;
+            totalProfit += profit;
 
-  if (hasInstantPayout || timeSince >= twentyFourHoursInMs) {
-    const daysToCollect = hasInstantPayout ? Math.max(1, Math.floor(timeSince / twentyFourHoursInMs)) : Math.floor(timeSince / twentyFourHoursInMs);
-    const currentROI = businessData[business.id]?.roi || business.roi;
-    const profit = business.price * currentROI * daysToCollect;
-    totalProfit += profit;
+            business.lastCollected = new Date(lastCollected.getTime() + daysToCollect * twentyFourHoursInMs);
+          }
 
-    business.lastCollected = new Date(lastCollected.getTime() + daysToCollect * twentyFourHoursInMs);
-  }
+          updatedBusinesses.push(business);
+        });
 
-  updatedBusinesses.push(business);
-});
+        if (totalProfit === 0) {
+          let soonestNextCollection = Infinity;
+          userBusinesses.forEach(business => {
+            const nextCollectionTime = new Date(business.lastCollected).getTime() + twentyFourHoursInMs;
+            if (nextCollectionTime < soonestNextCollection) {
+              soonestNextCollection = nextCollectionTime;
+            }
+          });
 
-if (totalProfit === 0 && !hasInstantPayout) {
-  let soonestNextCollection = Infinity;
-  userBusinesses.forEach(business => {
-    const nextCollectionTime = new Date(business.lastCollected).getTime() + twentyFourHoursInMs;
-    if (nextCollectionTime < soonestNextCollection) {
-      soonestNextCollection = nextCollectionTime;
-    }
-  });
+          const timeString = helpers.TimeHelpers.formatFutureTime(soonestNextCollection);
 
-  const timeString = helpers.TimeHelpers.formatFutureTime(soonestNextCollection);
-  await reply(`⏰ *No profits to collect yet*\n\nPlease come back *${timeString}*`);
-  return;
-}
+          await reply(`⏰ *No profits to collect yet*\n\nPlease come back *${timeString}*`);
+          return;
+        }
 
-await addMoney(senderId, totalProfit, 'Business profits', false);
-await updateUserData(senderId, {
-  'investments.businesses': updatedBusinesses
-});
+        await addMoney(senderId, totalProfit, 'Business profits', false);
+        await updateUserData(senderId, {
+          'investments.businesses': updatedBusinesses
+        });
 
-let collectMsg = `🏢 *Business Profits Collected!* 🏢\n\n💰 *Total Profit:* ${ecoSettings.currency}${Math.floor(totalProfit).toLocaleString()}\n🏪 *From:* ${userBusinesses.length} businesses\n`;
-
-if (hasInstantPayout) {
-  collectMsg += `\n🔱 *Titan Perk:* Instant collection anytime!`;
-} else {
-  collectMsg += `\n💡 *Your next profits will be available in 24 hours!*`;
-}
-
-await reply(collectMsg);
-break;
+        await reply(`🏢 *Business Profits Collected!* 🏢\n\n💰 *Total Profit:* ${ecoSettings.currency}${Math.floor(totalProfit).toLocaleString()}\n🏪 *From:* ${userBusinesses.length} businesses\n\n💡 *Your next profits will be available in 24 hours!*`);
+        break;
 
       default:
         await reply('❓ *Unknown business command*');
