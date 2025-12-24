@@ -3621,22 +3621,35 @@ async function handleBusiness(context, args) {
           return;
         }
 
+        // Check subscription for instant payout
+        const subscription = collectData.subscription || { tier: 'free' };
+        const tierConfig = SUBSCRIPTION_TIERS[subscription.tier];
+        const hasInstantPayout = tierConfig.features.instantBusinessPayouts;
+
         let totalProfit = 0;
         const now = new Date();
         const updatedBusinesses = [];
         const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
 
+        // Fix any future lastCollected dates (bug fix)
+        userBusinesses.forEach(business => {
+          const lastCollectedDate = new Date(business.lastCollected);
+          if (lastCollectedDate > now) {
+            business.lastCollected = new Date();
+          }
+        });
+
         userBusinesses.forEach(business => {
           const lastCollected = new Date(business.lastCollected);
           const timeSince = now.getTime() - lastCollected.getTime();
 
-          if (timeSince >= twentyFourHoursInMs) {
-            const daysToCollect = Math.floor(timeSince / twentyFourHoursInMs);
+          if (hasInstantPayout || timeSince >= twentyFourHoursInMs) {
+            const daysToCollect = hasInstantPayout ? 1 : Math.floor(timeSince / twentyFourHoursInMs);
             const currentROI = businessData[business.id]?.roi || business.roi;
             const profit = business.price * currentROI * daysToCollect;
             totalProfit += profit;
 
-            business.lastCollected = new Date(lastCollected.getTime() + daysToCollect * twentyFourHoursInMs);
+            business.lastCollected = new Date();
           }
 
           updatedBusinesses.push(business);
@@ -3662,7 +3675,15 @@ async function handleBusiness(context, args) {
           'investments.businesses': updatedBusinesses
         });
 
-        await reply(`🏢 *Business Profits Collected!* 🏢\n\n💰 *Total Profit:* ${ecoSettings.currency}${Math.floor(totalProfit).toLocaleString()}\n🏪 *From:* ${userBusinesses.length} businesses\n\n💡 *Your next profits will be available in 24 hours!*`);
+        let collectMsg = `🏢 *Business Profits Collected!* 🏢\n\n💰 *Total Profit:* ${ecoSettings.currency}${Math.floor(totalProfit).toLocaleString()}\n🏪 *From:* ${userBusinesses.length} businesses\n`;
+
+        if (hasInstantPayout) {
+          collectMsg += `\n🔱 *Titan Perk:* Instant collection anytime!`;
+        } else {
+          collectMsg += `\n💡 *Your next profits will be available in 24 hours!*`;
+        }
+
+        await reply(collectMsg);
         break;
 
       default:
