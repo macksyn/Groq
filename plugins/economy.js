@@ -3643,18 +3643,12 @@ async function handleBusiness(context, args) {
           const lastCollected = new Date(business.lastCollected);
           const timeSince = now.getTime() - lastCollected.getTime();
 
-          if (hasInstantPayout) {
-            // Titan: Can collect anytime, gets 1 day's profit, next collection in 24hrs
-            const currentROI = businessData[business.id]?.roi || business.roi;
-            const profit = business.price * currentROI * 1;
-            totalProfit += profit;
-            business.lastCollected = new Date(now.getTime() + twentyFourHoursInMs);
-          } else if (timeSince >= twentyFourHoursInMs) {
-            // Normal: Collect accumulated profits
-            const daysToCollect = Math.floor(timeSince / twentyFourHoursInMs);
+          if (hasInstantPayout || timeSince >= twentyFourHoursInMs) {
+            const daysToCollect = hasInstantPayout ? 1 : Math.floor(timeSince / twentyFourHoursInMs);
             const currentROI = businessData[business.id]?.roi || business.roi;
             const profit = business.price * currentROI * daysToCollect;
             totalProfit += profit;
+
             business.lastCollected = new Date();
           }
 
