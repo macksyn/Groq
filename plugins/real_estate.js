@@ -58,7 +58,7 @@ export default {
   // ===== V3 Main Handler =====
   async run(context) {
     // Destructure the V3 context object
-    const { msg: m, args, text, command, sock, db, config, bot, logger, helpers } = context;
+    const { msg: m, args, text, command, sock, db, config, bot, logger, helpers, reply } = context;
     const { PermissionHelpers, TimeHelpers } = helpers;
 
     try {
@@ -95,7 +95,7 @@ export default {
           await handleEventsView(context);
           break;
         default:
-          await context.reply('❓ *Unknown real estate command. Use `realestate` for menu.*');
+          await reply('❓ *Unknown real estate command. Use `realestate` for menu.*');
       }
     } catch (error) {
       logger.error('Real Estate Plugin Error:', error);
@@ -301,7 +301,7 @@ async function showRealEstateMenu(context) {
 
 // Handle property purchases
 async function handleBuyProperty(context, args) {
-  const { reply, senderId, config } = context;
+  const { reply, senderId, config, db } = context;
 
   try {
     if (!args || args.length === 0) {
@@ -322,7 +322,7 @@ async function handleBuyProperty(context, args) {
     }
 
     // Check if user can afford it
-    const userData = await getUserData(senderId);
+    const userData = await getUserData(senderId, db);
     const price = property.basePrice;
 
     if (userData.balance < price) {
@@ -331,7 +331,7 @@ async function handleBuyProperty(context, args) {
     }
 
     // Deduct money
-    await removeMoney(senderId, price, `Purchased ${property.name}`);
+    await removeMoney(senderId, price, `Purchased ${property.name}`, db, config);
 
     // Add property to portfolio
     const newProperty = {
@@ -346,7 +346,7 @@ async function handleBuyProperty(context, args) {
 
     await updateUserData(senderId, {
       $push: { 'realEstate.properties': newProperty }
-    });
+    }, db);
 
     await reply(`✅ *Property Purchased!*\n\n${property.emoji} *${property.name}*\n💰 *Cost:* ${config.currency || '₦'}${price.toLocaleString()}\n📅 *Date:* ${new Date().toLocaleDateString()}\n\nUse \`develop\` to build on land!`);
 
@@ -358,10 +358,10 @@ async function handleBuyProperty(context, args) {
 
 // Handle property development
 async function handleDevelopProperty(context, args) {
-  const { reply, senderId, config } = context;
+  const { reply, senderId, config, db } = context;
 
   try {
-    const userData = await getUserData(senderId);
+    const userData = await getUserData(senderId, db);
     const properties = userData.realEstate?.properties || [];
 
     const undevelopedLand = properties.filter(p => !p.developed);
@@ -403,7 +403,7 @@ async function handleDevelopProperty(context, args) {
     }
 
     // Deduct cost
-    await removeMoney(senderId, building.developmentCost, `Developed land into ${building.name}`);
+    await removeMoney(senderId, building.developmentCost, `Developed land into ${building.name}`, db, config);
 
     // Update property
     await updateUserData(senderId, {
@@ -413,7 +413,7 @@ async function handleDevelopProperty(context, args) {
         [`realEstate.properties.${properties.indexOf(selectedLand)}.rentalIncome`]: building.rentalIncome,
         [`realEstate.properties.${properties.indexOf(selectedLand)}.developmentDate`]: new Date()
       }
-    });
+    }, db);
 
     await reply(`✅ *Development Complete!*\n\n${building.emoji} *${building.name}*\n💰 *Cost:* ${config.currency || '₦'}${building.developmentCost.toLocaleString()}\n📈 *Daily Rental:* ${config.currency || '₦'}${building.rentalIncome.toLocaleString()}\n\n⚠️ *Remember maintenance costs!*`);
 
@@ -425,10 +425,10 @@ async function handleDevelopProperty(context, args) {
 
 // Handle property management
 async function handleManageProperties(context, args) {
-  const { reply, senderId, config } = context;
+  const { reply, senderId, config, db } = context;
 
   try {
-    const userData = await getUserData(senderId);
+    const userData = await getUserData(senderId, db);
     const properties = userData.realEstate?.properties || [];
 
     if (properties.length === 0) {
@@ -492,10 +492,10 @@ async function handleMarketView(context) {
 
 // Handle portfolio view
 async function handlePortfolioView(context) {
-  const { reply, senderId, config } = context;
+  const { reply, senderId, config, db } = context;
 
   try {
-    const userData = await getUserData(senderId);
+    const userData = await getUserData(senderId, db);
     const properties = userData.realEstate?.properties || [];
 
     if (properties.length === 0) {
@@ -557,31 +557,135 @@ async function handleSellProperty(context, args) {
 }
 
 // ---------------------------------------------------------------- //
-//  UTILITY FUNCTIONS (reuse from economy plugin)
+//  UTILITY FUNCTIONS (integrated with economy system)
 // ---------------------------------------------------------------- //
 
-// These would be imported from the main economy system
-async function getUserData(userId) {
-  // Placeholder - integrate with economy plugin
-  return {
-    balance: 100000,
-    realEstate: {
-      properties: []
+// Collection names (matching economy plugin)
+const COLLECTIONS = {
+  USERS: 'economy_users',
+  TRANSACTIONS: 'economy_transactions'
+};
+
+// Get database collection
+async function getCollection(collectionName, db) {
+  return db.collection(collectionName);
+}
+
+// Get user data (integrated with economy)
+async function getUserData(userId, db) {
+  try {
+    const usersCollection = await getCollection(COLLECTIONS.USERS, db);
+    let user = await usersCollection.findOne({ userId });
+
+    if (!user) {
+      // Initialize new user
+      user = {
+        userId,
+        balance: 0,
+        bank: 0,
+        realEstate: {
+          properties: []
+        },
+        stats: {},
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+      await usersCollection.insertOne(user);
     }
-  };
+
+    // Ensure realEstate field exists
+    if (!user.realEstate) {
+      user.realEstate = { properties: [] };
+      await usersCollection.updateOne(
+        { userId },
+        { $set: { realEstate: { properties: [] } } }
+      );
+    }
+
+    return user;
+  } catch (error) {
+    console.error('Error getting user data:', error);
+    throw error;
+  }
 }
 
-async function updateUserData(userId, data) {
-  // Placeholder - integrate with economy plugin
-  console.log('Updating user data:', userId, data);
+// Update user data
+async function updateUserData(userId, data, db) {
+  try {
+    const usersCollection = await getCollection(COLLECTIONS.USERS, db);
+    await usersCollection.updateOne(
+      { userId },
+      { ...data, $set: { updatedAt: new Date() } }
+    );
+  } catch (error) {
+    console.error('Error updating user data:', error);
+    throw error;
+  }
 }
 
-async function addMoney(userId, amount, reason) {
-  // Placeholder - integrate with economy plugin
-  console.log('Adding money:', userId, amount, reason);
+// Add money (integrated with economy)
+async function addMoney(userId, amount, reason, db, config) {
+  try {
+    if (Number.isNaN(amount) || !Number.isFinite(amount) || amount < 0) {
+      throw new Error('Invalid amount');
+    }
+
+    const user = await getUserData(userId, db);
+    const newBalance = user.balance + amount;
+
+    await updateUserData(userId, { $set: { balance: newBalance } }, db);
+
+    // Log transaction
+    const transactionsCollection = await getCollection(COLLECTIONS.TRANSACTIONS, db);
+    await transactionsCollection.insertOne({
+      userId,
+      type: 'credit',
+      amount,
+      reason,
+      balanceBefore: user.balance,
+      balanceAfter: newBalance,
+      timestamp: new Date()
+    });
+
+    return { success: true, balance: newBalance };
+  } catch (error) {
+    console.error('Error adding money:', error);
+    return { success: false, message: 'Transaction failed' };
+  }
 }
 
-async function removeMoney(userId, amount, reason) {
-  // Placeholder - integrate with economy plugin
-  console.log('Removing money:', userId, amount, reason);
+// Remove money (integrated with economy)
+async function removeMoney(userId, amount, reason, db, config) {
+  try {
+    if (Number.isNaN(amount) || !Number.isFinite(amount) || amount < 0) {
+      throw new Error('Invalid amount');
+    }
+
+    const user = await getUserData(userId, db);
+
+    if (user.balance < amount) {
+      return { success: false, message: 'Insufficient funds' };
+    }
+
+    const newBalance = user.balance - amount;
+
+    await updateUserData(userId, { $set: { balance: newBalance } }, db);
+
+    // Log transaction
+    const transactionsCollection = await getCollection(COLLECTIONS.TRANSACTIONS, db);
+    await transactionsCollection.insertOne({
+      userId,
+      type: 'debit',
+      amount,
+      reason,
+      balanceBefore: user.balance,
+      balanceAfter: newBalance,
+      timestamp: new Date()
+    });
+
+    return { success: true, balance: newBalance };
+  } catch (error) {
+    console.error('Error removing money:', error);
+    return { success: false, message: 'Transaction failed' };
+  }
 }
