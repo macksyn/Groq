@@ -1,0 +1,1592 @@
+// plugins/club_management.js - Complete Club Business Simulation Game (V3)
+import chalk from 'chalk';
+import moment from 'moment-timezone';
+import { PluginHelpers, unifiedUserManager, safeOperation, getCollection } from '../lib/pluginIntegration.js';
+
+// Simple in-memory rate limiter (per user, per command)
+const rateLimitStore = {};
+const RATE_LIMIT_WINDOW = 10 * 1000; // 10 seconds
+const RATE_LIMIT_MAX = 3; // max 3 commands per window
+
+function isRateLimited(userId, command) {
+  const now = Date.now();
+  if (!rateLimitStore[userId]) rateLimitStore[userId] = {};
+  if (!rateLimitStore[userId][command]) rateLimitStore[userId][command] = [];
+  // Remove expired timestamps
+  rateLimitStore[userId][command] = rateLimitStore[userId][command].filter(ts => now - ts < RATE_LIMIT_WINDOW);
+  if (rateLimitStore[userId][command].length >= RATE_LIMIT_MAX) return true;
+  rateLimitStore[userId][command].push(now);
+  return false;
+}
+
+// ============================================================
+// V3 PLUGIN EXPORT (Required Structure)
+// ============================================================
+
+export default {
+  name: 'Club Management',
+  version: '3.0.0',
+  author: 'Bot Developer',
+  description: 'Complete club business simulation with licensing, equipment, staff, and revenue management',
+  category: 'business',
+  commands: ['club'],
+  aliases: [],
+  scheduledTasks: [
+    {
+      name: 'equipment_breakdown',
+      schedule: '0 */6 * * *', // Every 6 hours
+      description: 'Process equipment degradation and breakdowns',
+      handler: async (context) => await processEquipmentBreakdown(context)
+    },
+    {
+      name: 'license_check',
+      schedule: '0 0 * * 1', // Every Monday at midnight
+      description: 'Check license renewals and apply penalties',
+      handler: async (context) => await processLicenseRenewals(context)
+    },
+    {
+      name: 'weekly_billboard',
+      schedule: '0 0 * * 0', // Every Sunday at midnight
+      description: 'Update weekly billboard rankings',
+      handler: async (context) => await updateWeeklyBillboard(context)
+    },
+    {
+      name: 'revenue_generation',
+      schedule: '0 */4 * * *', // Every 4 hours
+      description: 'Generate passive revenue for active clubs',
+      handler: async (context) => await generatePassiveRevenue(context)
+    },
+    {
+      name: 'celebrity_availability_update',
+      schedule: '0 0 * * *', // Daily at midnight
+      description: 'Randomize celebrity availability',
+      handler: async (context) => await updateCelebrityAvailability(context)
+    },
+    {
+      name: 'utilities_deduction',
+      schedule: '0 0 * * 0', // Weekly Sunday
+      description: 'Deduct utilities and rent',
+      handler: async (context) => await deductUtilities(context)
+    }
+  ],
+
+  // ===== V3 Main Handler =====
+  async run(context) {
+    // Destructure the V3 context object
+    const { msg: m, args, text, command, sock, db, config, bot, logger, helpers } = context;
+
+    if (!m.body || !m.body.startsWith(config.PREFIX)) return;
+    
+    const subCommand = args[0]?.toLowerCase();
+    const userId = m.sender;
+
+    // Rate limiting
+    if (isRateLimited(userId, subCommand)) {
+      await m.reply('⏳ You are sending commands too quickly. Please wait a few seconds.' );
+      return;
+    }
+
+    try {
+      switch (subCommand) {
+        case 'register':
+          await handleClubRegister(m, sock, args.slice(1), userId, db);
+          break;
+        case 'info':
+          await handleClubInfo(m, sock, userId, db);
+          break;
+        case 'buy':
+          await handleClubBuy(m, sock, args.slice(1), userId, db);
+          break;
+        case 'repair':
+          await handleClubRepair(m, sock, args.slice(1), userId, db);
+          break;
+        case 'hire':
+          await handleClubHire(m, sock, args.slice(1), userId, db);
+          break;
+        case 'fire':
+          await handleClubFire(m, sock, args.slice(1), userId, db);
+          break;
+        case 'host':
+          await handleClubHost(m, sock, args.slice(1), userId, db);
+          break;
+        case 'billboard':
+          await handleClubBillboard(m, sock, userId, db);
+          break;
+        case 'market':
+          await handleClubMarket(m, sock, userId, db);
+          break;
+        case 'compete':
+          await handleClubCompete(m, sock, args.slice(1), userId, db);
+          break;
+        case 'sabotage':
+          await handleClubSabotage(m, sock, args.slice(1), userId, db);
+          break;
+        case 'takeover':
+          await handleClubTakeover(m, sock, args.slice(1), userId, db);
+          break;
+        case 'license':
+          await handleClubLicense(m, sock, args.slice(1), userId, db);
+          break;
+        case 'upgrade':
+          await handleClubUpgrade(m, sock, args.slice(1), userId, db);
+          break;
+        case 'leaderboard':
+          await handleClubLeaderboard(m, sock, userId, db);
+          break;
+        case 'book':
+          await handleClubBook(m, sock, args.slice(1), userId, db);
+          break;
+        default:
+          await showClubHelp(m, sock, config.PREFIX);
+          break;
+      }
+    } catch (error) {
+      logger.error(error, '❌ Club management error' );
+      await m.reply('❌ An error occurred while processing your club command. Please try again.' );
+    }
+  }
+};
+
+// Game data and configurations - Updated with real brands, celebrities, and high prices
+const GAME_CONFIG = {
+  EQUIPMENT: {
+    // Sound Equipment (High-end, expensive for economy drain)
+    'jbl_srx815p_speakers': { price: 5000000, durability: 150, category: 'sound', boost: { revenue: 1.3, happiness: 0.12 } },
+    'yamaha_dzr15_speakers': { price: 4500000, durability: 140, category: 'sound', boost: { revenue: 1.25, happiness: 0.1 } },
+    'pioneer_djm900_dj_booth': { price: 8000000, durability: 130, category: 'sound', boost: { revenue: 1.4, happiness: 0.15 } },
+    'bose_l1_pro32_system': { price: 12000000, durability: 160, category: 'sound', boost: { revenue: 1.5, happiness: 0.18 } },
+    
+    // Lighting
+    'chauvet_rogue_r2x_beam': { price: 6000000, durability: 120, category: 'lighting', boost: { revenue: 1.35, happiness: 0.14 } },
+    'martin_mac_aura_xb': { price: 10000000, durability: 150, category: 'lighting', boost: { revenue: 1.45, happiness: 0.16 } },
+    
+    // Furniture & Comfort
+    'vip_leather_booths': { price: 3000000, durability: 200, category: 'furniture', boost: { revenue: 1.25, happiness: 0.1 } },
+    'chrome_bar_stools': { price: 1500000, durability: 180, category: 'furniture', boost: { revenue: 1.15, happiness: 0.08 } },
+    
+    // Security
+    'hikvision_ds2cd_camera': { price: 2000000, durability: 200, category: 'security', boost: { revenue: 1.2, happiness: 0.1 } },
+    'samsung_qn_security_monitor': { price: 3500000, durability: 180, category: 'security', boost: { revenue: 1.25, happiness: 0.12 } }
+  },
+  
+  STAFF: {
+    'dj': { salary: 80000, boost: { revenue: 1.25, happiness: 0.1 }, specialty: 'entertainment' },
+    'bartender': { salary: 50000, boost: { revenue: 1.15, happiness: 0.06 }, specialty: 'service' },
+    'bouncer': { salary: 60000, boost: { revenue: 1.05, happiness: 0.08 }, specialty: 'security' },
+    'cleaner': { salary: 30000, boost: { revenue: 1.03, happiness: 0.04 }, specialty: 'maintenance' },
+    'stripper': { salary: 100000, boost: { revenue: 1.4, happiness: 0.15 }, specialty: 'adult_entertainment' },
+    'waitress': { salary: 40000, boost: { revenue: 1.12, happiness: 0.05 }, specialty: 'service' },
+    'technician': { salary: 70000, boost: { revenue: 1.08, maintenance: 0.2 }, specialty: 'technical' }
+  },
+  
+  LICENSES: {
+    'business': { price: 500000, duration: 365, required: true, description: 'Basic business operation license' },
+    'liquor': { price: 750000, duration: 365, required: false, description: 'Alcohol serving permit' },
+    'adult_entertainment': { price: 1000000, duration: 180, required: false, description: 'Adult entertainment license' },
+    'noise_permit': { price: 250000, duration: 180, required: false, description: 'Late night noise permit' },
+    'food_service': { price: 400000, duration: 365, required: false, description: 'Food service permit' }
+  },
+  
+  UPGRADES: {
+    'premium_interior': { price: 800000, boost: { revenue: 1.3, happiness: 0.12 } },
+    'vip_lounge': { price: 1200000, boost: { revenue: 1.5, happiness: 0.18 } },
+    'rooftop_terrace': { price: 1500000, boost: { revenue: 1.4, happiness: 0.15 } },
+    'private_rooms': { price: 2000000, boost: { revenue: 1.6, happiness: 0.2 } }
+  },
+  
+  EVENTS: {
+    'house_party': { cost: 50000, duration: 4, min_equipment: 2, revenue_multiplier: 1.2 },
+    'themed_night': { cost: 80000, duration: 6, min_equipment: 3, revenue_multiplier: 1.4 },
+    'concert': { cost: 150000, duration: 8, min_equipment: 5, revenue_multiplier: 1.8 },
+    'exclusive_event': { cost: 250000, duration: 12, min_equipment: 8, revenue_multiplier: 2.5 }
+  },
+  
+  CELEBRITIES: {
+    'burna_boy': { fee: 80000000, boost: { revenue: 2.5, happiness: 0.3 }, availability: 0.5, genre: 'afro_fusion' },
+    'wizkid': { fee: 70000000, boost: { revenue: 2.3, happiness: 0.28 }, availability: 0.6, genre: 'afrobeats' },
+    'davido': { fee: 60000000, boost: { revenue: 2.2, happiness: 0.25 }, availability: 0.7, genre: 'afrobeats' },
+    'rema': { fee: 40000000, boost: { revenue: 2.0, happiness: 0.22 }, availability: 0.8, genre: 'afro_rave' },
+    'fireboy_dml': { fee: 30000000, boost: { revenue: 1.8, happiness: 0.2 }, availability: 0.85, genre: 'afrobeats_rnb' },
+    'asake': { fee: 35000000, boost: { revenue: 1.9, happiness: 0.21 }, availability: 0.75, genre: 'fuji_afrobeats' },
+    'olamide': { fee: 25000000, boost: { revenue: 1.7, happiness: 0.18 }, availability: 0.9, genre: 'street_hop' },
+    'ayra_starr': { fee: 30000000, boost: { revenue: 1.8, happiness: 0.2 }, availability: 0.8, genre: 'afropop_rnb' },
+    'tems': { fee: 45000000, boost: { revenue: 2.1, happiness: 0.23 }, availability: 0.7, genre: 'alternative_rnb' },
+    'tiwa_savage': { fee: 40000000, boost: { revenue: 2.0, happiness: 0.22 }, availability: 0.75, genre: 'afrobeats' },
+    'seyi_vibez': { fee: 20000000, boost: { revenue: 1.6, happiness: 0.15 }, availability: 0.9, genre: 'fuji_street_hop' },
+    'oxlade': { fee: 15000000, boost: { revenue: 1.5, happiness: 0.14 }, availability: 0.95, genre: 'afrobeats_rnb' },
+    'joeboy': { fee: 18000000, boost: { revenue: 1.55, happiness: 0.16 }, availability: 0.9, genre: 'afrobeats_pop' },
+    'omah_lay': { fee: 22000000, boost: { revenue: 1.65, happiness: 0.17 }, availability: 0.85, genre: 'afrobeats_soul' },
+    'ckay': { fee: 25000000, boost: { revenue: 1.7, happiness: 0.18 }, availability: 0.8, genre: 'afrobeats_pop' }
+  },
+
+  UTILITIES_BASE_COST: 2000000, // Base weekly utilities/rent, scales with club size
+  INFLATION_RATE: 0.05 // 5% weekly price increase for equipment/licenses
+};
+
+// Scheduled task handlers
+async function processEquipmentBreakdown(context) {
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    const clubs = await clubsCollection.find({ 'equipment.0': { $exists: true } }).toArray();
+    
+    let processedCount = 0;
+    
+    for (const club of clubs) {
+      let updated = false;
+      const equipment = club.equipment || [];
+      
+      for (let item of equipment) {
+        // Calculate breakdown chance based on durability and technician presence
+        const hasTechnician = (club.staff || []).some(s => s.type === 'technician' );
+        const degradationRate = hasTechnician ? 0.5 : 1.0; // Technicians halve degradation
+        
+        // Random degradation (1-3 points), higher during events
+        const degradation = Math.floor(Math.random() * 3 + 1) * degradationRate * (club.weeklyEvents > 2 ? 1.5 : 1.0);
+        item.currentDurability = Math.max(0, item.currentDurability - degradation);
+        
+        // Equipment breaks if durability hits 0
+        if (item.currentDurability <= 0 && !item.broken) {
+          item.broken = true;
+          updated = true;
+        }
+      }
+      
+      if (updated) {
+        await clubsCollection.updateOne(
+          { userId: club.userId },
+          { $set: { equipment: equipment, updatedAt: new Date() } }
+        );
+        processedCount++;
+      }
+    }
+    
+    console.log(chalk.yellow(`⚙️ Processed equipment breakdown for ${processedCount} clubs`));
+  } catch (error) {
+    console.error(chalk.red('❌ Equipment breakdown task error:'), error.message);
+  }
+}
+
+async function processLicenseRenewals(context)  {
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    const clubs = await clubsCollection.find({ 'licenses.0': { $exists: true } }).toArray();
+    
+    const now = new Date();
+    let renewalCount = 0;
+    
+    for (const club of clubs) {
+      let updated = false;
+      const licenses = club.licenses || [];
+      
+      for (let license of licenses) {
+        const expiryDate = new Date(license.expiresAt);
+        
+        // Check if license expired
+        if (now > expiryDate && license.active) {
+          license.active = false;
+          updated = true;
+          
+          // Apply penalty for expired required licenses
+          if (GAME_CONFIG.LICENSES[license.type]?.required) {
+            const penalty = Math.floor(club.balance * 0.1); // 10% penalty
+            club.balance = Math.max(0, club.balance - penalty);
+            
+            // Add to violations
+            if (!club.violations) club.violations = [];
+            club.violations.push({
+              type: 'expired_license',
+              description: `${license.type} license expired`,
+              penalty: penalty,
+              date: now
+            });
+
+            // Escalate: 3 violations = shutdown
+            if (club.violations.length >= 3) {
+              club.isActive = false;
+              club.violations.push({
+                type: 'club_shutdown',
+                description: 'Multiple violations leading to temporary shutdown',
+                date: now
+              });
+            }
+          }
+        }
+      }
+      
+      if (updated) {
+        await clubsCollection.updateOne(
+          { userId: club.userId },
+          { $set: { licenses: licenses, balance: club.balance, violations: club.violations || [], isActive: club.isActive, updatedAt: new Date() } }
+        );
+        renewalCount++;
+      }
+    }
+    
+    console.log(chalk.yellow(`📋 Processed license renewals for ${renewalCount} clubs`));
+  } catch (error) {
+    console.error(chalk.red('❌ License renewal task error:'), error.message);
+  }
+}
+
+async function updateWeeklyBillboard() {
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    const clubs = await clubsCollection.find({}).sort({ weeklyRevenue: -1 }).limit(10).toArray();
+    
+    const billboard = {
+      week: moment().tz('Africa/Lagos').week(),
+      year: moment().tz('Africa/Lagos').year(),
+      updatedAt: new Date(),
+      topEarners: clubs.map((club, index) => ({
+        rank: index + 1,
+        clubName: club.name,
+        owner: club.userId.split('@')[0],
+        revenue: club.weeklyRevenue || 0,
+        rating: calculateClubRating(club),
+        events: club.weeklyEvents || 0
+      }))
+    };
+    
+    // Store billboard
+    const billboardCollection = await getCollection('club_billboard' );
+    await billboardCollection.insertOne(billboard);
+    
+    // Reset weekly stats for all clubs
+    await clubsCollection.updateMany(
+      {},
+      { 
+        $set: { 
+          weeklyRevenue: 0, 
+          weeklyEvents: 0, 
+          updatedAt: new Date() 
+        } 
+      }
+    );
+    
+    console.log(chalk.green(`📊 Updated weekly billboard with ${clubs.length} clubs`));
+  } catch (error) {
+    console.error(chalk.red('❌ Billboard update task error:'), error.message);
+  }
+}
+
+async function generatePassiveRevenue() {
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    const activeClubs = await clubsCollection.find({ 
+      isActive: true,
+      'equipment.0': { $exists: true }
+    }).toArray();
+    
+    let revenueGenerated = 0;
+    
+    for (const club of activeClubs) {
+      let baseRevenue = calculatePassiveRevenue(club);
+      
+      // Deduct salaries more aggressively
+      for (const staff of club.staff || []) {
+        const config = GAME_CONFIG.STAFF[staff.type];
+        if (config) {
+          baseRevenue -= config.salary; // Full deduction if unpaid
+        }
+      }
+
+      if (baseRevenue > 0) {
+        // Add to club balance and user wallet
+        await clubsCollection.updateOne(
+          { userId: club.userId },
+          { 
+            $inc: { 
+              balance: baseRevenue,
+              totalRevenue: baseRevenue,
+              weeklyRevenue: baseRevenue
+            },
+            $set: { lastRevenueAt: new Date() }
+          }
+        );
+        
+        // Also add to user's economy balance
+        await unifiedUserManager.addMoney(club.userId, Math.floor(baseRevenue * 0.3), 'Club passive income' );
+        
+        revenueGenerated += baseRevenue;
+      } else {
+        // Negative revenue leads to violation
+        if (!club.violations) club.violations = [];
+        club.violations.push({
+          type: 'negative_revenue',
+          description: 'Club operating at loss',
+          date: new Date()
+        });
+        await clubsCollection.updateOne(
+          { userId: club.userId },
+          { $set: { violations: club.violations } }
+        );
+      }
+    }
+    
+    console.log(chalk.green(`💰 Generated ₦${revenueGenerated.toLocaleString()} passive revenue for ${activeClubs.length} active clubs`));
+  } catch (error) {
+    console.error(chalk.red('❌ Passive revenue generation error:'), error.message);
+  }
+}
+
+async function updateCelebrityAvailability() {
+  try {
+    const celebritiesCollection = await getCollection('celebrities' );
+    Object.entries(GAME_CONFIG.CELEBRITIES).forEach(async ([name, celeb]) => {
+      const newAvailability = Math.random() * (0.9 - 0.4) + 0.4; // Random 0.4-0.9
+      await celebritiesCollection.updateOne(
+        { name },
+        { $set: { availability: newAvailability, updatedAt: new Date() } },
+        { upsert: true }
+      );
+    });
+    console.log(chalk.green(`🎤 Updated celebrity availabilities`));
+  } catch (error) {
+    console.error(chalk.red('❌ Celebrity availability update error:'), error.message);
+  }
+}
+
+async function deductUtilities() {
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    const clubs = await clubsCollection.find({ isActive: true }).toArray();
+    
+    let totalDeductions = 0;
+    
+    for (const club of clubs) {
+      // Calculate utilities based on size (equipment + staff + upgrades)
+      const clubSize = (club.equipment?.length || 0) + (club.staff?.length || 0) + (club.upgrades?.length || 0);
+      const utilitiesCost = GAME_CONFIG.UTILITIES_BASE_COST + (clubSize * 100000); // Scales with size
+      
+      club.balance = Math.max(0, club.balance - utilitiesCost);
+      
+      if (club.balance < 0) {
+        club.isActive = false;
+        if (!club.violations) club.violations = [];
+        club.violations.push({
+          type: 'utilities_default',
+          description: 'Failed to pay utilities - club shutdown',
+          penalty: utilitiesCost,
+          date: new Date()
+        });
+      }
+      
+      await clubsCollection.updateOne(
+        { userId: club.userId },
+        { $set: { balance: club.balance, isActive: club.isActive, violations: club.violations || [], updatedAt: new Date() } }
+      );
+      
+      totalDeductions += utilitiesCost;
+    }
+    
+    console.log(chalk.yellow(`🏠 Deducted ₦${totalDeductions.toLocaleString()} in utilities across clubs`));
+  } catch (error) {
+    console.error(chalk.red('❌ Utilities deduction task error:'), error.message);
+  }
+}
+
+// Helper functions
+function calculateClubRating(club) {
+  let rating = 50; // Base rating
+  
+  // Equipment quality bonus
+  const workingEquipment = (club.equipment || []).filter(e => !e.broken);
+  rating += workingEquipment.length * 5;
+  
+  // Staff bonus
+  rating += (club.staff || []).length * 8;
+  
+  // License compliance bonus
+  const activeLicenses = (club.licenses || []).filter(l => l.active);
+  rating += activeLicenses.length * 10;
+  
+  // Upgrade bonus
+  rating += (club.upgrades || []).length * 12;
+  
+  // Recent violations penalty (more severe)
+  const recentViolations = (club.violations || []).filter(v => 
+    new Date() - new Date(v.date) < 30 * 24 * 60 * 60 * 1000 // Last 30 days
+  );
+  rating -= recentViolations.length * 20; // Increased penalty
+  
+  return Math.max(0, Math.min(100, Math.round(rating)));
+}
+
+function calculatePassiveRevenue(club) {
+  let baseRevenue = 10000; // Increased base for higher stakes
+  
+  // Equipment multipliers (cap to prevent exploits)
+  const workingEquipment = (club.equipment || []).filter(e => !e.broken).slice(0, 10); // Cap at 10
+  for (const item of workingEquipment) {
+    const config = GAME_CONFIG.EQUIPMENT[item.type];
+    if (config) {
+      baseRevenue *= config.boost.revenue || 1.0;
+    }
+  }
+  
+  // Staff multipliers (cap at 15 staff)
+  const staff = (club.staff || []).slice(0, 15);
+  for (const s of staff) {
+    const config = GAME_CONFIG.STAFF[s.type];
+    if (config) {
+      baseRevenue *= config.boost.revenue || 1.0;
+      // Deduct salary
+      baseRevenue -= config.salary / 6; // Hourly salary deduction
+    }
+  }
+  
+  // License penalties
+  const hasBusinessLicense = (club.licenses || []).some(l => l.type === 'business' && l.active);
+  if (!hasBusinessLicense) {
+    baseRevenue *= 0.5; // 50% penalty for no business license
+  }
+  
+  // Upgrade multipliers
+  for (const upgrade of club.upgrades || []) {
+    const config = GAME_CONFIG.UPGRADES[upgrade.type];
+    if (config) {
+      baseRevenue *= config.boost.revenue || 1.0;
+    }
+  }
+  
+  return Math.max(0, Math.floor(baseRevenue));
+}
+
+
+
+// Command handlers
+async function handleClubRegister(m, sock, args, userId, db) {
+  if (args.length === 0) {
+    await m.reply('❌ Please provide a club name!\n\n*Usage:* /club register <name>' );
+    return;
+  }
+  
+  // Sanitize club name: allow only letters, numbers, spaces, hyphens
+  const clubName = args.join(' ').replace(/[^\w\s-]/g, '').trim();
+  if (clubName.length < 3 || clubName.length > 30) {
+    await m.reply('❌ Club name must be between 3-30 characters and contain only letters, numbers, spaces, and hyphens!' );
+    return;
+  }
+  
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    
+    // Check if user already has a club
+    const existingClub = await clubsCollection.findOne({ userId });
+    if (existingClub) {
+      await m.reply('❌ You already own a club! Use `/club info` to view your club details.' );
+      return;
+    }
+    
+    // Check if name is already taken
+    // Escape regex special characters in clubName
+    const escapedClubName = clubName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&' );
+    const nameExists = await clubsCollection.findOne({ 
+      name: { $regex: new RegExp(`^${escapedClubName}$`, 'i') }
+    });
+    
+    if (nameExists) {
+      await m.reply('❌ This club name is already taken! Please choose a different name.' );
+      return;
+    }
+    
+    // Check if user has enough money (registration fee: 1,0000,000)
+    const registrationFee = 10000000; // Increased
+    const userBalance = await PluginHelpers.getBalance(userId);
+    
+    if (userBalance.wallet < registrationFee) {
+      await m.reply(`❌ Insufficient funds! Club registration costs ₦${registrationFee.toLocaleString()}.\n\nYour wallet: ₦${userBalance.wallet.toLocaleString()}`);
+      return;
+    }
+    
+    // Deduct registration fee
+    await unifiedUserManager.removeMoney(userId, registrationFee, 'Club registration fee' );
+    
+    // Create new club
+    const newClub = {
+      userId,
+      name: clubName,
+      balance: 0,
+      totalRevenue: 0,
+      weeklyRevenue: 0,
+      weeklyEvents: 0,
+      equipment: [],
+      staff: [],
+      licenses: [],
+      upgrades: [],
+      violations: [],
+      reputation: 50,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastRevenueAt: null
+    };
+    
+    await clubsCollection.insertOne(newClub);
+    
+    const successMsg = `🎉 *Club Registration Successful!*
+
+🏷️ *Club Name:* ${clubName}
+💰 *Registration Fee:* ₦${registrationFee.toLocaleString()}
+⭐ *Starting Reputation:* ${newClub.reputation}/100
+
+📋 *Next Steps:*
+• Purchase business license: \`/club license business\`
+• Buy equipment: \`/club market\`
+• Hire staff: \`/club hire <staff_type>\`
+• Host your first event: \`/club host house_party\`
+
+💡 *Tip:* A business license is mandatory to operate legally!`;
+
+    await m.reply(successMsg);
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Club registration error:'), error.message);
+    await m.reply('❌ Failed to register club. Please try again.' );
+  }
+}
+
+async function handleClubInfo(m, sock, userId, db) {
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await m.reply('❌ You don\'t own a club! Use `/club register <name>` to start your club business.' );
+      return;
+    }
+    
+    // Calculate current stats
+    const rating = calculateClubRating(club);
+    const workingEquipment = (club.equipment || []).filter(e => !e.broken);
+    const brokenEquipment = (club.equipment || []).filter(e => e.broken);
+    const activeLicenses = (club.licenses || []).filter(l => l.active);
+    const expiredLicenses = (club.licenses || []).filter(l => !l.active);
+    
+    let infoMsg = `🏢 *${club.name}*
+━━━━━━━━━━━━━━━━━━━
+
+💰 *Finances*
+• Club Balance: ₦${club.balance.toLocaleString()}
+• Total Revenue: ₦${club.totalRevenue.toLocaleString()}
+• Weekly Revenue: ₦${club.weeklyRevenue.toLocaleString()}
+
+⭐ *Status*
+• Reputation: ${rating}/100 ${getRatingEmoji(rating)}
+• Status: ${club.isActive ? '🟢 Active' : '🔴 Inactive'}
+• Weekly Events: ${club.weeklyEvents || 0}
+
+🎵 *Equipment (${club.equipment?.length || 0})*`;
+
+    if (workingEquipment.length > 0) {
+      infoMsg += `\n• Working: ${workingEquipment.length}`;
+      workingEquipment.slice(0, 3).forEach(eq => {
+        infoMsg += `\n  - ${eq.type.replace(/_/g, ' ')} (${eq.currentDurability}%)`;
+      });
+      if (workingEquipment.length > 3) {
+        infoMsg += `\n  - ... and ${workingEquipment.length - 3} more`;
+      }
+    }
+    
+    if (brokenEquipment.length > 0) {
+      infoMsg += `\n• Broken: ${brokenEquipment.length} 🔧`;
+    }
+    
+    infoMsg += `\n\n👥 *Staff (${club.staff?.length || 0})*`;
+    if (club.staff && club.staff.length > 0) {
+      club.staff.slice(0, 5).forEach(staff => {
+        infoMsg += `\n• ${staff.name} (${staff.type})`;
+      });
+      if (club.staff.length > 5) {
+        infoMsg += `\n• ... and ${club.staff.length - 5} more`;
+      }
+    } else {
+      infoMsg += '\n• No staff hired';
+    }
+    
+    infoMsg += `\n\n📋 *Licenses*`;
+    if (activeLicenses.length > 0) {
+      infoMsg += `\n• Active: ${activeLicenses.length}`;
+      activeLicenses.forEach(license => {
+        const daysLeft = Math.ceil((new Date(license.expiresAt) - new Date()) / (1000 * 60 * 60 * 24));
+        infoMsg += `\n  - ${license.type} (${daysLeft}d left)`;
+      });
+    }
+    
+    if (expiredLicenses.length > 0) {
+      infoMsg += `\n• Expired: ${expiredLicenses.length} ⚠️`;
+    }
+    
+    if (!activeLicenses.some(l => l.type === 'business')) {
+      infoMsg += `\n\n⚠️ *Warning: No business license!*`;
+    }
+    
+    if (club.violations && club.violations.length > 0) {
+      infoMsg += `\n\n🚨 *Recent Violations: ${club.violations.length}*`;
+    }
+    
+    infoMsg += `\n\n💡 *Quick Commands:*
+• \`/club market\` - Browse equipment
+• \`/club hire <staff>\` - Hire staff
+• \`/club host <event>\` - Host events
+• \`/club book <celebrity> <event>\` - Book celebrities
+• \`/club billboard\` - View rankings`;
+
+    await m.reply(infoMsg);
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Club info error:'), error.message);
+    await m.reply('❌ Failed to retrieve club information.' );
+  }
+}
+
+async function handleClubMarket(m, sock, userId, db) {
+  try {
+    let marketMsg = `🛍️ *Club Equipment Market*
+━━━━━━━━━━━━━━━━━━━
+
+🔊 *SOUND EQUIPMENT*`;
+    
+    Object.entries(GAME_CONFIG.EQUIPMENT).forEach(([key, item]) => {
+      if (item.category === 'sound') {
+        marketMsg += `\n• ${key.replace(/_/g, ' ')}: ₦${item.price.toLocaleString()} (${item.durability} dur.)`;
+      }
+    });
+    
+    marketMsg += `\n\n💡 *LIGHTING*`;
+    Object.entries(GAME_CONFIG.EQUIPMENT).forEach(([key, item]) => {
+      if (item.category === 'lighting') {
+        marketMsg += `\n• ${key.replace(/_/g, ' ')}: ₦${item.price.toLocaleString()} (${item.durability} dur.)`;
+      }
+    });
+    
+    marketMsg += `\n\n🪑 *FURNITURE*`;
+    Object.entries(GAME_CONFIG.EQUIPMENT).forEach(([key, item]) => {
+      if (item.category === 'furniture') {
+        marketMsg += `\n• ${key.replace(/_/g, ' ')}: ₦${item.price.toLocaleString()} (${item.durability} dur.)`;
+      }
+    });
+    
+    marketMsg += `\n\n🛡️ *SECURITY*`;
+    Object.entries(GAME_CONFIG.EQUIPMENT).forEach(([key, item]) => {
+      if (item.category === 'security') {
+        marketMsg += `\n• ${key.replace(/_/g, ' ')}: ₦${item.price.toLocaleString()} (${item.durability} dur.)`;
+      }
+    });
+    
+    marketMsg += `\n\n💼 *STAFF AVAILABLE*`;
+    Object.entries(GAME_CONFIG.STAFF).forEach(([key, staff]) => {
+      marketMsg += `\n• ${key.replace(/_/g, ' ')}: Salary ₦${staff.salary.toLocaleString()} (Revenue Boost: ${Math.round((staff.boost.revenue - 1) * 100)}%)`;
+    });
+    
+    marketMsg += `\n\n⭐ *CELEBRITIES FOR BOOKING*`;
+    Object.entries(GAME_CONFIG.CELEBRITIES).forEach(([key, celeb]) => {
+      marketMsg += `\n• ${key.replace(/_/g, ' ')}: Fee ₦${celeb.fee.toLocaleString()} (Revenue Boost: ${Math.round((celeb.boost.revenue - 1) * 100)}%)`;
+    });
+    
+    marketMsg += `\n\n*Usage:* /club buy <item> | /club hire <staff> | /club book <celebrity> <event>\n\nPrices subject to 5% weekly inflation!`;
+
+    await m.reply(marketMsg);
+  } catch (error) {
+    console.error(chalk.red('❌ Club market error:'), error.message);
+    await m.reply('❌ Failed to load market.' );
+  }
+}
+
+async function handleClubBuy(m, sock, args, userId, db) {
+  if (args.length === 0) {
+    await m.reply('❌ Please specify item to buy!\n\n*Usage:* /club buy <item_name>\n\nView available: /club market' );
+    return;
+  }
+  
+  const itemName = args.join('_').toLowerCase();
+  
+  const { MongoClient } = require('mongodb' );
+  const client = await MongoClient.connect(process.env.MONGO_URI, { useUnifiedTopology: true });
+  const session = client.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const clubsCollection = client.db().collection('clubs' );
+      const club = await clubsCollection.findOne({ userId }, { session });
+      
+      if (!club) {
+        await m.reply('❌ You don\'t own a club!' );
+        await session.abortTransaction();
+        return;
+      }
+      
+      const equipment = GAME_CONFIG.EQUIPMENT[itemName];
+      if (!equipment) {
+        await m.reply(`❌ Item "${itemName.replace(/_/g, ' ')}" not found!\n\nView available: /club market`);
+        await session.abortTransaction();
+        return;
+      }
+      
+      // Cap equipment at 10
+      if (club.equipment?.length >= 10) {
+        await m.reply('❌ Maximum equipment limit reached (10 items)! Repair or sell existing ones.' );
+        await session.abortTransaction();
+        return;
+      }
+      
+      const userBalance = await PluginHelpers.getBalance(userId);
+      
+      if (userBalance.wallet < equipment.price) {
+        await m.reply(`❌ Insufficient funds!\n\n*Item:* ${itemName.replace(/_/g, ' ')}\n*Price:* ₦${equipment.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`);
+        await session.abortTransaction();
+        return;
+      }
+      
+      // Deduct money and add equipment
+      await unifiedUserManager.removeMoney(userId, equipment.price, `Club equipment: ${itemName}`, { session });
+      
+      const newEquipment = {
+        type: itemName,
+        purchasedAt: new Date(),
+        currentDurability: equipment.durability,
+        maxDurability: equipment.durability,
+        broken: false,
+        timesRepaired: 0
+      };
+      
+      await clubsCollection.updateOne(
+        { userId },
+        { 
+          $push: { equipment: newEquipment },
+          $set: { updatedAt: new Date() }
+        },
+        { session }
+      );
+      
+      const successMsg = `✅ *Equipment Purchased!*
+
+🛍️ *Item:* ${itemName.replace(/_/g, ' ')}
+💰 *Cost:* ₦${equipment.price.toLocaleString()}
+🔧 *Durability:* ${equipment.durability}
+📈 *Revenue Boost:* ${Math.round((equipment.boost.revenue - 1) * 100)}%
+
+💡 *Tip:* Hire a technician to reduce equipment wear!`;
+
+      await m.reply(successMsg);
+    });
+  } catch (error) {
+    console.error(chalk.red('❌ Club buy error:'), error.message);
+    await m.reply('❌ Failed to purchase equipment.' );
+  } finally {
+    await session.endSession();
+    await client.close();
+  }
+}
+
+async function handleClubRepair(m, sock, args, userId, db) {
+  if (args.length === 0) {
+    await m.reply('❌ Please specify equipment to repair!\n\n*Usage:* /club repair <equipment_name>' );
+    return;
+  }
+  
+  const itemName = args.join('_').toLowerCase();
+  
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await m.reply('❌ You don\'t own a club!' );
+      return;
+    }
+    
+    const equipment = club.equipment || [];
+    const itemIndex = equipment.findIndex(eq => eq.type === itemName);
+    
+    if (itemIndex === -1) {
+      await m.reply(`❌ You don't own "${itemName.replace(/_/g, ' ')}" equipment!`);
+      return;
+    }
+    
+    const item = equipment[itemIndex];
+    
+    if (!item.broken && item.currentDurability >= item.maxDurability * 0.9) {
+      await m.reply(`❌ "${itemName.replace(/_/g, ' ')}" doesn't need repair!\n\nCurrent durability: ${item.currentDurability}/${item.maxDurability}`);
+      return;
+    }
+    
+    const equipmentConfig = GAME_CONFIG.EQUIPMENT[itemName];
+    const repairCost = Math.floor(equipmentConfig.price * 0.5);
+    const userBalance = await PluginHelpers.getBalance(userId);
+    
+    if (userBalance.wallet < repairCost) {
+      await m.reply(`❌ Insufficient funds for repair!\n\n*Repair Cost:* ₦${repairCost.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`);
+      return;
+    }
+    
+    // Deduct money first
+    const moneyRemoved = await unifiedUserManager.removeMoney(userId, repairCost, `Repair: ${itemName}`);
+    
+    if (!moneyRemoved) {
+      await m.reply('❌ Failed to deduct repair cost. Please try again.' );
+      return;
+    }
+    
+    equipment[itemIndex].currentDurability = item.maxDurability;
+    equipment[itemIndex].broken = false;
+    equipment[itemIndex].timesRepaired = (item.timesRepaired || 0) + 1;
+    equipment[itemIndex].lastRepairedAt = new Date();
+    
+    await clubsCollection.updateOne(
+      { userId },
+      {
+        $set: {
+          equipment: equipment,
+          updatedAt: new Date()
+        }
+      }
+    );
+    
+    const successMsg = `🔧 *Equipment Repaired!*
+
+🛍️ *Item:* ${itemName.replace(/_/g, ' ')}
+💰 *Cost:* ₦${repairCost.toLocaleString()}
+🔧 *New Durability:* ${item.maxDurability}/${item.maxDurability}
+🔄 *Times Repaired:* ${equipment[itemIndex].timesRepaired}
+
+✅ Your equipment is now fully operational!`;
+
+    await m.reply(successMsg);
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Club repair error:'), error.message);
+    await m.reply('❌ Failed to repair equipment.' );
+  }
+}
+
+async function handleClubHire(m, sock, args, userId, db) {
+  if (args.length === 0) {
+    await m.reply('❌ Please specify staff type to hire!\n\n*Usage:* /club hire <staff_type>\n\n*Available Staff:*\n' + Object.keys(GAME_CONFIG.STAFF).map(s => `• ${s}`).join('\n'));
+    return;
+  }
+  
+  const staffType = args[0].replace(/[^a-zA-Z_]/g, '').toLowerCase();
+  
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await m.reply('❌ You don\'t own a club!' );
+      return;
+    }
+    
+    const staffConfig = GAME_CONFIG.STAFF[staffType];
+    if (!staffConfig) {
+      await m.reply(`❌ Staff type "${staffType}" not found!\n\n*Available:* ${Object.keys(GAME_CONFIG.STAFF).join(', ')}`);
+      return;
+    }
+    
+    const existingStaff = (club.staff || []).filter(s => s.type === staffType);
+    if (existingStaff.length >= 2) {
+      await m.reply(`❌ You already have maximum ${staffType}s (2 max per type)!\n\nUse \`/club fire ${staffType}\` to make room.`);
+      return;
+    }
+    
+    const hiringCost = staffConfig.salary * 4;
+    const userBalance = await PluginHelpers.getBalance(userId);
+    
+    if (userBalance.wallet < hiringCost) {
+      await m.reply(`❌ Insufficient funds to hire ${staffType}!\n\n*Cost:* ₦${hiringCost.toLocaleString()} (4 weeks salary)\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`);
+      return;
+    }
+    
+    if (staffType === 'stripper') {
+      const hasAdultLicense = (club.licenses || []).some(l => l.type === 'adult_entertainment' && l.active);
+      if (!hasAdultLicense) {
+        await m.reply('❌ You need an active adult entertainment license to hire strippers!\n\nUse `/club license adult_entertainment` first.' );
+        return;
+      }
+    }
+    
+    const names = {
+      dj: ['DJ Neptune', 'DJ Cuppy', 'DJ Spinall', 'DJ Big N', 'DJ Xclusive'],
+      bartender: ['Angella', 'Maria', 'Jay', 'Lisa', 'Sandra'],
+      bouncer: ['Big Joe', 'Marcus', 'Steel', 'Bruno', 'Tank'],
+      cleaner: ['Rosa', 'Ahmed', 'Grace', 'Pedro', 'Kim'],
+      stripper: ['Diamond', 'Cherry', 'Angel', 'Raven', 'Candy'],
+      waitress: ['Sophie', 'Emma', 'Olivia', 'Mia', 'Ava'],
+      technician: ['Tech Sam', 'Engineer Bob', 'Geek Paul', 'Pro Lisa', 'Wizard John']
+    };
+    const randomName = names[staffType][Math.floor(Math.random() * names[staffType].length)];
+    
+    // Deduct money first
+    const moneyRemoved = await unifiedUserManager.removeMoney(userId, hiringCost, `Hire ${staffType}: ${randomName}`);
+    
+    if (!moneyRemoved) {
+      await m.reply('❌ Failed to deduct hiring cost. Please try again.' );
+      return;
+    }
+    
+    const newStaff = {
+      type: staffType,
+      name: randomName,
+      hiredAt: new Date(),
+      weeksHired: 4,
+      performance: Math.floor(Math.random() * 20) + 80,
+      salary: staffConfig.salary
+    };
+    
+    await clubsCollection.updateOne(
+      { userId },
+      {
+        $push: { staff: newStaff },
+        $set: { updatedAt: new Date() }
+      }
+    );
+    
+    const successMsg = `✅ *Staff Hired Successfully!*
+
+👤 *Name:* ${randomName}
+💼 *Position:* ${staffType}
+💰 *Cost:* ₦${hiringCost.toLocaleString()} (4 weeks prepaid)
+📊 *Performance:* ${newStaff.performance}%
+📈 *Revenue Boost:* ${Math.round((staffConfig.boost.revenue - 1) * 100)}%
+
+🎉 ${randomName} is now working at your club!`;
+    
+    await m.reply(successMsg);
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Club hire error:'), error.message);
+    await m.reply('❌ Failed to hire staff. Please try again.' );
+  }
+}
+
+async function handleClubLicense(m, sock, args, userId, db) {
+  if (args.length === 0) {
+    let licenseMsg = `📋 *Available Licenses*
+━━━━━━━━━━━━━━━━━━━
+
+`;
+    
+    Object.entries(GAME_CONFIG.LICENSES).forEach(([key, license]) => {
+      const required = license.required ? ' ⚠️ *REQUIRED*' : '';
+      licenseMsg += `🏷️ *${key.replace(/_/g, ' ')}*${required}
+• Price: ₦${license.price.toLocaleString()}
+• Duration: ${license.duration} days
+• ${license.description}
+
+`;
+    });
+    
+    licenseMsg += `*Usage:* \`/club license <type>\``;
+    
+    await m.reply(licenseMsg);
+    return;
+  }
+  
+  const licenseType = args[0].toLowerCase();
+  
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await m.reply('❌ You don\'t own a club!' );
+      return;
+    }
+    
+    const licenseConfig = GAME_CONFIG.LICENSES[licenseType];
+    if (!licenseConfig) {
+      await m.reply(`❌ License type "${licenseType}" not found!\n\n*Available:* ${Object.keys(GAME_CONFIG.LICENSES).join(', ')}`);
+      return;
+    }
+    
+    // Check if already has active license
+    const existingLicense = (club.licenses || []).find(l => l.type === licenseType && l.active);
+    if (existingLicense) {
+      const daysLeft = Math.ceil((new Date(existingLicense.expiresAt) - new Date()) / (1000 * 60 * 60 * 24));
+      await m.reply(`❌ You already have an active ${licenseType} license!\n\nExpires in: ${daysLeft} days\n\nLet it expire before purchasing a new one.`);
+      return;
+    }
+    
+    const userBalance = await PluginHelpers.getBalance(userId);
+    
+    if (userBalance.wallet < licenseConfig.price) {
+      await m.reply(`❌ Insufficient funds!\n\n*License:* ${licenseType}\n*Price:* ₦${licenseConfig.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`);
+      return;
+    }
+    
+    // Purchase license
+    await unifiedUserManager.removeMoney(userId, licenseConfig.price, `License: ${licenseType}`);
+    
+    const newLicense = {
+      type: licenseType,
+      purchasedAt: new Date(),
+      expiresAt: new Date(Date.now() + licenseConfig.duration * 24 * 60 * 60 * 1000),
+      active: true,
+      price: licenseConfig.price
+    };
+    
+    await clubsCollection.updateOne(
+      { userId },
+      { 
+        $push: { licenses: newLicense },
+        $set: { updatedAt: new Date() }
+      }
+    );
+    
+    const successMsg = `✅ *License Purchased!*
+
+📋 *Type:* ${licenseType.replace(/_/g, ' ')}
+💰 *Cost:* ₦${licenseConfig.price.toLocaleString()}
+⏰ *Duration:* ${licenseConfig.duration} days
+📅 *Expires:* ${moment(newLicense.expiresAt).tz('Africa/Lagos').format('DD/MM/YYYY')}
+
+${licenseConfig.required ? '🎉 Your club can now operate legally!' : '🌟 This license unlocks new opportunities!'}`;
+
+    await m.reply(successMsg);
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Club license error:'), error.message);
+    await m.reply('❌ Failed to purchase license.' );
+  }
+}
+
+async function handleClubHost(m, sock, args, userId, db) {
+  if (args.length === 0) {
+    let eventMsg = `🎪 *Available Events*
+━━━━━━━━━━━━━━━━━━━
+
+`;
+    
+    Object.entries(GAME_CONFIG.EVENTS).forEach(([key, event]) => {
+      eventMsg += `🎉 *${key.replace(/_/g, ' ')}*
+• Cost: ₦${event.cost.toLocaleString()}
+• Duration: ${event.duration} hours
+• Min Equipment: ${event.min_equipment}
+• Revenue Multiplier: ${event.revenue_multiplier}x
+
+`;
+    });
+    
+    eventMsg += `*Usage:* \`/club host <event_type>\``;
+    
+    await m.reply(eventMsg);
+    return;
+  }
+  
+  const eventType = args[0].toLowerCase();
+  
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await m.reply('❌ You don\'t own a club!' );
+      return;
+    }
+    
+    const eventConfig = GAME_CONFIG.EVENTS[eventType];
+    if (!eventConfig) {
+      await m.reply(`❌ Event type "${eventType}" not found!\n\n*Available:* ${Object.keys(GAME_CONFIG.EVENTS).join(', ')}`);
+      return;
+    }
+    
+    // Check if club has business license
+    const hasBusinessLicense = (club.licenses || []).some(l => l.type === 'business' && l.active);
+    if (!hasBusinessLicense) {
+      await m.reply('❌ You need an active business license to host events!\n\nUse `/club license business` first.' );
+      return;
+    }
+    
+    // Check equipment requirements
+    const workingEquipment = (club.equipment || []).filter(e => !e.broken);
+    if (workingEquipment.length < eventConfig.min_equipment) {
+      await m.reply(`❌ Not enough working equipment!\n\n*Required:* ${eventConfig.min_equipment} working equipment\n*You have:* ${workingEquipment.length}\n\nBuy more equipment or repair broken ones.`);
+      return;
+    }
+    
+    const userBalance = await PluginHelpers.getBalance(userId);
+    
+    if (userBalance.wallet < eventConfig.cost) {
+      await m.reply(`❌ Insufficient funds!\n\n*Event:* ${eventType}\n*Cost:* ₦${eventConfig.cost.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`);
+      return;
+    }
+    
+    // Calculate event revenue
+    let baseRevenue = eventConfig.cost * eventConfig.revenue_multiplier;
+    
+    // Apply equipment and staff bonuses
+    for (const equipment of workingEquipment) {
+      const config = GAME_CONFIG.EQUIPMENT[equipment.type];
+      if (config) {
+        baseRevenue *= config.boost.revenue || 1.0;
+      }
+    }
+    
+    for (const staff of club.staff || []) {
+      const config = GAME_CONFIG.STAFF[staff.type];
+      if (config) {
+        baseRevenue *= config.boost.revenue || 1.0;
+      }
+    }
+    
+    const finalRevenue = Math.floor(baseRevenue);
+    const profit = finalRevenue - eventConfig.cost;
+    
+    // Host the event
+    await unifiedUserManager.removeMoney(userId, eventConfig.cost, `Host event: ${eventType}`);
+    await unifiedUserManager.addMoney(userId, Math.floor(finalRevenue * 0.4), `Event revenue: ${eventType}`);
+    
+    // Update club stats
+    await clubsCollection.updateOne(
+      { userId },
+      { 
+        $inc: { 
+          balance: finalRevenue,
+          totalRevenue: finalRevenue,
+          weeklyRevenue: finalRevenue,
+          weeklyEvents: 1
+        },
+        $set: { 
+          lastEventAt: new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+    
+    // Increased chance of equipment breakdown during event (20%)
+    if (Math.random() < 0.2) {
+      const randomEquipment = workingEquipment[Math.floor(Math.random() * workingEquipment.length)];
+      randomEquipment.currentDurability = Math.max(0, randomEquipment.currentDurability - 20); // Higher damage
+      
+      if (randomEquipment.currentDurability <= 0) {
+        randomEquipment.broken = true;
+      }
+      
+      const updatedEquipment = club.equipment.map(e => 
+        e.type === randomEquipment.type ? randomEquipment : e
+      );
+      
+      await clubsCollection.updateOne(
+        { userId },
+        { $set: { equipment: updatedEquipment } }
+      );
+    }
+    
+    const successMsg = `🎉 *Event Hosted Successfully!*
+
+🎪 *Event:* ${eventType.replace(/_/g, ' ')}
+💰 *Investment:* ₦${eventConfig.cost.toLocaleString()}
+📈 *Revenue:* ₦${finalRevenue.toLocaleString()}
+💵 *Profit:* ₦${profit.toLocaleString()}
+⏰ *Duration:* ${eventConfig.duration} hours
+
+${profit > 0 ? '🎊 Great success! Your club is thriving!' : '📉 Consider improving equipment and staff for better returns.'}`;
+
+    await m.reply(successMsg);
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Club host error:'), error.message);
+    await m.reply('❌ Failed to host event.' );
+  }
+}
+
+async function handleClubBillboard(m, sock, userId, db) {
+  try {
+    const billboardCollection = await getCollection('club_billboard' );
+    const latestBillboard = await billboardCollection.findOne({}, { sort: { updatedAt: -1 } });
+    
+    if (!latestBillboard) {
+      await m.reply('📊 No billboard data available yet!\n\nCheck back after the first weekly update.' );
+      return;
+    }
+    
+    let billboardMsg = `📊 *Weekly Club Billboard*
+Week ${latestBillboard.week}, ${latestBillboard.year}
+━━━━━━━━━━━━━━━━━━━
+
+🏆 *TOP EARNERS*
+
+`;
+
+    latestBillboard.topEarners.slice(0, 10).forEach((club, index) => {
+      const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+      billboardMsg += `${medal} *${club.clubName}*
+   Owner: @${club.owner}
+   Revenue: ₦${club.revenue.toLocaleString()}
+   Rating: ${club.rating}/100 ${getRatingEmoji(club.rating)}
+   Events: ${club.events}
+
+`;
+    });
+    
+    // Check user's position
+    const userClub = latestBillboard.topEarners.find(c => c.owner === userId.split('@')[0]);
+    if (userClub) {
+      billboardMsg += `📍 *Your Position:* #${userClub.rank}`;
+    } else {
+      billboardMsg += `📍 *Your club not in top 10*`;
+    }
+    
+    billboardMsg += `\n\n💡 *Tip:* Host more events and improve your equipment to climb the rankings!`;
+    
+    await m.reply(billboardMsg);
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Club billboard error:'), error.message);
+    await m.reply('❌ Failed to load billboard.' );
+  }
+}
+
+async function handleClubBook(m, sock, args, userId, db) {
+  if (args.length < 2) {
+    await m.reply('❌ Please specify celebrity and event!\n\n*Usage:* /club book <celebrity> <event>\n\nView available: /club market' );
+    return;
+  }
+  
+  const celebName = args[0].toLowerCase();
+  const eventType = args[1].toLowerCase();
+  
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    const celebritiesCollection = await getCollection('celebrities' );
+    const club = await clubsCollection.findOne({ userId });
+    
+    if (!club) {
+      await m.reply('❌ You don\'t own a club!' );
+      return;
+    }
+    
+    const celebConfig = GAME_CONFIG.CELEBRITIES[celebName];
+    if (!celebConfig) {
+      await m.reply(`❌ Celebrity "${celebName.replace(/_/g, ' ')}" not found!\n\nView available: /club market`);
+      return;
+    }
+    
+    const eventConfig = GAME_CONFIG.EVENTS[eventType];
+    if (!eventConfig) {
+      await m.reply(`❌ Event "${eventType}" not found!\n\nView available: /club host`);
+      return;
+    }
+    
+    const celebData = await celebritiesCollection.findOne({ name: celebName }) || { availability: celebConfig.availability };
+    
+    // Roll for success
+    if (Math.random() > celebData.availability) {
+      const deposit = Math.floor(celebConfig.fee * 0.5);
+      await unifiedUserManager.removeMoney(userId, deposit, `Failed booking deposit: ${celebName}`);
+      
+      await clubsCollection.updateOne(
+        { userId },
+        { $inc: { reputation: -10 } }
+      );
+      
+      const violations = club.violations || [];
+      violations.push({
+        type: 'failed_booking',
+        description: `Failed to book ${celebName}`,
+        date: new Date()
+      });
+      await clubsCollection.updateOne(
+        { userId },
+        { $set: { violations } }
+      );
+      
+      await m.reply(`❌ Booking failed! ${celebName.replace(/_/g, ' ')} is unavailable.\n\nLost deposit: ₦${deposit.toLocaleString()}\n\nReputation decreased.`);
+      return;
+    }
+    
+    const userBalance = await PluginHelpers.getBalance(userId);
+    if (userBalance.wallet < celebConfig.fee) {
+      await m.reply(`❌ Insufficient funds!\n\n*Fee:* ₦${celebConfig.fee.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`);
+      return;
+    }
+    
+    // Deduct money first
+    const moneyRemoved = await unifiedUserManager.removeMoney(userId, celebConfig.fee, `Book ${celebName} for ${eventType}`);
+    
+    if (!moneyRemoved) {
+      await m.reply('❌ Failed to deduct booking fee. Please try again.' );
+      return;
+    }
+    
+    const newBooking = {
+      celebrity: celebName,
+      event: eventType,
+      bookedAt: new Date(),
+      boost: celebConfig.boost
+    };
+    
+    await clubsCollection.updateOne(
+      { userId },
+      { 
+        $push: { bookings: newBooking },
+        $inc: { reputation: 20 },
+        $set: { updatedAt: new Date() }
+      }
+    );
+    
+    const successMsg = `✅ *Celebrity Booked!*
+
+⭐ *Celebrity:* ${celebName.replace(/_/g, ' ')}
+🎪 *For Event:* ${eventType.replace(/_/g, ' ')}
+💰 *Fee:* ₦${celebConfig.fee.toLocaleString()}
+📈 *Revenue Boost:* ${Math.round((celebConfig.boost.revenue - 1) * 100)}%
+
+💡 Host the event to apply the boost!`;
+
+    await m.reply(successMsg);
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Club book error:'), error.message);
+    await m.reply('❌ Failed to book celebrity.' );
+  }
+}
+
+async function showClubHelp(m, sock, prefix) {
+  const helpMsg = `🏢 *Club Management System*
+━━━━━━━━━━━━━━━━━━━
+
+🏗️ *GETTING STARTED*
+• \`${prefix}club register <n>\` - Start your club business
+• \`${prefix}club info\` - View your club details
+• \`${prefix}club market\` - Browse equipment & staff
+
+💼 *MANAGEMENT*
+• \`${prefix}club buy <item>\` - Purchase equipment
+• \`${prefix}club repair <item>\` - Fix broken equipment
+• \`${prefix}club hire <staff>\` - Hire staff members
+• \`${prefix}club fire <staff>\` - Fire staff members
+
+📋 *OPERATIONS*
+• \`${prefix}club license <type>\` - Buy permits & licenses
+• \`${prefix}club host <event>\` - Host events for revenue
+• \`${prefix}club book <celebrity> <event>\` - Book celebrities
+• \`${prefix}club upgrade <area>\` - Club improvements
+
+📊 *COMPETITION*
+• \`${prefix}club billboard\` - View weekly rankings
+• \`${prefix}club compete <club>\` - Challenge rival clubs
+• \`${prefix}club sabotage <club>\` - Corporate espionage
+• \`${prefix}club takeover <club>\` - Acquire failing clubs
+
+💡 *Tips:*
+• Business license is mandatory to operate
+• Hire technicians to reduce equipment wear
+• Host regular events to build reputation
+• Monitor equipment durability closely
+
+🎮 *Welcome to the ultimate club simulation!*`;
+
+  await m.reply(helpMsg);
+}
+
+// Helper function for rating emojis
+function getRatingEmoji(rating) {
+  if (rating >= 90) return '🌟';
+  if (rating >= 75) return '⭐';
+  if (rating >= 50) return '🔶';
+  if (rating >= 25) return '🔸';
+  return '🔻';
+}
+
+// Additional command handlers for advanced features
+async function handleClubCompete(m, sock, args, userId, db) {
+  // Implementation for club competitions/battles
+  await m.reply('🚧 Competition system coming soon!\n\nCompete with other clubs for customers and prestige.' );
+}
+
+async function handleClubSabotage(m, sock, args, userId, db) {
+  // Implementation for sabotage mechanics
+  await m.reply('🚧 Sabotage system coming soon!\n\nEngage in corporate espionage and dirty tactics.' );
+}
+
+async function handleClubTakeover(m, sock, args, userId, db) {
+  // Implementation for hostile takeovers
+  await m.reply('🚧 Takeover system coming soon!\n\nAcquire struggling competitor clubs.' );
+}
+
+async function handleClubUpgrade(m, sock, args, userId, db) {
+  // Implementation for club upgrades
+  if (args.length === 0) {
+    let upgradeMsg = `🏗️ *Available Upgrades*
+━━━━━━━━━━━━━━━━━━━
+
+`;
+    
+    Object.entries(GAME_CONFIG.UPGRADES).forEach(([key, upgrade]) => {
+      upgradeMsg += `🏢 *${key.replace(/_/g, ' ')}*
+• Price: ₦${upgrade.price.toLocaleString()}
+• Revenue Boost: ${Math.round((upgrade.boost.revenue - 1) * 100)}%
+• Happiness Boost: ${Math.round(upgrade.boost.happiness * 100)}%
+
+`;
+    });
+    
+    upgradeMsg += `*Usage:* \`/club upgrade <upgrade_name>\``;
+    
+    await m.reply(upgradeMsg);
+    return;
+  }
+  
+  await m.reply('🚧 Upgrade purchase system coming in next update!' );
+}
+
+async function handleClubFire(m, sock, args, userId, db) {
+  if (args.length === 0) {
+    await m.reply('❌ Please specify staff member to fire!\n\n*Usage:* /club fire <staff_type> or /club fire <staff_name>' );
+    return;
+  }
+  
+  await m.reply('🚧 Staff firing system coming soon!\n\nManage your workforce more effectively.' );
+}
+
+async function handleClubLeaderboard(m, sock, userId, db) {
+  try {
+    const clubsCollection = await getCollection('clubs' );
+    const topClubs = await clubsCollection
+      .find({})
+      .sort({ totalRevenue: -1 })
+      .limit(15)
+      .toArray();
+    
+    if (topClubs.length === 0) {
+      await m.reply('📊 No clubs registered yet!\n\nBe the first to start a club empire!' );
+      return;
+    }
+    
+    let leaderboardMsg = `🏆 *All-Time Club Leaderboard*
+━━━━━━━━━━━━━━━━━━━
+
+`;
+
+    topClubs.forEach((club, index) => {
+      const medal = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+      const rating = calculateClubRating(club);
+      
+      leaderboardMsg += `${medal} *${club.name}*
+   Owner: @${club.userId.split('@')[0]}
+   Total Revenue: ₦${club.totalRevenue.toLocaleString()}
+   Rating: ${rating}/100 ${getRatingEmoji(rating)}
+   Equipment: ${(club.equipment || []).length}
+   Staff: ${(club.staff || []).length}
+
+`;
+    });
+    
+    // Find user's position
+    const userClub = topClubs.find(c => c.userId === userId);
+    const userPosition = userClub ? topClubs.indexOf(userClub) + 1 : null;
+    
+    if (userPosition) {
+      leaderboardMsg += `📍 *Your Position:* #${userPosition}`;
+    } else {
+      leaderboardMsg += `📍 *Your club not in top 15*`;
+    }
+    
+    await m.reply(leaderboardMsg);
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Club leaderboard error:'), error.message);
+    await m.reply('❌ Failed to load leaderboard.' );
+  }
+}
+
