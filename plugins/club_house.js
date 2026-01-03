@@ -367,25 +367,25 @@ const GAME_CONFIG = {
 
   LICENSES: {
     business: {
-      price: 500000000,
+      price: 50000000,
       duration: 90,
       required: true,
       description: "Basic business operation license",
     },
     liquor: {
-      price: 75000000,
+      price: 7500000,
       duration: 90,
       required: false,
       description: "Alcohol serving permit",
     },
     adult_entertainment: {
-      price: 200000000,
+      price: 20000000,
       duration: 30,
       required: false,
       description: "Adult entertainment license",
     },
     noise_permit: {
-      price: 25000000,
+      price: 2500000,
       duration: 90,
       required: false,
       description: "Late night noise permit",
@@ -443,7 +443,7 @@ const GAME_CONFIG = {
   // Consumables and risk mode configs
   CONSUMABLES: {
     insurance: {
-      price: 500000000,
+      price: 800000000,
       description:
         "Prevents full loss on failed events (consumed on failure, refunds 50%).",
     },
