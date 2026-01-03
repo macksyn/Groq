@@ -19,6 +19,21 @@ function isRateLimited(userId, command) {
   return false;
 }
 
+// Store selection context: messageId -> { type, options, handler }
+const selectionContextStore = {};
+
+function storeSelectionContext(messageId, type, options, handler) {
+  selectionContextStore[messageId] = { type, options, handler, createdAt: Date.now() };
+  // Clean up old contexts after 30 minutes
+  setTimeout(() => {
+    delete selectionContextStore[messageId];
+  }, 30 * 60 * 1000);
+}
+
+function getSelectionContext(messageId) {
+  return selectionContextStore[messageId];
+}
+
 // ============================================================
 // V3 PLUGIN EXPORT (Required Structure)
 // ============================================================
@@ -30,6 +45,7 @@ export default {
   description: 'Complete club business simulation with licensing, equipment, staff, and revenue management',
   category: 'business',
   commands: ['club'],
+  // allow play and rank via main command arguments
   aliases: [],
   scheduledTasks: [
     {
@@ -43,6 +59,12 @@ export default {
       schedule: '0 0 * * 1', // Every Monday at midnight
       description: 'Check license renewals and apply penalties',
       handler: async (context) => await processLicenseRenewals(context)
+    },
+    {
+      name: 'aggregate_economy_sinks',
+      schedule: '0 1 * * 0', // Weekly Sunday 01:00
+      description: 'Aggregate weekly economy sink totals',
+      handler: async (context) => await aggregateEconomySinks(context)
     },
     {
       name: 'weekly_billboard',
@@ -67,6 +89,12 @@ export default {
       schedule: '0 0 * * 0', // Weekly Sunday
       description: 'Deduct utilities and rent',
       handler: async (context) => await deductUtilities(context)
+    },
+    {
+      name: 'daily_decisions',
+      schedule: '0 0 * * *', // Daily at midnight
+      description: 'Assign daily decisions to active clubs',
+      handler: async (context) => await assignDailyDecisions(context)
     }
   ],
 
@@ -79,6 +107,30 @@ export default {
     
     const subCommand = args[0]?.toLowerCase();
     const userId = m.sender;
+
+    // Check if this is a quoted selection (user is quoting a message with just a number)
+    if (m.quoted && m.quoted.text) {
+      const selectionNumber = parseInt(m.body.trim(), 10);
+      if (!isNaN(selectionNumber) && selectionNumber > 0) {
+        const context = getSelectionContext(m.quoted.id);
+        if (context) {
+          // This is a selection response!
+          if (selectionNumber <= context.options.length) {
+            try {
+              await context.handler(selectionNumber, m, sock, userId, db);
+              return;
+            } catch (error) {
+              console.error(chalk.red('❌ Selection handler error:'), error.message);
+              await m.reply('❌ An error occurred while processing your selection. Please try again.');
+              return;
+            }
+          } else {
+            await m.reply(`❌ Invalid selection! Please choose a number between 1 and ${context.options.length}.`);
+            return;
+          }
+        }
+      }
+    }
 
     // Rate limiting
     if (isRateLimited(userId, subCommand)) {
@@ -109,6 +161,12 @@ export default {
         case 'host':
           await handleClubHost(m, sock, args.slice(1), userId, db);
           break;
+        case 'play':
+          await handleClubPlay(m, sock, args.slice(1), userId, db);
+          break;
+        case 'rank':
+          await handleClubRank(m, sock, args.slice(1), userId, db);
+          break;
         case 'billboard':
           await handleClubBillboard(m, sock, userId, db);
           break;
@@ -135,6 +193,9 @@ export default {
           break;
         case 'book':
           await handleClubBook(m, sock, args.slice(1), userId, db);
+          break;
+        case 'decision':
+          await handleClubDecision(m, sock, args.slice(1), userId, db);
           break;
         default:
           await showClubHelp(m, sock, config.PREFIX);
@@ -200,6 +261,33 @@ const GAME_CONFIG = {
     'concert': { cost: 150000, duration: 8, min_equipment: 5, revenue_multiplier: 1.8 },
     'exclusive_event': { cost: 250000, duration: 12, min_equipment: 8, revenue_multiplier: 2.5 }
   },
+  // Consumables and risk mode configs
+  CONSUMABLES: {
+    'insurance': { price: 50000, description: 'Prevents full loss on failed events (consumed on failure, refunds 50%).' }
+  },
+
+  RISK_MODES: {
+    safe: { label: 'safe', successChance: 0.95, payoutMultiplier: 0.9, cooldownMs: 30 * 60 * 1000, attemptsPerDay: 10, minLevel: 1 },
+    standard: { label: 'standard', successChance: 0.85, payoutMultiplier: 1.0, cooldownMs: 20 * 60 * 1000, attemptsPerDay: 6, minLevel: 1 },
+    high: { label: 'high', successChance: 0.5, payoutMultiplier: 1.6, cooldownMs: 120 * 60 * 1000, attemptsPerDay: 2, minLevel: 5 }
+  },
+  LEVELS: {
+    baseXp: 100,
+    // gentler progression curve so players can reach level 5 reasonably
+    formula: (lvl) => Math.max(200, Math.floor(500 * Math.pow(1.35, lvl - 1)))
+  },
+  RANKS: [
+    { name: 'Newbie', minLevel: 1 },
+    { name: 'Starter', minLevel: 3 },
+    { name: 'Established', minLevel: 6 },
+    { name: 'Pro', minLevel: 10 },
+    { name: 'Tycoon', minLevel: 15 }
+  ],
+
+  SKILL_GAMES: {
+    guess: { description: 'Guess a number 1-6. Usage: /club play guess <number>' },
+    math: { description: 'Solve a quick math: supply the result. Usage: /club play math <answer>' }
+  },
   
   CELEBRITIES: {
     'burna_boy': { fee: 80000000, boost: { revenue: 2.5, happiness: 0.3 }, availability: 0.5, genre: 'afro_fusion' },
@@ -220,8 +308,289 @@ const GAME_CONFIG = {
   },
 
   UTILITIES_BASE_COST: 2000000, // Base weekly utilities/rent, scales with club size
-  INFLATION_RATE: 0.05 // 5% weekly price increase for equipment/licenses
+  INFLATION_RATE: 0.05, // 5% weekly price increase for equipment/licenses
+
+  // Daily Decisions - Big Engagement Boost
+  DAILY_DECISIONS: [
+    {
+      id: 'dj_raise',
+      emoji: '🎵',
+      title: 'DJ Demands a Raise',
+      situation: 'Your DJ is demanding a 30% salary increase or threatens to quit.',
+      options: [
+        {
+          emoji: '1️⃣',
+          text: 'Pay the raise (+happiness, -money)',
+          effects: { money: -50000, happiness: 15, djMorale: 20, xp: 10 }
+        },
+        {
+          emoji: '2️⃣',
+          text: 'Refuse (risk DJ quitting)',
+          effects: { money: 0, happiness: -10, djMorale: -30, xp: 5 }
+        },
+        {
+          emoji: '3️⃣',
+          text: 'Fire him (short-term save, long-term loss)',
+          effects: { money: 25000, happiness: -20, revenue: -0.2, xp: 15 }
+        }
+      ]
+    },
+    {
+      id: 'noise_complaint',
+      emoji: '🚨',
+      title: 'Noise Complaint Received',
+      situation: 'Neighbors are complaining about loud music. The authorities threaten a fine.',
+      options: [
+        {
+          emoji: '1️⃣',
+          text: 'Pay bribe to authorities (+no fine, -money)',
+          effects: { money: -30000, violations: -1, xp: 8 }
+        },
+        {
+          emoji: '2️⃣',
+          text: 'Buy noise permit (expensive, legal)',
+          effects: { money: -45000, violations: -1, happiness: 5, xp: 12 }
+        },
+        {
+          emoji: '3️⃣',
+          text: 'Ignore it (face ₦100k fine)',
+          effects: { money: -100000, violations: 1, xp: 0 }
+        }
+      ]
+    },
+    {
+      id: 'staff_theft',
+      emoji: '💼',
+      title: 'Staff Member Caught Stealing',
+      situation: 'Your bartender has been skimming cash from the till. What do you do?',
+      options: [
+        {
+          emoji: '1️⃣',
+          text: 'Let it slide with warning (-reputation)',
+          effects: { money: 0, reputation: -10, happiness: -5, xp: 5 }
+        },
+        {
+          emoji: '2️⃣',
+          text: 'Fire immediately (recover loss)',
+          effects: { money: 20000, reputation: 10, happiness: -15, xp: 15 }
+        },
+        {
+          emoji: '3️⃣',
+          text: 'Report to police (legal but costly)',
+          effects: { money: -15000, reputation: 20, happiness: -20, xp: 20 }
+        }
+      ]
+    },
+    {
+      id: 'equipment_breakdown',
+      emoji: '⚙️',
+      title: 'Critical Equipment Breakdown',
+      situation: 'Your main DJ booth equipment breaks down right before a major event tonight!',
+      options: [
+        {
+          emoji: '1️⃣',
+          text: 'Cancel event (save money, lose revenue)',
+          effects: { money: 0, revenue: -0.3, xp: 5 }
+        },
+        {
+          emoji: '2️⃣',
+          text: 'Emergency repair (+money, equipment works)',
+          effects: { money: -40000, revenue: 0.1, xp: 15 }
+        },
+        {
+          emoji: '3️⃣',
+          text: 'Rent backup equipment (expensive solution)',
+          effects: { money: -60000, revenue: 0.2, xp: 10 }
+        }
+      ]
+    },
+    {
+      id: 'celebrity_offer',
+      emoji: '⭐',
+      title: 'Celebrity Appearance Opportunity',
+      situation: 'A rising celebrity offers to perform at your club for a negotiable fee.',
+      options: [
+        {
+          emoji: '1️⃣',
+          text: 'Pay full price (guaranteed success)',
+          effects: { money: -80000, revenue: 0.5, happiness: 25, xp: 20 }
+        },
+        {
+          emoji: '2️⃣',
+          text: 'Negotiate cheaper rate (risky)',
+          effects: { money: -40000, revenue: 0.25, xp: 15 }
+        },
+        {
+          emoji: '3️⃣',
+          text: 'Decline (miss opportunity)',
+          effects: { money: 0, xp: 0 }
+        }
+      ]
+    },
+    {
+      id: 'rival_sabotage',
+      emoji: '💣',
+      title: 'Rival Club Sabotage',
+      situation: 'Your rival club spreads false rumors about your club on social media.',
+      options: [
+        {
+          emoji: '1️⃣',
+          text: 'Ignore (lose customers)',
+          effects: { revenue: -0.15, happiness: -10, xp: 5 }
+        },
+        {
+          emoji: '2️⃣',
+          text: 'Launch counter campaign (+reputation)',
+          effects: { money: -20000, reputation: 15, happiness: 10, xp: 15 }
+        },
+        {
+          emoji: '3️⃣',
+          text: 'Sabotage them back (risky)',
+          effects: { money: -15000, reputation: -20, violations: 1, xp: 10 }
+        }
+      ]
+    },
+    {
+      id: 'license_renewal',
+      emoji: '📋',
+      title: 'License Renewal Coming Up',
+      situation: 'Your business license expires in 2 days. Renewal is mandatory.',
+      options: [
+        {
+          emoji: '1️⃣',
+          text: 'Renew immediately (on time)',
+          effects: { money: -35000, violations: 0, xp: 10 }
+        },
+        {
+          emoji: '2️⃣',
+          text: 'Wait until deadline (risky)',
+          effects: { money: -35000, violations: 0, xp: 5 }
+        },
+        {
+          emoji: '3️⃣',
+          text: 'Let it expire (severe penalties)',
+          effects: { money: -100000, violations: 2, isActive: false, xp: 0 }
+        }
+      ]
+    },
+    {
+      id: 'staff_romance',
+      emoji: '💕',
+      title: 'Staff Romance Drama',
+      situation: 'Two of your staff members are dating and it\'s causing workplace tension.',
+      options: [
+        {
+          emoji: '1️⃣',
+          text: 'Ignore and let it play out',
+          effects: { money: 0, happiness: -10, xp: 5 }
+        },
+        {
+          emoji: '2️⃣',
+          text: 'Fire one of them (lose staff)',
+          effects: { money: 0, happiness: -15, xp: 10 }
+        },
+        {
+          emoji: '3️⃣',
+          text: 'Talk to both (+morale boost)',
+          effects: { money: 0, happiness: 10, xp: 15 }
+        }
+      ]
+    },
+    {
+      id: 'health_inspection',
+      emoji: '🏥',
+      title: 'Health & Safety Inspection',
+      situation: 'Authorities are conducting a surprise health and safety inspection today!',
+      options: [
+        {
+          emoji: '1️⃣',
+          text: 'Pass inspection normally (luck)',
+          effects: { money: 0, violations: -1, xp: 10 }
+        },
+        {
+          emoji: '2️⃣',
+          text: 'Quick emergency cleaning (+money)',
+          effects: { money: -10000, violations: -1, xp: 15 }
+        },
+        {
+          emoji: '3️⃣',
+          text: 'Fail inspection (major fine)',
+          effects: { money: -80000, violations: 2, happiness: -20, xp: 0 }
+        }
+      ]
+    },
+    {
+      id: 'expansion_offer',
+      emoji: '🏢',
+      title: 'Expansion Opportunity',
+      situation: 'A bank offers a loan to expand your club to a new location.',
+      options: [
+        {
+          emoji: '1️⃣',
+          text: 'Accept loan (big risk/reward)',
+          effects: { money: 200000, xp: 30 }
+        },
+        {
+          emoji: '2️⃣',
+          text: 'Negotiate better terms (risky)',
+          effects: { money: 100000, xp: 20 }
+        },
+        {
+          emoji: '3️⃣',
+          text: 'Decline (stay safe)',
+          effects: { money: 0, xp: 5 }
+        }
+      ]
+    }
+  ]
 };
+
+// Economic tuning parameters — adjust these to fight inflation
+GAME_CONFIG.ECONOMY = {
+  PRICE_MULTIPLIER: 10,        // multiply visible prices to sink more money
+  SALARY_MULTIPLIER: 5,        // increase salaries to move money out of player pockets
+  PASSIVE_TAX: 0.20,           // tax on passive revenue (was 0.05)
+  EVENT_TAX: 0.20,             // tax on event gross revenue (was 0.10)
+  UTILITIES_MULTIPLIER: 5,     // scale utilities up
+  USER_PASSIVE_SHARE: 0.10,    // share of passive revenue paid to user wallet (was 0.3)
+  CELEB_FEE_MULTIPLIER: 5,     // scale celebrity fees
+  INFLATION_RATE: 0.20        // increase inflation rate used in market messaging
+};
+
+// Apply economic tuning to existing GAME_CONFIG entries
+function applyEconomicTuning() {
+  const E = GAME_CONFIG.ECONOMY;
+  // Equipment
+  Object.entries(GAME_CONFIG.EQUIPMENT).forEach(([k, v]) => {
+    if (v.price) v.price = Math.max(1, Math.floor(v.price * E.PRICE_MULTIPLIER));
+  });
+  // Staff salaries
+  Object.entries(GAME_CONFIG.STAFF).forEach(([k, v]) => {
+    if (v.salary) v.salary = Math.max(1, Math.floor(v.salary * E.SALARY_MULTIPLIER));
+  });
+  // Licenses
+  Object.entries(GAME_CONFIG.LICENSES).forEach(([k, v]) => {
+    if (v.price) v.price = Math.max(1, Math.floor(v.price * E.PRICE_MULTIPLIER));
+  });
+  // Upgrades
+  Object.entries(GAME_CONFIG.UPGRADES).forEach(([k, v]) => {
+    if (v.price) v.price = Math.max(1, Math.floor(v.price * E.PRICE_MULTIPLIER));
+  });
+  // Events
+  Object.entries(GAME_CONFIG.EVENTS).forEach(([k, v]) => {
+    if (v.cost) v.cost = Math.max(1, Math.floor(v.cost * E.PRICE_MULTIPLIER));
+  });
+  // Celebrities
+  Object.entries(GAME_CONFIG.CELEBRITIES).forEach(([k, v]) => {
+    if (v.fee) v.fee = Math.max(1, Math.floor(v.fee * E.CELEB_FEE_MULTIPLIER));
+  });
+  // Utilities base
+  GAME_CONFIG.UTILITIES_BASE_COST = Math.max(1, Math.floor(GAME_CONFIG.UTILITIES_BASE_COST * E.UTILITIES_MULTIPLIER));
+  // Inflation
+  GAME_CONFIG.INFLATION_RATE = E.INFLATION_RATE;
+}
+
+applyEconomicTuning();
 
 // Scheduled task handlers
 async function processEquipmentBreakdown(context) {
@@ -381,6 +750,10 @@ async function generatePassiveRevenue() {
     
     for (const club of activeClubs) {
       let baseRevenue = calculatePassiveRevenue(club);
+
+      // Apply global economic multiplier to passive revenue
+      const multiplier = await computeEconomicMultiplier();
+      baseRevenue = Math.floor(baseRevenue * multiplier);
       
       // Deduct salaries more aggressively
       for (const staff of club.staff || []) {
@@ -391,7 +764,16 @@ async function generatePassiveRevenue() {
       }
 
       if (baseRevenue > 0) {
-        // Add to club balance and user wallet
+        // Economy sinks: maintenance fee and passive tax
+        const maintenance = Math.floor((club.equipment?.length || 0) * 2000 + (club.staff?.length || 0) * 1000);
+        const passiveTax = Math.floor(baseRevenue * (GAME_CONFIG.ECONOMY.PASSIVE_TAX || 0.05));
+        const sinkTotal = maintenance + passiveTax;
+
+        // Record sink
+        await recordEconomySink('passive_income_sink', sinkTotal);
+
+        // Add to club balance and user wallet (after sinks)
+        const afterSinksRevenue = Math.max(0, baseRevenue - sinkTotal);
         await clubsCollection.updateOne(
           { userId: club.userId },
           { 
@@ -405,9 +787,9 @@ async function generatePassiveRevenue() {
         );
         
         // Also add to user's economy balance
-        await unifiedUserManager.addMoney(club.userId, Math.floor(baseRevenue * 0.3), 'Club passive income' );
+        await unifiedUserManager.addMoney(club.userId, Math.floor(afterSinksRevenue * (GAME_CONFIG.ECONOMY.USER_PASSIVE_SHARE || 0.1)), 'Club passive income' );
         
-        revenueGenerated += baseRevenue;
+        revenueGenerated += afterSinksRevenue;
       } else {
         // Negative revenue leads to violation
         if (!club.violations) club.violations = [];
@@ -485,6 +867,86 @@ async function deductUtilities() {
   }
 }
 
+// Aggregate economy sinks weekly and store summaries
+async function aggregateEconomySinks(context) {
+  try {
+    const sinkCollection = await getCollection('economy_sink');
+    const aggCollection = await getCollection('economy_sink_aggregate');
+    const now = new Date();
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    const pipeline = [
+      { $match: { date: { $gte: weekAgo, $lte: now } } },
+      { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+    ];
+
+    const res = await sinkCollection.aggregate(pipeline).toArray();
+    const total = res[0]?.total || 0;
+    const count = res[0]?.count || 0;
+
+    await aggCollection.insertOne({ periodStart: weekAgo, periodEnd: now, total, count, createdAt: new Date() });
+
+    // Optionally, keep raw sink entries for historical purposes; otherwise, we could prune here.
+    console.log(chalk.green(`🧾 Aggregated economy sinks: ₦${total.toLocaleString()} from ${count} entries`));
+  } catch (error) {
+    console.error(chalk.red('❌ Sink aggregation failed:'), error.message);
+  }
+}
+
+// Assign daily decisions to active clubs
+async function assignDailyDecisions(context) {
+  try {
+    const clubsCollection = await getCollection('clubs');
+    const decisionsCollection = await getCollection('club_decisions');
+    
+    const activeClubs = await clubsCollection.find({ isActive: true }).toArray();
+    let assignedCount = 0;
+    
+    for (const club of activeClubs) {
+      // Check if club already has a pending decision today
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      const existingDecision = await decisionsCollection.findOne({
+        userId: club.userId,
+        createdAt: { $gte: today }
+      });
+      
+      if (existingDecision && !existingDecision.resolved) {
+        // Already has a pending decision, skip
+        continue;
+      }
+      
+      // Pick a random decision from available options
+      const randomDecision = GAME_CONFIG.DAILY_DECISIONS[
+        Math.floor(Math.random() * GAME_CONFIG.DAILY_DECISIONS.length)
+      ];
+      
+      // Create decision record
+      const decisionRecord = {
+        userId: club.userId,
+        clubId: club._id,
+        decisionId: randomDecision.id,
+        title: randomDecision.title,
+        situation: randomDecision.situation,
+        emoji: randomDecision.emoji,
+        options: randomDecision.options,
+        createdAt: new Date(),
+        resolved: false,
+        choice: null,
+        resolvedAt: null
+      };
+      
+      await decisionsCollection.insertOne(decisionRecord);
+      assignedCount++;
+    }
+    
+    console.log(chalk.yellow(`📣 Assigned daily decisions to ${assignedCount} clubs`));
+  } catch (error) {
+    console.error(chalk.red('❌ Daily decisions assignment error:'), error.message);
+  }
+}
+
 // Helper functions
 function calculateClubRating(club) {
   let rating = 50; // Base rating
@@ -552,6 +1014,32 @@ function calculatePassiveRevenue(club) {
   return Math.max(0, Math.floor(baseRevenue));
 }
 
+// Dynamic economic multiplier and sinks
+async function computeEconomicMultiplier() {
+  try {
+    const clubsCollection = await getCollection('clubs');
+    const activeCount = await clubsCollection.countDocuments({ isActive: true });
+    // Basic formula: more active clubs => lower payouts to control inflation
+    // activeCount <=50 => multiplier up to 1.1, 50-200 => 1.0 down to 0.8, >200 => 0.7
+    if (activeCount <= 50) return Math.min(1.1, 1 + (50 - activeCount) / 500);
+    if (activeCount <= 200) return 1.0 - ((activeCount - 50) / 150) * 0.2; // ranges 1.0 -> 0.8
+    return 0.7; // heavily saturated
+  } catch (error) {
+    console.error('Failed to compute economic multiplier:', error.message);
+    return 1.0; // safe fallback
+  }
+}
+
+async function recordEconomySink(reason, amount) {
+  try {
+    if (amount <= 0) return;
+    const sinkCollection = await getCollection('economy_sink');
+    await sinkCollection.insertOne({ reason, amount, date: new Date() });
+  } catch (error) {
+    console.error('Failed to record economy sink:', error.message);
+  }
+}
+
 
 
 // Command handlers
@@ -606,6 +1094,9 @@ async function handleClubRegister(m, sock, args, userId, db) {
     const newClub = {
       userId,
       name: clubName,
+      xp: 0,
+      level: 1,
+      rank: 'Newbie',
       balance: 0,
       totalRevenue: 0,
       weeklyRevenue: 0,
@@ -724,6 +1215,18 @@ async function handleClubInfo(m, sock, userId, db) {
     if (club.violations && club.violations.length > 0) {
       infoMsg += `\n\n🚨 *Recent Violations: ${club.violations.length}*`;
     }
+
+    // Show global economic multiplier and recent sink totals for transparency
+    try {
+      const multiplier = await computeEconomicMultiplier();
+      const aggCollection = await getCollection('economy_sink_aggregate');
+      const lastAgg = await aggCollection.findOne({}, { sort: { createdAt: -1 } });
+      const recentSink = lastAgg?.total || 0;
+      infoMsg += `\n\n🌐 *Global Multiplier:* x${multiplier.toFixed(2)}`;
+      infoMsg += `\n🧾 *Recent Sink (7d):* ₦${recentSink.toLocaleString()}`;
+    } catch (e) {
+      // silent fallback
+    }
     
     infoMsg += `\n\n💡 *Quick Commands:*
 • \`/club market\` - Browse equipment
@@ -786,6 +1289,12 @@ async function handleClubMarket(m, sock, userId, db) {
     
     marketMsg += `\n\n*Usage:* /club buy <item> | /club hire <staff> | /club book <celebrity> <event>\n\nPrices subject to 5% weekly inflation!`;
 
+    // Consumables
+    marketMsg += `\n\n🧾 *CONSUMABLES*`;
+    Object.entries(GAME_CONFIG.CONSUMABLES).forEach(([key, item]) => {
+      marketMsg += `\n• ${key.replace(/_/g, ' ')}: ₦${item.price.toLocaleString()} - ${item.description}`;
+    });
+
     await m.reply(marketMsg);
   } catch (error) {
     console.error(chalk.red('❌ Club market error:'), error.message);
@@ -816,6 +1325,26 @@ async function handleClubBuy(m, sock, args, userId, db) {
       }
       
       const equipment = GAME_CONFIG.EQUIPMENT[itemName];
+      const consumable = GAME_CONFIG.CONSUMABLES[itemName];
+      const userBalance = await PluginHelpers.getBalance(userId);
+      if (consumable) {
+        if (userBalance.wallet < consumable.price) {
+          await m.reply(`❌ Insufficient funds!\n\n*Item:* ${itemName.replace(/_/g, ' ')}\n*Price:* ₦${consumable.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`);
+          await session.abortTransaction();
+          return;
+        }
+
+        // Deduct and add consumable to club
+        await unifiedUserManager.removeMoney(userId, consumable.price, `Purchase consumable: ${itemName}`, { session });
+        await clubsCollection.updateOne(
+          { userId },
+          { $inc: { [`consumables.${itemName}`]: 1 }, $set: { updatedAt: new Date() } },
+          { session }
+        );
+
+        await m.reply(`✅ *Consumable Purchased!*\n\n• Item: ${itemName.replace(/_/g, ' ')}\n• Cost: ₦${consumable.price.toLocaleString()}\n\nUse it automatically when needed during risky events.`);
+        return;
+      }
       if (!equipment) {
         await m.reply(`❌ Item "${itemName.replace(/_/g, ' ')}" not found!\n\nView available: /club market`);
         await session.abortTransaction();
@@ -829,7 +1358,6 @@ async function handleClubBuy(m, sock, args, userId, db) {
         return;
       }
       
-      const userBalance = await PluginHelpers.getBalance(userId);
       
       if (userBalance.wallet < equipment.price) {
         await m.reply(`❌ Insufficient funds!\n\n*Item:* ${itemName.replace(/_/g, ' ')}\n*Price:* ₦${equipment.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`);
@@ -1151,27 +1679,41 @@ ${licenseConfig.required ? '🎉 Your club can now operate legally!' : '🌟 Thi
 
 async function handleClubHost(m, sock, args, userId, db) {
   if (args.length === 0) {
+    const eventKeys = Object.keys(GAME_CONFIG.EVENTS);
     let eventMsg = `🎪 *Available Events*
 ━━━━━━━━━━━━━━━━━━━
 
 `;
     
-    Object.entries(GAME_CONFIG.EVENTS).forEach(([key, event]) => {
-      eventMsg += `🎉 *${key.replace(/_/g, ' ')}*
+    eventKeys.forEach((key, index) => {
+      const event = GAME_CONFIG.EVENTS[key];
+      eventMsg += `\n*${index + 1}. ${key.replace(/_/g, ' ')}*
 • Cost: ₦${event.cost.toLocaleString()}
 • Duration: ${event.duration} hours
 • Min Equipment: ${event.min_equipment}
-• Revenue Multiplier: ${event.revenue_multiplier}x
-
-`;
+• Revenue Multiplier: ${event.revenue_multiplier}x`;
     });
     
-    eventMsg += `*Usage:* \`/club host <event_type>\``;
+    eventMsg += `\n\n💬 *Reply to this message with just the number (1, 2, 3, etc.) to select an event!*
+Or use: \`/club host <event_type>\``;
     
-    await m.reply(eventMsg);
+    const sentMsg = await m.reply(eventMsg);
+    
+    // Store selection context for this message
+    const messageId = sentMsg?.key?.id || m.key.id;
+    storeSelectionContext(messageId, 'event_selection', eventKeys, async (selection, replyMsg, sock, userId, db) => {
+      const selectedEvent = eventKeys[selection - 1];
+      await handleClubHostEvent(replyMsg, sock, [selectedEvent], userId, db);
+    });
+    
     return;
   }
   
+  const eventType = args[0].toLowerCase();
+  await handleClubHostEvent(m, sock, args, userId, db);
+}
+
+async function handleClubHostEvent(m, sock, args, userId, db) {
   const eventType = args[0].toLowerCase();
   
   try {
@@ -1203,59 +1745,256 @@ async function handleClubHost(m, sock, args, userId, db) {
       return;
     }
     
+    // Mode (risk) selection: /club host <event> <mode>
+    const modeArg = args[1]?.toLowerCase() || 'standard';
+    const mode = GAME_CONFIG.RISK_MODES[modeArg] || GAME_CONFIG.RISK_MODES.standard;
+
+    // Enforce minimum level to select certain modes
+    const clubLevel = club.level || 1;
+    if (mode.minLevel && clubLevel < mode.minLevel) {
+      await m.reply(`❌ *${mode.label}* mode requires level ${mode.minLevel}. Your club level: ${clubLevel}.`);
+      return;
+    }
+
     const userBalance = await PluginHelpers.getBalance(userId);
-    
     if (userBalance.wallet < eventConfig.cost) {
       await m.reply(`❌ Insufficient funds!\n\n*Event:* ${eventType}\n*Cost:* ₦${eventConfig.cost.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`);
       return;
     }
-    
-    // Calculate event revenue
+
+    // Hosting cooldowns & attempt limits (per club per event+mode)
+    const now = Date.now();
+    club.hostingStats = club.hostingStats || {};
+    const statKey = `${eventType}:${mode.label}`;
+    const stat = club.hostingStats[statKey] || { lastAt: null, attemptsDate: null, attempts: 0 };
+
+    // Reset daily attempts if day changed
+    const today = new Date().toISOString().slice(0, 10);
+    if (stat.attemptsDate !== today) {
+      stat.attempts = 0;
+      stat.attemptsDate = today;
+    }
+
+    if (stat.attempts >= (mode.attemptsPerDay || 1)) {
+      await m.reply(`❌ You have reached the daily attempt limit for *${eventType}* in *${mode.label}* mode. Try another mode or wait until tomorrow.`);
+      return;
+    }
+
+    if (stat.lastAt && (now - stat.lastAt) < (mode.cooldownMs || 0)) {
+      const remaining = Math.ceil(((mode.cooldownMs || 0) - (now - stat.lastAt)) / 60000);
+      await m.reply(`⏳ Cooldown active for *${mode.label}* mode. Please wait ${remaining} more minute(s) before hosting this event again.`);
+      return;
+    }
+
+    // Calculate base revenue (same as before) and apply equipment/staff bonuses
     let baseRevenue = eventConfig.cost * eventConfig.revenue_multiplier;
-    
-    // Apply equipment and staff bonuses
     for (const equipment of workingEquipment) {
       const config = GAME_CONFIG.EQUIPMENT[equipment.type];
-      if (config) {
-        baseRevenue *= config.boost.revenue || 1.0;
-      }
+      if (config) baseRevenue *= config.boost.revenue || 1.0;
     }
-    
     for (const staff of club.staff || []) {
       const config = GAME_CONFIG.STAFF[staff.type];
-      if (config) {
-        baseRevenue *= config.boost.revenue || 1.0;
-      }
+      if (config) baseRevenue *= config.boost.revenue || 1.0;
+    }
+
+    // Charge entry cost first (risk)
+    await unifiedUserManager.removeMoney(userId, eventConfig.cost, `Host event: ${eventType} (${mode.label})`);
+
+    // ===== CHAOTIC EVENT OUTCOMES SYSTEM =====
+    // Determine event outcome with RNG and modifiers
+    
+    // Get security staff count (reduces bad outcomes)
+    const securityStaff = (club.staff || []).filter(s => s.type === 'bouncer').length;
+    const eventHasBusinessLicense = (club.licenses || []).some(l => l.type === 'business' && l.active);
+    const hasLiquorLicense = (club.licenses || []).some(l => l.type === 'liquor' && l.active);
+    
+    // Determine outcome
+    const outcomeRoll = Math.random();
+    let eventOutcome = null;
+    let outcomeName = '';
+    let outcomeEmoji = '';
+    let revenueModifier = 1.0;
+    let equipmentDamage = 0;
+    let fineAmount = 0;
+    let violationAdded = false;
+    
+    // Outcome probabilities (can be modified by security staff)
+    // Base: Sold Out 25%, Normal 50%, Fight 15%, Police 10%
+    // Security reduces Fight and Police chances
+    let soldOutChance = 0.25;
+    let normalChance = 0.50;
+    let fightChance = 0.15;
+    let policeChance = 0.10;
+    
+    // Security staff reduces bad outcomes (10% reduction per bouncer, max 30%)
+    const securityReduction = Math.min(0.30, securityStaff * 0.10);
+    if (securityReduction > 0) {
+      fightChance *= (1 - securityReduction);
+      policeChance *= (1 - securityReduction);
+      // Redistribute reduced chance to normal
+      normalChance += (0.15 * securityReduction) + (0.10 * securityReduction);
     }
     
-    const finalRevenue = Math.floor(baseRevenue);
-    const profit = finalRevenue - eventConfig.cost;
-    
-    // Host the event
-    await unifiedUserManager.removeMoney(userId, eventConfig.cost, `Host event: ${eventType}`);
-    await unifiedUserManager.addMoney(userId, Math.floor(finalRevenue * 0.4), `Event revenue: ${eventType}`);
-    
-    // Update club stats
-    await clubsCollection.updateOne(
-      { userId },
-      { 
-        $inc: { 
-          balance: finalRevenue,
-          totalRevenue: finalRevenue,
-          weeklyRevenue: finalRevenue,
-          weeklyEvents: 1
-        },
-        $set: { 
-          lastEventAt: new Date(),
-          updatedAt: new Date()
-        }
+    // Determine which outcome occurred
+    if (outcomeRoll <= soldOutChance) {
+      eventOutcome = 'sold_out';
+      outcomeName = '🎫 SOLD OUT';
+      outcomeEmoji = '✨';
+      revenueModifier = 1.30; // +30% revenue
+    } else if (outcomeRoll <= (soldOutChance + normalChance)) {
+      eventOutcome = 'normal';
+      outcomeName = '✅ Normal Event';
+      outcomeEmoji = '🎉';
+      revenueModifier = 1.0; // Normal revenue
+    } else if (outcomeRoll <= (soldOutChance + normalChance + fightChance)) {
+      eventOutcome = 'fight';
+      outcomeName = '💥 FIGHT BROKE OUT';
+      outcomeEmoji = '🔥';
+      revenueModifier = 0.4; // Only 40% revenue
+      equipmentDamage = 35; // Significant damage
+      violationAdded = true; // Reputation hit
+      
+      // Insurance check: equipment damage protection
+      club.consumables = club.consumables || {};
+      if ((club.consumables.insurance || 0) > 0) {
+        club.consumables.insurance -= 1;
+        equipmentDamage = 0; // Insurance prevents equipment damage
+        await m.reply('🛡️ *Insurance Activated!* Your equipment is protected from the chaos.');
       }
-    );
+    } else if (outcomeRoll <= (soldOutChance + normalChance + fightChance + policeChance)) {
+      eventOutcome = 'police';
+      outcomeName = '🚨 POLICE RAID';
+      outcomeEmoji = '🚔';
+      revenueModifier = 0; // No revenue
+      
+      // License protection: Liquor license reduces raid impact
+      if (hasLiquorLicense) {
+        fineAmount = 0; // License protects from raid
+        outcomeName = '🚨 Police Visit (License Protected)';
+        revenueModifier = 0.5; // Still lose half revenue but no fine
+        await m.reply('📋 *License Protected You!* Your liquor license kept you safe from fines.');
+      } else {
+        fineAmount = 150000; // Large fine
+        violationAdded = true;
+      }
+    }
+
+    // Calculate final revenue with outcome modifier
+    let finalRevenue = Math.floor(baseRevenue * revenueModifier);
     
-    // Increased chance of equipment breakdown during event (20%)
-    if (Math.random() < 0.2) {
+    // Roll for success based on mode (only affects base success chance, not outcomes)
+    const successRoll = Math.random();
+    let success = successRoll <= mode.successChance;
+    
+    // If success roll failed, reduce revenue further
+    if (!success && eventOutcome === 'normal') {
+      finalRevenue = Math.floor(finalRevenue * 0.6); // Failed event does 60% revenue
+    } else if (!success && eventOutcome !== 'fight' && eventOutcome !== 'police') {
+      finalRevenue = Math.floor(finalRevenue * 0.7);
+    }
+
+    // Check for insurance consumable (general failure protection)
+    club.consumables = club.consumables || {};
+    let usedInsurance = false;
+    if (!success && (club.consumables.insurance || 0) > 0 && eventOutcome !== 'fight') {
+      // Consume insurance to refund 50% of cost on general failure
+      club.consumables.insurance -= 1;
+      usedInsurance = true;
+      const refund = Math.floor(eventConfig.cost * 0.5);
+      await unifiedUserManager.addMoney(userId, refund, `Insurance refund for ${eventType}`);
+      finalRevenue = Math.max(finalRevenue, refund);
+    }
+
+    // Apply fine if police raid
+    if (fineAmount > 0) {
+      await unifiedUserManager.removeMoney(userId, fineAmount, `Police raid fine for ${eventType}`);
+    }
+
+    // Reward user with a share of revenue
+    const userShare = Math.floor(finalRevenue * 0.4);
+    if (userShare > 0) {
+      await unifiedUserManager.addMoney(userId, userShare, `Event revenue: ${eventType}`);
+    }
+
+    // Calculate XP gain from event (tuned)
+    const xpGain = Math.floor(finalRevenue / 1000) + (success ? 80 : 15);
+
+    // Update club stats: track revenue (could be zero on failure), attempts, lastAt
+    stat.attempts = (stat.attempts || 0) + 1;
+    stat.lastAt = now;
+    club.hostingStats[statKey] = stat;
+
+    // Apply global economic multiplier for events
+    const globalMultiplier = await computeEconomicMultiplier();
+    const grossAfterMultiplier = Math.floor(finalRevenue * globalMultiplier);
+
+    // Sinks: event tax + maintenance
+    const eventTax = Math.floor(grossAfterMultiplier * (GAME_CONFIG.ECONOMY.EVENT_TAX || 0.10));
+    const maintenance = Math.floor((workingEquipment.length) * 1000 + (club.staff?.length || 0) * 500);
+    const sinks = eventTax + maintenance;
+    if (sinks > 0) await recordEconomySink('event_sink', sinks);
+
+    const netRevenue = Math.max(0, grossAfterMultiplier - sinks);
+
+    // Prepare DB updates (credit clubs with net revenue)
+    const updateOps = {
+      $inc: {
+        balance: netRevenue,
+        totalRevenue: netRevenue,
+        weeklyRevenue: netRevenue,
+        weeklyEvents: 1,
+        xp: xpGain
+      },
+      $set: {
+        lastEventAt: new Date(),
+        updatedAt: new Date(),
+        hostingStats: club.hostingStats,
+        consumables: club.consumables
+      }
+    };
+
+    // Handle reputation and violations based on outcome
+    if (eventOutcome === 'sold_out') {
+      updateOps.$inc.reputation = 15; // Big reputation boost
+    } else if (eventOutcome === 'normal') {
+      updateOps.$inc.reputation = 5;
+    } else if (eventOutcome === 'fight') {
+      updateOps.$inc.reputation = -20; // Major reputation hit
+      if (violationAdded) {
+        updateOps.$push = { violations: { type: 'fight_incident', description: `Fight broke out during ${eventType}`, date: new Date() } };
+      }
+    } else if (eventOutcome === 'police') {
+      if (violationAdded) {
+        updateOps.$inc.reputation = -25; // Severe reputation hit
+        updateOps.$push = { violations: { type: 'police_raid', description: `Police raid during ${eventType}`, date: new Date() } };
+      } else {
+        updateOps.$inc.reputation = -10; // Minor hit (license protected you)
+      }
+    }
+
+    await clubsCollection.updateOne({ userId }, updateOps);
+
+    // Apply equipment damage if needed (from fight outcome or regular breakdown)
+    if (equipmentDamage > 0) {
       const randomEquipment = workingEquipment[Math.floor(Math.random() * workingEquipment.length)];
-      randomEquipment.currentDurability = Math.max(0, randomEquipment.currentDurability - 20); // Higher damage
+      randomEquipment.currentDurability = Math.max(0, randomEquipment.currentDurability - equipmentDamage);
+      
+      if (randomEquipment.currentDurability <= 0) {
+        randomEquipment.broken = true;
+      }
+      
+      const updatedEquipment = club.equipment.map(e => 
+        e.type === randomEquipment.type ? randomEquipment : e
+      );
+      
+      await clubsCollection.updateOne(
+        { userId },
+        { $set: { equipment: updatedEquipment } }
+      );
+    } else if (Math.random() < 0.2 && eventOutcome !== 'fight') {
+      // Regular breakdown chance (only if not fight outcome)
+      const randomEquipment = workingEquipment[Math.floor(Math.random() * workingEquipment.length)];
+      randomEquipment.currentDurability = Math.max(0, randomEquipment.currentDurability - 20);
       
       if (randomEquipment.currentDurability <= 0) {
         randomEquipment.broken = true;
@@ -1271,7 +2010,13 @@ async function handleClubHost(m, sock, args, userId, db) {
       );
     }
     
-    const successMsg = `🎉 *Event Hosted Successfully!*
+    // After updating XP, check for level up
+    await checkClubLevelUp(userId, clubsCollection);
+    
+    var profit = Math.max(0, finalRevenue - eventConfig.cost);
+
+    const successMsg = `${outcomeEmoji} *${outcomeName}*
+━━━━━━━━━━━━━━━━━━━
 
 🎪 *Event:* ${eventType.replace(/_/g, ' ')}
 💰 *Investment:* ₦${eventConfig.cost.toLocaleString()}
@@ -1279,7 +2024,15 @@ async function handleClubHost(m, sock, args, userId, db) {
 💵 *Profit:* ₦${profit.toLocaleString()}
 ⏰ *Duration:* ${eventConfig.duration} hours
 
-${profit > 0 ? '🎊 Great success! Your club is thriving!' : '📉 Consider improving equipment and staff for better returns.'}`;
+${eventOutcome === 'sold_out' ? '🎊 Incredible turnout! Tickets sold out!' : ''}
+${eventOutcome === 'normal' ? '✅ Smooth event, good crowd!' : ''}
+${eventOutcome === 'fight' ? '💔 Crowd got rowdy, causing damage!' + (equipmentDamage > 0 ? '\n🔧 Equipment damaged!' : '\n🛡️ Insurance protected your equipment!') : ''}
+${eventOutcome === 'police' ? '⚠️ Authorities showed up!' + (fineAmount > 0 ? `\n💸 Fine: ₦${fineAmount.toLocaleString()}` : '\n📋 Your license protected you!') : ''}
+${violationAdded && eventOutcome !== 'police' ? '\n📋 +1 Violation' : ''}
+${usedInsurance && eventOutcome !== 'fight' ? '\n🛡️ Insurance activated!' : ''}
+${securityStaff > 0 ? `\n🛡️ ${securityStaff} security staff reduced incident risk` : ''}
+
+⭐ +${xpGain} XP`;
 
     await m.reply(successMsg);
     
@@ -1441,6 +2194,106 @@ async function handleClubBook(m, sock, args, userId, db) {
   }
 }
 
+// Progression helpers
+async function checkClubLevelUp(userId, clubsCollection) {
+  try {
+    const club = await clubsCollection.findOne({ userId });
+    if (!club) return;
+    const currentLevel = club.level || 1;
+    const xp = club.xp || 0;
+    // compute next level threshold
+    let nextLevel = currentLevel + 1;
+    const threshold = GAME_CONFIG.LEVELS.formula(nextLevel);
+    if (xp >= threshold) {
+      // level up loop in case of multiple levels
+      let newLevel = currentLevel;
+      while (xp >= GAME_CONFIG.LEVELS.formula(newLevel + 1)) newLevel++;
+      const newRank = GAME_CONFIG.RANKS.slice().reverse().find(r => newLevel >= r.minLevel)?.name || club.rank;
+      await clubsCollection.updateOne({ userId }, { $set: { level: newLevel, rank: newRank, updatedAt: new Date() } });
+    }
+  } catch (error) {
+    console.error('Level up check failed:', error.message);
+  }
+}
+
+// Mini-games handler
+async function handleClubPlay(m, sock, args, userId, db) {
+  if (args.length === 0) {
+    let gamesMsg = `🎮 *Mini-Games*\nAvailable games:\n`;
+    Object.entries(GAME_CONFIG.SKILL_GAMES).forEach(([k, v]) => {
+      gamesMsg += `• ${k}: ${v.description}\n`;
+    });
+    gamesMsg += `\n*Usage:* /club play <game> <answer>`;
+    await m.reply(gamesMsg);
+    return;
+  }
+
+  const game = args[0].toLowerCase();
+  const clubsCollection = await getCollection('clubs');
+  const club = await clubsCollection.findOne({ userId });
+  if (!club) { await m.reply('❌ You don\'t own a club!'); return; }
+
+  // Ensure minimal equipment/staff for fairness
+  const workingEquipment = (club.equipment || []).filter(e => !e.broken);
+
+  if (game === 'guess') {
+    const guess = parseInt(args[1], 10);
+    if (!guess || guess < 1 || guess > 6) { await m.reply('Usage: /club play guess <number 1-6>'); return; }
+    const secret = Math.floor(Math.random() * 6) + 1;
+    if (guess === secret) {
+      const reward = 50000 + Math.floor((workingEquipment.length) * 5000);
+      await unifiedUserManager.addMoney(userId, reward, 'Mini-game: guess reward');
+      await clubsCollection.updateOne({ userId }, { $inc: { xp: 30 }, $set: { updatedAt: new Date() } });
+      await checkClubLevelUp(userId, clubsCollection);
+      await m.reply(`🎉 Correct! The number was ${secret}. You win ₦${reward.toLocaleString()} and +30 XP.`);
+    } else {
+      await clubsCollection.updateOne({ userId }, { $inc: { xp: 5 }, $set: { updatedAt: new Date() } });
+      await checkClubLevelUp(userId, clubsCollection);
+      await m.reply(`❌ Wrong. The number was ${secret}. You get +5 XP.`);
+    }
+    return;
+  }
+
+  if (game === 'math') {
+    // simple math question deterministic based on club id for testability
+    const a = (club.name.length % 9) + 2;
+    const b = (club.level || 1) + 1;
+    const expected = a + b;
+    const answer = parseInt(args[1], 10);
+    if (isNaN(answer)) { await m.reply(`Usage: /club play math <answer>\nQuestion: What is ${a} + ${b}?`); return; }
+    if (answer === expected) {
+      const reward = 30000 + (club.level || 1) * 2000;
+      await unifiedUserManager.addMoney(userId, reward, 'Mini-game: math reward');
+      await clubsCollection.updateOne({ userId }, { $inc: { xp: 40 }, $set: { updatedAt: new Date() } });
+      await checkClubLevelUp(userId, clubsCollection);
+      await m.reply(`✅ Correct! You solved ${a} + ${b}. You win ₦${reward.toLocaleString()} and +40 XP.`);
+    } else {
+      await clubsCollection.updateOne({ userId }, { $inc: { xp: 10 }, $set: { updatedAt: new Date() } });
+      await checkClubLevelUp(userId, clubsCollection);
+      await m.reply(`❌ Incorrect. The correct answer was ${expected}. You get +10 XP.`);
+    }
+    return;
+  }
+
+  await m.reply('❌ Game not found. Use `/club play` to list available games.');
+}
+
+// Show rank/info
+async function handleClubRank(m, sock, args, userId, db) {
+  try {
+    const clubsCollection = await getCollection('clubs');
+    const club = await clubsCollection.findOne({ userId });
+    if (!club) { await m.reply('❌ You don\'t own a club!'); return; }
+    const level = club.level || 1;
+    const xp = club.xp || 0;
+    const next = GAME_CONFIG.LEVELS.formula(level + 1);
+    await m.reply(`🏅 *${club.name}*\nLevel: ${level} (${club.rank || 'Newbie'})\nXP: ${xp}/${next}`);
+  } catch (error) {
+    console.error('Rank display failed:', error.message);
+    await m.reply('❌ Failed to load rank info.');
+  }
+}
+
 async function showClubHelp(m, sock, prefix) {
   const helpMsg = `🏢 *Club Management System*
 ━━━━━━━━━━━━━━━━━━━
@@ -1462,6 +2315,11 @@ async function showClubHelp(m, sock, prefix) {
 • \`${prefix}club book <celebrity> <event>\` - Book celebrities
 • \`${prefix}club upgrade <area>\` - Club improvements
 
+� *DAILY ENGAGEMENT*
+• \`${prefix}club decision\` - View & respond to daily challenges
+• Earn XP and rewards by making strategic decisions
+• One decision per day - face consequences or reap rewards!
+
 📊 *COMPETITION*
 • \`${prefix}club billboard\` - View weekly rankings
 • \`${prefix}club compete <club>\` - Challenge rival clubs
@@ -1472,7 +2330,7 @@ async function showClubHelp(m, sock, prefix) {
 • Business license is mandatory to operate
 • Hire technicians to reduce equipment wear
 • Host regular events to build reputation
-• Monitor equipment durability closely
+• Don't ignore daily decisions - they affect your club!
 
 🎮 *Welcome to the ultimate club simulation!*`;
 
@@ -1587,6 +2445,190 @@ async function handleClubLeaderboard(m, sock, userId, db) {
   } catch (error) {
     console.error(chalk.red('❌ Club leaderboard error:'), error.message);
     await m.reply('❌ Failed to load leaderboard.' );
+  }
+}
+
+// Daily Decisions Handler
+async function handleClubDecision(m, sock, args, userId, db) {
+  try {
+    const clubsCollection = await getCollection('clubs');
+    const decisionsCollection = await getCollection('club_decisions');
+    
+    const club = await clubsCollection.findOne({ userId });
+    if (!club) {
+      await m.reply('❌ You don\'t own a club! Use `/club register` to start.' );
+      return;
+    }
+    
+    // Get today's pending decision
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const pendingDecision = await decisionsCollection.findOne({
+      userId,
+      createdAt: { $gte: today },
+      resolved: false
+    });
+    
+    if (!pendingDecision) {
+      await m.reply('🎉 *No pending decisions right now!*\n\n✅ You\'ve made your daily decision or there isn\'t one yet.\n\nDecisions are assigned daily at midnight. Check back later for new challenges!');
+      return;
+    }
+    
+    // Show the decision with options
+    let decisionMsg = `${pendingDecision.emoji} *${pendingDecision.title}*\n━━━━━━━━━━━━━━━━━━━\n\n📝 *Situation:*\n${pendingDecision.situation}\n\n*What will you do?*\n\n`;
+    
+    pendingDecision.options.forEach((option, index) => {
+      decisionMsg += `${option.emoji} ${option.text}\n`;
+    });
+    
+    decisionMsg += `\n💡 *Reply with just the number* (1, 2, or 3) to this message to make your choice.`;
+    
+    // Send decision message and store selection context
+    const sentMsg = await m.reply(decisionMsg);
+    
+    // Store the selection handler for this message
+    storeSelectionContext(sentMsg.id || m.id, 'decision', pendingDecision.options, 
+      async (choiceNumber) => {
+        await processDecisionChoice(choiceNumber, pendingDecision, userId, club, clubsCollection, decisionsCollection, m, sock);
+      }
+    );
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Decision handler error:'), error.message);
+    await m.reply('❌ Failed to load your daily decision. Please try again.' );
+  }
+}
+
+// Process player's decision choice
+async function processDecisionChoice(choiceNumber, decision, userId, club, clubsCollection, decisionsCollection, m, sock) {
+  try {
+    const chosenOption = decision.options[choiceNumber - 1];
+    if (!chosenOption) {
+      await m.reply('❌ Invalid choice! Please select 1, 2, or 3.' );
+      return;
+    }
+    
+    const effects = chosenOption.effects;
+    
+    // Apply effects to club
+    let updates = { updatedAt: new Date() };
+    let messageText = `✅ *You chose: "${chosenOption.text}"*\n━━━━━━━━━━━━━━━━━━━\n\n`;
+    
+    // Money changes
+    if (effects.money !== undefined && effects.money !== 0) {
+      updates.balance = Math.max(0, (club.balance || 0) + effects.money);
+      messageText += effects.money > 0 
+        ? `💰 +₦${Math.abs(effects.money).toLocaleString()}\n`
+        : `💸 -₦${Math.abs(effects.money).toLocaleString()}\n`;
+    }
+    
+    // XP changes
+    if (effects.xp !== undefined) {
+      updates.xp = (club.xp || 0) + effects.xp;
+      messageText += `⭐ +${effects.xp} XP\n`;
+    }
+    
+    // Happiness changes
+    if (effects.happiness !== undefined) {
+      updates.reputation = Math.max(0, Math.min(100, (club.reputation || 50) + effects.happiness));
+      messageText += effects.happiness > 0 
+        ? `😊 Happiness +${effects.happiness}\n`
+        : `😔 Happiness ${effects.happiness}\n`;
+    }
+    
+    // Revenue multiplier changes
+    if (effects.revenue !== undefined) {
+      messageText += effects.revenue > 0 
+        ? `📈 Revenue increased by ${Math.round(effects.revenue * 100)}%\n`
+        : `📉 Revenue decreased by ${Math.round(Math.abs(effects.revenue) * 100)}%\n`;
+    }
+    
+    // Violations changes
+    if (effects.violations !== undefined) {
+      updates.violations = club.violations || [];
+      if (effects.violations > 0) {
+        for (let i = 0; i < effects.violations; i++) {
+          updates.violations.push({
+            type: 'decision_consequence',
+            description: `Decision: ${decision.title} - ${chosenOption.text}`,
+            date: new Date()
+          });
+        }
+        messageText += `🚨 +${effects.violations} violation(s)\n`;
+      } else if (effects.violations < 0) {
+        // Remove violations
+        updates.violations = updates.violations.slice(0, Math.max(0, updates.violations.length + effects.violations));
+        messageText += `✅ Resolved ${Math.abs(effects.violations)} violation(s)\n`;
+      }
+    }
+    
+    // Club status changes
+    if (effects.isActive !== undefined) {
+      updates.isActive = effects.isActive;
+      if (!effects.isActive) {
+        messageText += `⛔ *CLUB SHUTDOWN* - Critical decision consequences!\n`;
+      }
+    }
+    
+    // Update club in database
+    await clubsCollection.updateOne(
+      { userId },
+      { $set: updates }
+    );
+    
+    // Mark decision as resolved
+    await decisionsCollection.updateOne(
+      { _id: decision._id },
+      {
+        $set: {
+          resolved: true,
+          choice: choiceNumber,
+          chosenOption: chosenOption.text,
+          resolvedAt: new Date()
+        }
+      }
+    );
+    
+    // Check for level up
+    await checkClubLevelUp(userId, clubsCollection);
+    
+    messageText += `\n🏢 *Your club has been updated!*`;
+    await m.reply(messageText);
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Decision choice processing error:'), error.message);
+    await m.reply('❌ An error occurred while processing your decision. Please try again.' );
+  }
+}
+
+// Helper function to check club level up
+async function checkClubLevelUp(userId, clubsCollection) {
+  try {
+    const club = await clubsCollection.findOne({ userId });
+    if (!club) return;
+    
+    const currentLevel = club.level || 1;
+    const currentXp = club.xp || 0;
+    const xpNeeded = GAME_CONFIG.LEVELS.formula(currentLevel + 1);
+    
+    if (currentXp >= xpNeeded) {
+      const newLevel = currentLevel + 1;
+      const newRank = GAME_CONFIG.RANKS.find(r => r.minLevel <= newLevel)?.name || 'Tycoon';
+      
+      await clubsCollection.updateOne(
+        { userId },
+        {
+          $set: {
+            level: newLevel,
+            rank: newRank,
+            updatedAt: new Date()
+          }
+        }
+      );
+    }
+  } catch (error) {
+    console.error('Failed to check club level up:', error.message);
   }
 }
 
