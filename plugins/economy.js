@@ -123,6 +123,13 @@ export default {
       await initUser(senderId);
       await cleanupExpiredEffects(senderId);
 
+      // ✅ ENFORCE PORTFOLIO LIMITS (after grace period ends)
+      // Auto-liquidate excess holdings for players who exceeded their subscription tier limits
+      if (!isInGracePeriod()) {
+        const userData = await getUserData(senderId);
+        await enforcePortfolioLimits(userData, sock, senderId);
+      }
+
       // Define the reply function used by all helper functions
       const reply = async (replyText) => {
         try {
@@ -1876,7 +1883,7 @@ async function handleShop(context, args) {
 
       const itemId = getItemId(args[1]);
       const item = SHOP_ITEMS[itemId];
-        
+
         if (!item) {
           await reply('❌ *Item not found*');
           return;
@@ -2864,7 +2871,7 @@ function getWalletBankLimits(userData) {
 
 // ===== AUTO-LIQUIDATION SYSTEM =====
 // Enforce portfolio limits by liquidating excess holdings after grace period
-async function enforcePortfolioLimits(userData, sock = null) {
+async function enforcePortfolioLimits(userData, sock = null, userJid = null) {
   const userId = userData.id || userData._id;
   const tier = userData.subscription?.tier || 'free';
   const tierConfig = SUBSCRIPTION_TIERS[tier];
@@ -2973,9 +2980,9 @@ async function enforcePortfolioLimits(userData, sock = null) {
     if (liquidationReport.liquidated && Object.keys(updates).length > 0) {
       await updateUserData(userId, updates);
 
-      // Send liquidation notification if socket available
-      if (sock && liquidationReport.items.length > 0) {
-        await sendLiquidationNotification(userId, liquidationReport, sock);
+      // Send liquidation notification if socket and JID available
+      if (sock && userJid && liquidationReport.items.length > 0) {
+        await sendLiquidationNotification(userId, liquidationReport, sock, userJid);
       }
     }
 
@@ -2989,9 +2996,9 @@ async function enforcePortfolioLimits(userData, sock = null) {
 }
 
 // Send notification when holdings are auto-liquidated
-async function sendLiquidationNotification(userId, liquidationReport, sock) {
+async function sendLiquidationNotification(userId, liquidationReport, sock, userJid) {
   try {
-    if (!sock || !liquidationReport.liquidated) return;
+    if (!sock || !userJid || !liquidationReport.liquidated) return;
 
     const userData = await getUserData(userId);
     const tier = userData.subscription?.tier || 'free';
@@ -3003,7 +3010,7 @@ async function sendLiquidationNotification(userId, liquidationReport, sock) {
 
     const message = `⚠️ *PORTFOLIO LIMIT ENFORCED*\n\nYour holdings exceeded the new limits for your subscription tier.\n\n*Items Liquidated:*\n${itemsList}\n\n💰 *Total Refund:* ₦${liquidationReport.totalRefund.toLocaleString()}\n\n🎁 Refunds have been added to your wallet.\n\n💎 *Your Tier:* ${tierConfig.name}\n📊 *Wallet Limit:* ₦${tierConfig.limits.walletLimit.toLocaleString()}\n🏦 *Bank Limit:* ₦${tierConfig.limits.bankLimit.toLocaleString()}\n\n💡 *Tip:* Upgrade your subscription to increase limits!`;
 
-    await sock.sendMessage(userId, { text: message });
+    await sock.sendMessage(userJid, { text: message });
   } catch (error) {
     console.error('Error sending liquidation notification:', error);
   }
