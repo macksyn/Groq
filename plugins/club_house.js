@@ -2691,36 +2691,6 @@ async function processDecisionChoice(choiceNumber, decision, userId, club, clubs
   }
 }
 
-// Helper function to check club level up
-async function checkClubLevelUp(userId, clubsCollection) {
-  try {
-    const club = await clubsCollection.findOne({ userId });
-    if (!club) return;
-
-    const currentLevel = club.level || 1;
-    const currentXp = club.xp || 0;
-    const xpNeeded = GAME_CONFIG.LEVELS.formula(currentLevel + 1);
-
-    if (currentXp >= xpNeeded) {
-      const newLevel = currentLevel + 1;
-      const newRank = GAME_CONFIG.RANKS.find(r => r.minLevel <= newLevel)?.name || 'Tycoon';
-
-      await clubsCollection.updateOne(
-        { userId },
-        {
-          $set: {
-            level: newLevel,
-            rank: newRank,
-            updatedAt: new Date()
-          }
-        }
-      );
-    }
-  } catch (error) {
-    console.error('Failed to check club level up:', error.message);
-  }
-}
-
 // ============================================================
 // CLUB VISIBILITY & PR SYSTEM
 // ============================================================
