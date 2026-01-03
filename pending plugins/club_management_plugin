@@ -613,8 +613,8 @@ async function handleClubRegister(m, sock, args, userId) {
       return;
     }
     
-    // Check if user has enough money (registration fee: 1,0000,000)
-    const registrationFee = 10000000; // Increased
+    // Check if user has enough money (registration fee: 500,0000,000)
+    const registrationFee = 500000000; // Increased
     const userBalance = await PluginHelpers.getBalance(userId);
     
     if (userBalance.wallet < registrationFee) {
