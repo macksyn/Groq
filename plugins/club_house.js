@@ -983,7 +983,7 @@ GAME_CONFIG.ECONOMY = {
   EVENT_TAX: 0.2, // tax on event gross revenue (was 0.10)
   UTILITIES_MULTIPLIER: 5, // scale utilities up
   USER_PASSIVE_SHARE: 0.1, // share of passive revenue paid to user wallet (was 0.3)
-  CELEB_FEE_MULTIPLIER: 5, // scale celebrity fees
+  CELEB_FEE_MULTIPLIER: 50, // scale celebrity fees
   INFLATION_RATE: 0.2, // increase inflation rate used in market messaging
 };
 
@@ -1579,7 +1579,14 @@ async function recordEconomySink(reason, amount) {
 
 // Helper function to find equipment by flexible name matching
 function findEquipmentByName(input) {
-  const normalized = input.toLowerCase().replace(/\s+/g, "_");
+  // Remove markdown and punctuation, keep letters/numbers/spaces/hyphens/underscores
+  const cleaned = (input || "")
+    .replace(/[\*_`~]/g, "")
+    .replace(/[^\w\s-]/g, "")
+    .trim()
+    .toLowerCase();
+
+  const normalized = cleaned.replace(/\s+/g, "_");
 
   // Exact match first
   if (GAME_CONFIG.EQUIPMENT[normalized]) {
@@ -1591,7 +1598,13 @@ function findEquipmentByName(input) {
     const displayName = (config.displayName || key).toLowerCase();
     const keyLower = key.toLowerCase();
 
-    if (displayName.includes(normalized) || keyLower.includes(normalized) || normalized.includes(keyLower)) {
+    if (
+      displayName.includes(cleaned) ||
+      keyLower.includes(cleaned) ||
+      displayName.includes(normalized) ||
+      keyLower.includes(normalized) ||
+      normalized.includes(keyLower)
+    ) {
       return { key, config };
     }
   }
@@ -1601,7 +1614,14 @@ function findEquipmentByName(input) {
 
 // Helper function to find celebrity by flexible name matching
 function findCelebrity(input) {
-  const normalized = input.toLowerCase().replace(/\s+/g, "_");
+  // Remove markdown and punctuation, keep letters/numbers/spaces/hyphens/underscores
+  const cleaned = (input || "")
+    .replace(/[\*_`~]/g, "")
+    .replace(/[^\w\s-]/g, "")
+    .trim()
+    .toLowerCase();
+
+  const normalized = cleaned.replace(/\s+/g, "_");
 
   // Exact match first
   if (GAME_CONFIG.CELEBRITIES[normalized]) {
@@ -1610,7 +1630,8 @@ function findCelebrity(input) {
 
   // Partial match
   for (const [key, config] of Object.entries(GAME_CONFIG.CELEBRITIES)) {
-    if (key.toLowerCase().includes(normalized) || normalized.includes(key.toLowerCase())) {
+    const keyLower = key.toLowerCase();
+    if (keyLower.includes(cleaned) || cleaned.includes(keyLower) || keyLower.includes(normalized) || normalized.includes(keyLower)) {
       return { key, config };
     }
   }
@@ -1950,7 +1971,14 @@ async function handleClubBuy(m, sock, args, userId, db) {
       const equipment = equipmentResult?.config;
       const equipmentKey = equipmentResult?.key;
 
-      const consumable = GAME_CONFIG.CONSUMABLES[itemInput.toLowerCase().replace(/\s+/g, "_")];
+      // sanitize consumable key similar to find functions
+      const consumableKey = (itemInput || "")
+        .replace(/[\*_`~]/g, "")
+        .replace(/[^\w\s-]/g, "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "_");
+      const consumable = GAME_CONFIG.CONSUMABLES[consumableKey];
       const userBalance = await PluginHelpers.getBalance(userId);
       if (consumable) {
         if (userBalance.wallet < consumable.price) {
@@ -1961,7 +1989,6 @@ async function handleClubBuy(m, sock, args, userId, db) {
           return;
         }
 
-        const consumableKey = itemInput.toLowerCase().replace(/\s+/g, "_");
         // Deduct and add consumable to club
         await unifiedUserManager.removeMoney(
           userId,
