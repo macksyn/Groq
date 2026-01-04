@@ -1579,14 +1579,7 @@ async function recordEconomySink(reason, amount) {
 
 // Helper function to find equipment by flexible name matching
 function findEquipmentByName(input) {
-  // Remove markdown and punctuation, keep letters/numbers/spaces/hyphens/underscores
-  const cleaned = (input || "")
-    .replace(/[\*_`~]/g, "")
-    .replace(/[^\w\s-]/g, "")
-    .trim()
-    .toLowerCase();
-
-  const normalized = cleaned.replace(/\s+/g, "_");
+  const normalized = input.toLowerCase().replace(/\s+/g, "_");
 
   // Exact match first
   if (GAME_CONFIG.EQUIPMENT[normalized]) {
@@ -1598,13 +1591,7 @@ function findEquipmentByName(input) {
     const displayName = (config.displayName || key).toLowerCase();
     const keyLower = key.toLowerCase();
 
-    if (
-      displayName.includes(cleaned) ||
-      keyLower.includes(cleaned) ||
-      displayName.includes(normalized) ||
-      keyLower.includes(normalized) ||
-      normalized.includes(keyLower)
-    ) {
+    if (displayName.includes(normalized) || keyLower.includes(normalized) || normalized.includes(keyLower)) {
       return { key, config };
     }
   }
@@ -1614,14 +1601,7 @@ function findEquipmentByName(input) {
 
 // Helper function to find celebrity by flexible name matching
 function findCelebrity(input) {
-  // Remove markdown and punctuation, keep letters/numbers/spaces/hyphens/underscores
-  const cleaned = (input || "")
-    .replace(/[\*_`~]/g, "")
-    .replace(/[^\w\s-]/g, "")
-    .trim()
-    .toLowerCase();
-
-  const normalized = cleaned.replace(/\s+/g, "_");
+  const normalized = input.toLowerCase().replace(/\s+/g, "_");
 
   // Exact match first
   if (GAME_CONFIG.CELEBRITIES[normalized]) {
@@ -1630,8 +1610,7 @@ function findCelebrity(input) {
 
   // Partial match
   for (const [key, config] of Object.entries(GAME_CONFIG.CELEBRITIES)) {
-    const keyLower = key.toLowerCase();
-    if (keyLower.includes(cleaned) || cleaned.includes(keyLower) || keyLower.includes(normalized) || normalized.includes(keyLower)) {
+    if (key.toLowerCase().includes(normalized) || normalized.includes(key.toLowerCase())) {
       return { key, config };
     }
   }
@@ -1950,119 +1929,106 @@ async function handleClubBuy(m, sock, args, userId, db) {
 
   const itemInput = args.join(" ");
 
-  const { MongoClient } = require("mongodb");
-  const client = await MongoClient.connect(process.env.MONGO_URI, {
-    useUnifiedTopology: true,
-  });
-  const session = client.startSession();
   try {
-    await session.withTransaction(async () => {
-      const clubsCollection = client.db().collection("clubs");
-      const club = await clubsCollection.findOne({ userId }, { session });
+    const clubsCollection = await getCollection("clubs");
+    const club = await clubsCollection.findOne({ userId });
 
-      if (!club) {
-        await m.reply("❌ You don't own a club!");
-        await session.abortTransaction();
-        return;
-      }
+    if (!club) {
+      await m.reply("❌ You don't own a club!");
+      return;
+    }
 
-      // Use flexible matching for equipment
-      const equipmentResult = findEquipmentByName(itemInput);
-      const equipment = equipmentResult?.config;
-      const equipmentKey = equipmentResult?.key;
+    // Use flexible matching for equipment
+    const equipmentResult = findEquipmentByName(itemInput);
+    const equipment = equipmentResult?.config;
+    const equipmentKey = equipmentResult?.key;
 
-      // sanitize consumable key similar to find functions
-      const consumableKey = (itemInput || "")
-        .replace(/[\*_`~]/g, "")
-        .replace(/[^\w\s-]/g, "")
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, "_");
-      const consumable = GAME_CONFIG.CONSUMABLES[consumableKey];
-      const userBalance = await PluginHelpers.getBalance(userId);
-      if (consumable) {
-        if (userBalance.wallet < consumable.price) {
-          await m.reply(
-            `❌ Insufficient funds!\n\n*Item:* ${itemInput}\n*Price:* ₦${consumable.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`,
-          );
-          await session.abortTransaction();
-          return;
-        }
+    // sanitize consumable key similar to find functions
+    const consumableKey = (itemInput || "")
+      .replace(/[\*_`~]/g, "")
+      .replace(/[^\w\s-]/g, "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_");
+    const consumable = GAME_CONFIG.CONSUMABLES[consumableKey];
+    const userBalance = await PluginHelpers.getBalance(userId);
 
-        // Deduct and add consumable to club
-        await unifiedUserManager.removeMoney(
-          userId,
-          consumable.price,
-          `Purchase consumable: ${itemInput}`,
-          { session },
-        );
-        await clubsCollection.updateOne(
-          { userId },
-          {
-            $inc: { [`consumables.${consumableKey}`]: 1 },
-            $set: { updatedAt: new Date() },
-          },
-          { session },
-        );
-
+    if (consumable) {
+      if (userBalance.wallet < consumable.price) {
         await m.reply(
-          `✅ *Consumable Purchased!*\n\n• Item: ${itemInput}\n• Cost: ₦${consumable.price.toLocaleString()}\n\nUse it automatically when needed during risky events.`,
+          `❌ Insufficient funds!\n\n*Item:* ${itemInput}\n*Price:* ₦${consumable.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`,
         );
-        return;
-      }
-      if (!equipment) {
-        await m.reply(
-          `❌ Item "${itemInput}" not found!\n\nView available: /club market`,
-        );
-        await session.abortTransaction();
         return;
       }
 
-      // Cap equipment at 10
-      if (club.equipment?.length >= 10) {
-        await m.reply(
-          "❌ Maximum equipment limit reached (10 items)! Repair or sell existing ones.",
-        );
-        await session.abortTransaction();
-        return;
-      }
-
-      if (userBalance.wallet < equipment.price) {
-        await m.reply(
-          `❌ Insufficient funds!\n\n*Item:* ${equipment.displayName || equipmentKey.replace(/_/g, " ")}\n*Price:* ₦${equipment.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`,
-        );
-        await session.abortTransaction();
-        return;
-      }
-
-      // Deduct money and add equipment
+      // Deduct and add consumable to club
       await unifiedUserManager.removeMoney(
         userId,
-        equipment.price,
-        `Club equipment: ${equipment.displayName || equipmentKey}`,
-        { session },
+        consumable.price,
+        `Purchase consumable: ${itemInput}`,
       );
-
-      const newEquipment = {
-        type: equipmentKey,
-        displayName: equipment.displayName || equipmentKey.replace(/_/g, " "),
-        purchasedAt: new Date(),
-        currentDurability: equipment.durability,
-        maxDurability: equipment.durability,
-        broken: false,
-        timesRepaired: 0,
-      };
-
       await clubsCollection.updateOne(
         { userId },
         {
-          $push: { equipment: newEquipment },
+          $inc: { [`consumables.${consumableKey}`]: 1 },
           $set: { updatedAt: new Date() },
         },
-        { session },
       );
 
-      const successMsg = `✅ *Equipment Purchased!*
+      await m.reply(
+        `✅ *Consumable Purchased!*\n\n• Item: ${itemInput}\n• Cost: ₦${consumable.price.toLocaleString()}\n\nUse it automatically when needed during risky events.`,
+      );
+      return;
+    }
+
+    if (!equipment) {
+      await m.reply(
+        `❌ Item "${itemInput}" not found!\n\nView available: /club market`,
+      );
+      return;
+    }
+
+    // Cap equipment at 10
+    if (club.equipment?.length >= 10) {
+      await m.reply(
+        "❌ Maximum equipment limit reached (10 items)! Repair or sell existing ones.",
+      );
+      return;
+    }
+
+    if (userBalance.wallet < equipment.price) {
+      await m.reply(
+        `❌ Insufficient funds!\n\n*Item:* ${equipment.displayName || equipmentKey.replace(/_/g, " ")}\n*Price:* ₦${equipment.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`,
+      );
+      return;
+    }
+
+    // Deduct money and add equipment
+    await unifiedUserManager.removeMoney(
+      userId,
+      equipment.price,
+      `Club equipment: ${equipment.displayName || equipmentKey}`,
+    );
+
+    const newEquipment = {
+      type: equipmentKey,
+      displayName: equipment.displayName || equipmentKey.replace(/_/g, " "),
+      purchasedAt: new Date(),
+      currentDurability: equipment.durability,
+      maxDurability: equipment.durability,
+      broken: false,
+      timesRepaired: 0,
+    };
+
+    await clubsCollection.updateOne(
+      { userId },
+      {
+        $push: { equipment: newEquipment },
+        $set: { updatedAt: new Date() },
+      },
+    );
+
+    const successMsg = `✅ *Equipment Purchased!*
 
 🛍️ *Item:* ${equipment.displayName || equipmentKey.replace(/_/g, " ")}
 💰 *Cost:* ₦${equipment.price.toLocaleString()}
@@ -2071,14 +2037,10 @@ async function handleClubBuy(m, sock, args, userId, db) {
 
 💡 *Tip:* Hire a technician to reduce equipment wear!`;
 
-      await m.reply(successMsg);
-    });
+    await m.reply(successMsg);
   } catch (error) {
     console.error(chalk.red("❌ Club buy error:"), error.message);
     await m.reply("❌ Failed to purchase equipment.");
-  } finally {
-    await session.endSession();
-    await client.close();
   }
 }
 
