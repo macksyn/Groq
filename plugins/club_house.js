@@ -377,7 +377,7 @@ const GAME_CONFIG = {
 
   LICENSES: {
     business: {
-      price: 500000000,
+      price: 50000000,
       duration: 90,
       required: true,
       description: "Basic business operation license",
@@ -389,7 +389,7 @@ const GAME_CONFIG = {
       description: "Alcohol serving permit",
     },
     adult_entertainment: {
-      price: 100000000,
+      price: 80000000,
       duration: 30,
       required: false,
       description: "Adult entertainment license",
