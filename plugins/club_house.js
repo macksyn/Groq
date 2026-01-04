@@ -259,71 +259,81 @@ export default {
 const GAME_CONFIG = {
   EQUIPMENT: {
     // Sound Equipment (High-end, expensive for economy drain)
-    jbl_srx815p_speakers: {
+    jbl_speakers: {
       price: 50000000,
       durability: 150,
       category: "sound",
       boost: { revenue: 1.3, happiness: 0.12 },
+      displayName: "JBL Speakers",
     },
-    yamaha_dzr15_speakers: {
+    yamaha_speakers: {
       price: 45000000,
       durability: 140,
       category: "sound",
       boost: { revenue: 1.25, happiness: 0.1 },
+      displayName: "Yamaha Speakers",
     },
-    pioneer_djm900_dj_booth: {
+    pioneer_dj_booth: {
       price: 80000000,
       durability: 130,
       category: "sound",
       boost: { revenue: 1.4, happiness: 0.15 },
+      displayName: "Pioneer DJ Booth",
     },
-    bose_l1_pro32_system: {
+    bose_system: {
       price: 120000000,
       durability: 160,
       category: "sound",
       boost: { revenue: 1.5, happiness: 0.18 },
+      displayName: "Bose System",
     },
 
     // Lighting
-    chauvet_rogue_r2x_beam: {
+    chauvet_beam: {
       price: 60000000,
       durability: 120,
       category: "lighting",
       boost: { revenue: 1.35, happiness: 0.14 },
+      displayName: "Chauvet Beam",
     },
-    martin_mac_aura_xb: {
+    martin_lights: {
       price: 100000000,
       durability: 150,
       category: "lighting",
       boost: { revenue: 1.45, happiness: 0.16 },
+      displayName: "Martin Lights",
     },
 
     // Furniture & Comfort
-    vip_leather_booths: {
+    vip_booths: {
       price: 30000000,
       durability: 200,
       category: "furniture",
       boost: { revenue: 1.25, happiness: 0.1 },
+      displayName: "VIP Booths",
     },
-    chrome_bar_stools: {
+    bar_stools: {
       price: 15000000,
       durability: 180,
       category: "furniture",
       boost: { revenue: 1.15, happiness: 0.08 },
+      displayName: "Bar Stools",
     },
 
     // Security
-    hikvision_ds2cd_camera: {
+    hikvision_camera: {
       price: 20000000,
       durability: 200,
       category: "security",
       boost: { revenue: 1.2, happiness: 0.1 },
+      displayName: "Hikvision Camera",
     },
-    samsung_qn_security_monitor: {
+    samsung_monitor: {
       price: 35000000,
       durability: 180,
       category: "security",
       boost: { revenue: 1.25, happiness: 0.12 },
+      displayName: "Samsung Monitor",
     },
   },
 
@@ -367,25 +377,25 @@ const GAME_CONFIG = {
 
   LICENSES: {
     business: {
-      price: 50000000,
+      price: 500000000,
       duration: 90,
       required: true,
       description: "Basic business operation license",
     },
     liquor: {
-      price: 7500000,
+      price: 75000000,
       duration: 90,
       required: false,
       description: "Alcohol serving permit",
     },
     adult_entertainment: {
-      price: 20000000,
+      price: 200000000,
       duration: 30,
       required: false,
       description: "Adult entertainment license",
     },
     noise_permit: {
-      price: 2500000,
+      price: 25000000,
       duration: 90,
       required: false,
       description: "Late night noise permit",
@@ -443,7 +453,7 @@ const GAME_CONFIG = {
   // Consumables and risk mode configs
   CONSUMABLES: {
     insurance: {
-      price: 800000000,
+      price: 500000000,
       description:
         "Prevents full loss on failed events (consumed on failure, refunds 50%).",
     },
@@ -538,175 +548,175 @@ const GAME_CONFIG = {
 
   CELEBRITIES: {
     burna_boy: {
-      fee: 80000000,
+      fee: 800000000,
       boost: { revenue: 2.5, happiness: 0.3 },
       availability: 0.5,
       genre: "afro_fusion",
     },
     wizkid: {
-      fee: 70000000,
+      fee: 700000000,
       boost: { revenue: 2.3, happiness: 0.28 },
       availability: 0.6,
       genre: "afrobeats",
     },
     davido: {
-      fee: 65000000,
+      fee: 650000000,
       boost: { revenue: 2.2, happiness: 0.25 },
       availability: 0.7,
       genre: "afrobeats",
     },
     rema: {
-      fee: 40000000,
+      fee: 400000000,
       boost: { revenue: 2.0, happiness: 0.22 },
       availability: 0.8,
       genre: "afro_rave",
     },
     fireboy_dml: {
-      fee: 30000000,
+      fee: 300000000,
       boost: { revenue: 1.8, happiness: 0.2 },
       availability: 0.85,
       genre: "afrobeats_rnb",
     },
     asake: {
-      fee: 35000000,
+      fee: 350000000,
       boost: { revenue: 1.9, happiness: 0.21 },
       availability: 0.75,
       genre: "fuji_afrobeats",
     },
     olamide: {
-      fee: 25000000,
+      fee: 250000000,
       boost: { revenue: 1.7, happiness: 0.18 },
       availability: 0.9,
       genre: "street_hop",
     },
     ayra_starr: {
-      fee: 30000000,
+      fee: 300000000,
       boost: { revenue: 1.8, happiness: 0.2 },
       availability: 0.8,
       genre: "afropop_rnb",
     },
     tems: {
-      fee: 45000000,
+      fee: 450000000,
       boost: { revenue: 2.1, happiness: 0.23 },
       availability: 0.7,
       genre: "alternative_rnb",
     },
     tiwa_savage: {
-      fee: 40000000,
+      fee: 400000000,
       boost: { revenue: 2.0, happiness: 0.22 },
       availability: 0.75,
       genre: "afrobeats",
     },
     seyi_vibez: {
-      fee: 20000000,
+      fee: 200000000,
       boost: { revenue: 1.6, happiness: 0.15 },
       availability: 0.9,
       genre: "fuji_street_hop",
     },
     oxlade: {
-      fee: 15000000,
+      fee: 150000000,
       boost: { revenue: 1.5, happiness: 0.14 },
       availability: 0.95,
       genre: "afrobeats_rnb",
     },
     joeboy: {
-      fee: 18000000,
+      fee: 180000000,
       boost: { revenue: 1.55, happiness: 0.16 },
       availability: 0.9,
       genre: "afrobeats_pop",
     },
     omah_lay: {
-      fee: 9500000,
+      fee: 220000000,
       boost: { revenue: 1.65, happiness: 0.17 },
       availability: 0.85,
       genre: "afrobeats_soul",
     },
     ckay: {
-      fee: 25000000,
+      fee: 250000000,
       boost: { revenue: 1.7, happiness: 0.18 },
       availability: 0.8,
       genre: "afrobeats_pop",
     },
     fola: {
-      fee: 28000000,
+      fee: 280000000,
       boost: { revenue: 1.75, happiness: 0.19 },
       availability: 0.82,
       genre: "afrobeats_trap",
     },
     shalipopi: {
-      fee: 32000000,
+      fee: 320000000,
       boost: { revenue: 1.85, happiness: 0.21 },
       availability: 0.78,
       genre: "street_hop_afrobeats",
     },
     bella_shmurda: {
-      fee: 26000000,
+      fee: 260000000,
       boost: { revenue: 1.7, happiness: 0.18 },
       availability: 0.85,
       genre: "street_hop",
     },
     kizz_daniel: {
-      fee: 24000000,
+      fee: 240000000,
       boost: { revenue: 1.65, happiness: 0.17 },
       availability: 0.88,
       genre: "afrobeats_pop",
     },
     zlatan: {
-      fee: 7000000,
+      fee: 270000000,
       boost: { revenue: 1.72, happiness: 0.19 },
       availability: 0.83,
       genre: "street_hop_afrobeats",
     },
     naira_marley: {
-      fee: 2300000,
+      fee: 230000000,
       boost: { revenue: 1.6, happiness: 0.16 },
       availability: 0.85,
       genre: "street_hop",
     },
     reekado_banks: {
-      fee: 2200000,
+      fee: 220000000,
       boost: { revenue: 1.65, happiness: 0.17 },
       availability: 0.87,
       genre: "afrobeats_pop",
     },
     lil_kesh: {
-      fee: 2000000,
+      fee: 200000000,
       boost: { revenue: 1.55, happiness: 0.15 },
       availability: 0.9,
       genre: "street_hop_afrobeats",
     },
     portable: {
-      fee: 1200000,
+      fee: 12000000,
       boost: { revenue: 1.7, happiness: 0.18 },
       availability: 0.85,
       genre: "reggae_afrobeats",
     },
     zinoleesky: {
-      fee: 2400000,
+      fee: 24000000,
       boost: { revenue: 1.5, happiness: 0.14 },
       availability: 0.92,
       genre: "afrobeats",
     },
     ayo_maff: {
-      fee: 5900000,
+      fee: 59000000,
       boost: { revenue: 1.58, happiness: 0.16 },
       availability: 0.88,
       genre: "afrobeats_trap",
     },
     ruger: {
-      fee: 11000000,
+      fee: 110000000,
       boost: { revenue: 1.62, happiness: 0.17 },
       availability: 0.86,
       genre: "afropop",
     },
     young_john: {
-      fee: 15000000,
+      fee: 150000000,
       boost: { revenue: 1.8, happiness: 0.2 },
       availability: 0.8,
       genre: "afrobeats_rnb",
     },
     bnxn: {
-      fee: 10000000,
+      fee: 100000000,
       boost: { revenue: 1.83, happiness: 0.21 },
       availability: 0.79,
       genre: "afrobeats_rnb",
@@ -1567,6 +1577,47 @@ async function recordEconomySink(reason, amount) {
   }
 }
 
+// Helper function to find equipment by flexible name matching
+function findEquipmentByName(input) {
+  const normalized = input.toLowerCase().replace(/\s+/g, "_");
+
+  // Exact match first
+  if (GAME_CONFIG.EQUIPMENT[normalized]) {
+    return { key: normalized, config: GAME_CONFIG.EQUIPMENT[normalized] };
+  }
+
+  // Partial match in displayName or key
+  for (const [key, config] of Object.entries(GAME_CONFIG.EQUIPMENT)) {
+    const displayName = (config.displayName || key).toLowerCase();
+    const keyLower = key.toLowerCase();
+
+    if (displayName.includes(normalized) || keyLower.includes(normalized) || normalized.includes(keyLower)) {
+      return { key, config };
+    }
+  }
+
+  return null;
+}
+
+// Helper function to find celebrity by flexible name matching
+function findCelebrity(input) {
+  const normalized = input.toLowerCase().replace(/\s+/g, "_");
+
+  // Exact match first
+  if (GAME_CONFIG.CELEBRITIES[normalized]) {
+    return { key: normalized, config: GAME_CONFIG.CELEBRITIES[normalized] };
+  }
+
+  // Partial match
+  for (const [key, config] of Object.entries(GAME_CONFIG.CELEBRITIES)) {
+    if (key.toLowerCase().includes(normalized) || normalized.includes(key.toLowerCase())) {
+      return { key, config };
+    }
+  }
+
+  return null;
+}
+
 // Command handlers
 async function handleClubRegister(m, sock, args, userId, db) {
   if (args.length === 0) {
@@ -1814,39 +1865,43 @@ async function handleClubMarket(m, sock, userId, db) {
 
     Object.entries(GAME_CONFIG.EQUIPMENT).forEach(([key, item]) => {
       if (item.category === "sound") {
-        marketMsg += `\n• ${key.replace(/_/g, " ")}: ₦${item.price.toLocaleString()} (${item.durability} dur.)`;
+        const displayName = item.displayName || key.replace(/_/g, " ");
+        marketMsg += `\n• *${displayName}*: ₦${item.price.toLocaleString()} (${item.durability} dur.)`;
       }
     });
 
     marketMsg += `\n\n💡 *LIGHTING*`;
     Object.entries(GAME_CONFIG.EQUIPMENT).forEach(([key, item]) => {
       if (item.category === "lighting") {
-        marketMsg += `\n• ${key.replace(/_/g, " ")}: ₦${item.price.toLocaleString()} (${item.durability} dur.)`;
+        const displayName = item.displayName || key.replace(/_/g, " ");
+        marketMsg += `\n• *${displayName}*: ₦${item.price.toLocaleString()} (${item.durability} dur.)`;
       }
     });
 
     marketMsg += `\n\n🪑 *FURNITURE*`;
     Object.entries(GAME_CONFIG.EQUIPMENT).forEach(([key, item]) => {
       if (item.category === "furniture") {
-        marketMsg += `\n• ${key.replace(/_/g, " ")}: ₦${item.price.toLocaleString()} (${item.durability} dur.)`;
+        const displayName = item.displayName || key.replace(/_/g, " ");
+        marketMsg += `\n• *${displayName}*: ₦${item.price.toLocaleString()} (${item.durability} dur.)`;
       }
     });
 
     marketMsg += `\n\n🛡️ *SECURITY*`;
     Object.entries(GAME_CONFIG.EQUIPMENT).forEach(([key, item]) => {
       if (item.category === "security") {
-        marketMsg += `\n• ${key.replace(/_/g, " ")}: ₦${item.price.toLocaleString()} (${item.durability} dur.)`;
+        const displayName = item.displayName || key.replace(/_/g, " ");
+        marketMsg += `\n• *${displayName}*: ₦${item.price.toLocaleString()} (${item.durability} dur.)`;
       }
     });
 
     marketMsg += `\n\n💼 *STAFF AVAILABLE*`;
     Object.entries(GAME_CONFIG.STAFF).forEach(([key, staff]) => {
-      marketMsg += `\n• ${key.replace(/_/g, " ")}: Salary ₦${staff.salary.toLocaleString()} (Revenue Boost: ${Math.round((staff.boost.revenue - 1) * 100)}%)`;
+      marketMsg += `\n• *${key.replace(/_/g, " ")}*: Salary ₦${staff.salary.toLocaleString()} (Revenue Boost: ${Math.round((staff.boost.revenue - 1) * 100)}%)`;
     });
 
     marketMsg += `\n\n⭐ *CELEBRITIES FOR BOOKING*`;
     Object.entries(GAME_CONFIG.CELEBRITIES).forEach(([key, celeb]) => {
-      marketMsg += `\n• ${key.replace(/_/g, " ")}: Fee ₦${celeb.fee.toLocaleString()} (Revenue Boost: ${Math.round((celeb.boost.revenue - 1) * 100)}%)`;
+      marketMsg += `\n• *${key.replace(/_/g, " ")}*: Fee ₦${celeb.fee.toLocaleString()} (Revenue Boost: ${Math.round((celeb.boost.revenue - 1) * 100)}%)`;
     });
 
     marketMsg += `\n\n*Usage:* /club buy <item> | /club hire <staff> | /club book <celebrity> <event>\n\nPrices subject to 5% weekly inflation!`;
@@ -1854,7 +1909,7 @@ async function handleClubMarket(m, sock, userId, db) {
     // Consumables
     marketMsg += `\n\n🧾 *CONSUMABLES*`;
     Object.entries(GAME_CONFIG.CONSUMABLES).forEach(([key, item]) => {
-      marketMsg += `\n• ${key.replace(/_/g, " ")}: ₦${item.price.toLocaleString()} - ${item.description}`;
+      marketMsg += `\n• *${key.replace(/_/g, " ")}*: ₦${item.price.toLocaleString()} - ${item.description}`;
     });
 
     await m.reply(marketMsg);
@@ -1872,7 +1927,7 @@ async function handleClubBuy(m, sock, args, userId, db) {
     return;
   }
 
-  const itemName = args.join("_").toLowerCase();
+  const itemInput = args.join(" ");
 
   const { MongoClient } = require("mongodb");
   const client = await MongoClient.connect(process.env.MONGO_URI, {
@@ -1890,42 +1945,47 @@ async function handleClubBuy(m, sock, args, userId, db) {
         return;
       }
 
-      const equipment = GAME_CONFIG.EQUIPMENT[itemName];
-      const consumable = GAME_CONFIG.CONSUMABLES[itemName];
+      // Use flexible matching for equipment
+      const equipmentResult = findEquipmentByName(itemInput);
+      const equipment = equipmentResult?.config;
+      const equipmentKey = equipmentResult?.key;
+
+      const consumable = GAME_CONFIG.CONSUMABLES[itemInput.toLowerCase().replace(/\s+/g, "_")];
       const userBalance = await PluginHelpers.getBalance(userId);
       if (consumable) {
         if (userBalance.wallet < consumable.price) {
           await m.reply(
-            `❌ Insufficient funds!\n\n*Item:* ${itemName.replace(/_/g, " ")}\n*Price:* ₦${consumable.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`,
+            `❌ Insufficient funds!\n\n*Item:* ${itemInput}\n*Price:* ₦${consumable.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`,
           );
           await session.abortTransaction();
           return;
         }
 
+        const consumableKey = itemInput.toLowerCase().replace(/\s+/g, "_");
         // Deduct and add consumable to club
         await unifiedUserManager.removeMoney(
           userId,
           consumable.price,
-          `Purchase consumable: ${itemName}`,
+          `Purchase consumable: ${itemInput}`,
           { session },
         );
         await clubsCollection.updateOne(
           { userId },
           {
-            $inc: { [`consumables.${itemName}`]: 1 },
+            $inc: { [`consumables.${consumableKey}`]: 1 },
             $set: { updatedAt: new Date() },
           },
           { session },
         );
 
         await m.reply(
-          `✅ *Consumable Purchased!*\n\n• Item: ${itemName.replace(/_/g, " ")}\n• Cost: ₦${consumable.price.toLocaleString()}\n\nUse it automatically when needed during risky events.`,
+          `✅ *Consumable Purchased!*\n\n• Item: ${itemInput}\n• Cost: ₦${consumable.price.toLocaleString()}\n\nUse it automatically when needed during risky events.`,
         );
         return;
       }
       if (!equipment) {
         await m.reply(
-          `❌ Item "${itemName.replace(/_/g, " ")}" not found!\n\nView available: /club market`,
+          `❌ Item "${itemInput}" not found!\n\nView available: /club market`,
         );
         await session.abortTransaction();
         return;
@@ -1942,7 +2002,7 @@ async function handleClubBuy(m, sock, args, userId, db) {
 
       if (userBalance.wallet < equipment.price) {
         await m.reply(
-          `❌ Insufficient funds!\n\n*Item:* ${itemName.replace(/_/g, " ")}\n*Price:* ₦${equipment.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`,
+          `❌ Insufficient funds!\n\n*Item:* ${equipment.displayName || equipmentKey.replace(/_/g, " ")}\n*Price:* ₦${equipment.price.toLocaleString()}\n*Your Wallet:* ₦${userBalance.wallet.toLocaleString()}`,
         );
         await session.abortTransaction();
         return;
@@ -1952,12 +2012,13 @@ async function handleClubBuy(m, sock, args, userId, db) {
       await unifiedUserManager.removeMoney(
         userId,
         equipment.price,
-        `Club equipment: ${itemName}`,
+        `Club equipment: ${equipment.displayName || equipmentKey}`,
         { session },
       );
 
       const newEquipment = {
-        type: itemName,
+        type: equipmentKey,
+        displayName: equipment.displayName || equipmentKey.replace(/_/g, " "),
         purchasedAt: new Date(),
         currentDurability: equipment.durability,
         maxDurability: equipment.durability,
@@ -1976,7 +2037,7 @@ async function handleClubBuy(m, sock, args, userId, db) {
 
       const successMsg = `✅ *Equipment Purchased!*
 
-🛍️ *Item:* ${itemName.replace(/_/g, " ")}
+🛍️ *Item:* ${equipment.displayName || equipmentKey.replace(/_/g, " ")}
 💰 *Cost:* ₦${equipment.price.toLocaleString()}
 🔧 *Durability:* ${equipment.durability}
 📈 *Revenue Boost:* ${Math.round((equipment.boost.revenue - 1) * 100)}%
@@ -2846,7 +2907,7 @@ async function handleClubBook(m, sock, args, userId, db) {
     return;
   }
 
-  const celebName = args[0].toLowerCase();
+  const celebInput = args[0];
   const eventType = args[1].toLowerCase();
 
   try {
@@ -2859,10 +2920,14 @@ async function handleClubBook(m, sock, args, userId, db) {
       return;
     }
 
-    const celebConfig = GAME_CONFIG.CELEBRITIES[celebName];
+    // Use flexible matching for celebrity
+    const celebResult = findCelebrity(celebInput);
+    const celebConfig = celebResult?.config;
+    const celebKey = celebResult?.key;
+
     if (!celebConfig) {
       await m.reply(
-        `❌ Celebrity "${celebName.replace(/_/g, " ")}" not found!\n\nView available: /club market`,
+        `❌ Celebrity "${celebInput}" not found!\n\nView available: /club market`,
       );
       return;
     }
@@ -2876,7 +2941,7 @@ async function handleClubBook(m, sock, args, userId, db) {
     }
 
     const celebData = (await celebritiesCollection.findOne({
-      name: celebName,
+      name: celebKey,
     })) || { availability: celebConfig.availability };
 
     // Roll for success
@@ -2885,7 +2950,7 @@ async function handleClubBook(m, sock, args, userId, db) {
       await unifiedUserManager.removeMoney(
         userId,
         deposit,
-        `Failed booking deposit: ${celebName}`,
+        `Failed booking deposit: ${celebKey}`,
       );
 
       await clubsCollection.updateOne(
@@ -2896,13 +2961,13 @@ async function handleClubBook(m, sock, args, userId, db) {
       const violations = club.violations || [];
       violations.push({
         type: "failed_booking",
-        description: `Failed to book ${celebName}`,
+        description: `Failed to book ${celebKey.replace(/_/g, " ")}`,
         date: new Date(),
       });
       await clubsCollection.updateOne({ userId }, { $set: { violations } });
 
       await m.reply(
-        `❌ Booking failed! ${celebName.replace(/_/g, " ")} is unavailable.\n\nLost deposit: ₦${deposit.toLocaleString()}\n\nReputation decreased.`,
+        `❌ Booking failed! ${celebKey.replace(/_/g, " ")} is unavailable.\n\nLost deposit: ₦${deposit.toLocaleString()}\n\nReputation decreased.`,
       );
       return;
     }
@@ -2919,7 +2984,7 @@ async function handleClubBook(m, sock, args, userId, db) {
     const moneyRemoved = await unifiedUserManager.removeMoney(
       userId,
       celebConfig.fee,
-      `Book ${celebName} for ${eventType}`,
+      `Book ${celebKey} for ${eventType}`,
     );
 
     if (!moneyRemoved) {
@@ -2928,7 +2993,7 @@ async function handleClubBook(m, sock, args, userId, db) {
     }
 
     const newBooking = {
-      celebrity: celebName,
+      celebrity: celebKey,
       event: eventType,
       bookedAt: new Date(),
       boost: celebConfig.boost,
@@ -2945,7 +3010,7 @@ async function handleClubBook(m, sock, args, userId, db) {
 
     const successMsg = `✅ *Celebrity Booked!*
 
-⭐ *Celebrity:* ${celebName.replace(/_/g, " ")}
+⭐ *Celebrity:* ${celebKey.replace(/_/g, " ")}
 🎪 *For Event:* ${eventType.replace(/_/g, " ")}
 💰 *Fee:* ₦${celebConfig.fee.toLocaleString()}
 📈 *Revenue Boost:* ${Math.round((celebConfig.boost.revenue - 1) * 100)}%

@@ -123,13 +123,6 @@ export default {
       await initUser(senderId);
       await cleanupExpiredEffects(senderId);
 
-      // ✅ ENFORCE PORTFOLIO LIMITS (after grace period ends)
-      // Auto-liquidate excess holdings for players who exceeded their subscription tier limits
-      if (!isInGracePeriod()) {
-        const userData = await getUserData(senderId);
-        await enforcePortfolioLimits(userData, sock, senderId);
-      }
-
       // Define the reply function used by all helper functions
       const reply = async (replyText) => {
         try {
@@ -919,7 +912,7 @@ const GRACE_PERIOD_CONFIG = {
   ENABLED: true,
   GRACE_PERIOD_DAYS: 14,  // Players have 14 days to adjust holdings
   LAUNCH_DATE: new Date('2025-12-15T00:00:00+01:00'),  // Change to your launch date
-  AUTO_LIQUIDATION_REFUND_PERCENT: 5,  // Give 5% refund on auto-liquidated items
+  AUTO_LIQUIDATION_REFUND_PERCENT: 80,  // Give 80% refund on auto-liquidated items
   WARNING_THRESHOLD_PERCENT: 100,  // Warn when over 100% of new limit
   IGNORE_BEFORE_LAUNCH: true  // Don't enforce until after launch
 };
@@ -1881,8 +1874,8 @@ async function handleShop(context, args) {
           return;
         }
 
-      const itemId = getItemId(args[1]);
-      const item = SHOP_ITEMS[itemId];
+        const itemId = getItemId(args[1]);
+        const item = { ...SHOP_ITEMS[itemId], ...SUPREME_TITAN_SHOP_ITEMS[itemId] }[itemId];
 
         if (!item) {
           await reply('❌ *Item not found*');
@@ -2871,7 +2864,7 @@ function getWalletBankLimits(userData) {
 
 // ===== AUTO-LIQUIDATION SYSTEM =====
 // Enforce portfolio limits by liquidating excess holdings after grace period
-async function enforcePortfolioLimits(userData, sock = null, userJid = null) {
+async function enforcePortfolioLimits(userData, sock = null) {
   const userId = userData.id || userData._id;
   const tier = userData.subscription?.tier || 'free';
   const tierConfig = SUBSCRIPTION_TIERS[tier];
@@ -2980,9 +2973,9 @@ async function enforcePortfolioLimits(userData, sock = null, userJid = null) {
     if (liquidationReport.liquidated && Object.keys(updates).length > 0) {
       await updateUserData(userId, updates);
 
-      // Send liquidation notification if socket and JID available
-      if (sock && userJid && liquidationReport.items.length > 0) {
-        await sendLiquidationNotification(userId, liquidationReport, sock, userJid);
+      // Send liquidation notification if socket available
+      if (sock && liquidationReport.items.length > 0) {
+        await sendLiquidationNotification(userId, liquidationReport, sock);
       }
     }
 
@@ -2996,9 +2989,9 @@ async function enforcePortfolioLimits(userData, sock = null, userJid = null) {
 }
 
 // Send notification when holdings are auto-liquidated
-async function sendLiquidationNotification(userId, liquidationReport, sock, userJid) {
+async function sendLiquidationNotification(userId, liquidationReport, sock) {
   try {
-    if (!sock || !userJid || !liquidationReport.liquidated) return;
+    if (!sock || !liquidationReport.liquidated) return;
 
     const userData = await getUserData(userId);
     const tier = userData.subscription?.tier || 'free';
@@ -3010,7 +3003,7 @@ async function sendLiquidationNotification(userId, liquidationReport, sock, user
 
     const message = `⚠️ *PORTFOLIO LIMIT ENFORCED*\n\nYour holdings exceeded the new limits for your subscription tier.\n\n*Items Liquidated:*\n${itemsList}\n\n💰 *Total Refund:* ₦${liquidationReport.totalRefund.toLocaleString()}\n\n🎁 Refunds have been added to your wallet.\n\n💎 *Your Tier:* ${tierConfig.name}\n📊 *Wallet Limit:* ₦${tierConfig.limits.walletLimit.toLocaleString()}\n🏦 *Bank Limit:* ₦${tierConfig.limits.bankLimit.toLocaleString()}\n\n💡 *Tip:* Upgrade your subscription to increase limits!`;
 
-    await sock.sendMessage(userJid, { text: message });
+    await sock.sendMessage(userId, { text: message });
   } catch (error) {
     console.error('Error sending liquidation notification:', error);
   }
@@ -3619,58 +3612,70 @@ async function handleBusiness(context, args) {
         await reply(businessPortfolio);
         break;
 
-      case 'collect':
-        const collectData = await getUserData(senderId);
-        const userBusinesses = collectData.investments?.businesses || [];
+case 'collect':
+const collectData = await getUserData(senderId);
+const userBusinesses = collectData.investments?.businesses || [];
 
-        if (userBusinesses.length === 0) {
-          await reply('🏢 *You don\'t have any businesses to collect profits from.*');
-          return;
-        }
+if (userBusinesses.length === 0) {
+  await reply('🏢 *You don\'t have any businesses to collect profits from.*');
+  return;
+}
 
-        let totalProfit = 0;
-        const now = new Date();
-        const updatedBusinesses = [];
-        const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
+// ✨ NEW: Check if user has instant payout feature (Titan tier)
+const subscription = collectData.subscription || { tier: 'free' };
+const tierConfig = SUBSCRIPTION_TIERS[subscription.tier];
+const hasInstantPayout = tierConfig.features.instantBusinessPayouts;
 
-        userBusinesses.forEach(business => {
-          const lastCollected = new Date(business.lastCollected);
-          const timeSince = now.getTime() - lastCollected.getTime();
+let totalProfit = 0;
+const now = new Date();
+const updatedBusinesses = [];
+const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
 
-          if (timeSince >= twentyFourHoursInMs) {
-            const daysToCollect = Math.floor(timeSince / twentyFourHoursInMs);
-            const currentROI = businessData[business.id]?.roi || business.roi;
-            const profit = business.price * currentROI * daysToCollect;
-            totalProfit += profit;
+userBusinesses.forEach(business => {
+  const lastCollected = new Date(business.lastCollected);
+  const timeSince = now.getTime() - lastCollected.getTime();
 
-            business.lastCollected = new Date(lastCollected.getTime() + daysToCollect * twentyFourHoursInMs);
-          }
+  if (hasInstantPayout || timeSince >= twentyFourHoursInMs) {
+    const daysToCollect = hasInstantPayout ? Math.max(1, Math.floor(timeSince / twentyFourHoursInMs)) : Math.floor(timeSince / twentyFourHoursInMs);
+    const currentROI = businessData[business.id]?.roi || business.roi;
+    const profit = business.price * currentROI * daysToCollect;
+    totalProfit += profit;
 
-          updatedBusinesses.push(business);
-        });
+    business.lastCollected = new Date(lastCollected.getTime() + daysToCollect * twentyFourHoursInMs);
+  }
 
-        if (totalProfit === 0) {
-          let soonestNextCollection = Infinity;
-          userBusinesses.forEach(business => {
-            const nextCollectionTime = new Date(business.lastCollected).getTime() + twentyFourHoursInMs;
-            if (nextCollectionTime < soonestNextCollection) {
-              soonestNextCollection = nextCollectionTime;
-            }
-          });
+  updatedBusinesses.push(business);
+});
 
-          const timeString = helpers.TimeHelpers.formatFutureTime(soonestNextCollection);
+if (totalProfit === 0 && !hasInstantPayout) {
+  let soonestNextCollection = Infinity;
+  userBusinesses.forEach(business => {
+    const nextCollectionTime = new Date(business.lastCollected).getTime() + twentyFourHoursInMs;
+    if (nextCollectionTime < soonestNextCollection) {
+      soonestNextCollection = nextCollectionTime;
+    }
+  });
 
-          await reply(`⏰ *No profits to collect yet*\n\nPlease come back *${timeString}*`);
-          return;
-        }
+  const timeString = helpers.TimeHelpers.formatFutureTime(soonestNextCollection);
+  await reply(`⏰ *No profits to collect yet*\n\nPlease come back *${timeString}*`);
+  return;
+}
 
-        await addMoney(senderId, totalProfit, 'Business profits', false);
-        await updateUserData(senderId, {
-          'investments.businesses': updatedBusinesses
-        });
+await addMoney(senderId, totalProfit, 'Business profits', false);
+await updateUserData(senderId, {
+  'investments.businesses': updatedBusinesses
+});
 
-        await reply(`🏢 *Business Profits Collected!* 🏢\n\n💰 *Total Profit:* ${ecoSettings.currency}${Math.floor(totalProfit).toLocaleString()}\n🏪 *From:* ${userBusinesses.length} businesses\n\n💡 *Your next profits will be available in 24 hours!*`);
-        break;
+let collectMsg = `🏢 *Business Profits Collected!* 🏢\n\n💰 *Total Profit:* ${ecoSettings.currency}${Math.floor(totalProfit).toLocaleString()}\n🏪 *From:* ${userBusinesses.length} businesses\n`;
+
+if (hasInstantPayout) {
+  collectMsg += `\n🔱 *Titan Perk:* Instant collection anytime!`;
+} else {
+  collectMsg += `\n💡 *Your next profits will be available in 24 hours!*`;
+}
+
+await reply(collectMsg);
+break;
 
       default:
         await reply('❓ *Unknown business command*');
