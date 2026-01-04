@@ -389,7 +389,7 @@ const GAME_CONFIG = {
       description: "Alcohol serving permit",
     },
     adult_entertainment: {
-      price: 200000000,
+      price: 100000000,
       duration: 30,
       required: false,
       description: "Adult entertainment license",
@@ -453,7 +453,7 @@ const GAME_CONFIG = {
   // Consumables and risk mode configs
   CONSUMABLES: {
     insurance: {
-      price: 500000000,
+      price: 50000000,
       description:
         "Prevents full loss on failed events (consumed on failure, refunds 50%).",
     },
