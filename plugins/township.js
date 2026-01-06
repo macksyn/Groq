@@ -119,7 +119,7 @@ export default {
     if (!m.body || !m.body.startsWith(config.PREFIX)) return;
 
     const subCommand = args[0]?.toLowerCase();
-    const userId = (m.key && (m.key.participant || m.key.remoteJid)) || m.sender;
+    const userId = String((m.key && (m.key.participant || m.key.remoteJid)) || m.sender || "");
 
     // Handle selection responses
     if (m.quoted && m.quoted.text) {
@@ -1171,23 +1171,23 @@ async function showTownshipHelp(m, sock, prefix) {
 🏘️ *Township - City Building Game*
 
 📚 *Commands:*
-${prefix}township start - Start a new township
-${prefix}township status - View your township
-${prefix}township level - View your progress
-${prefix}township build [name] - Build a structure
-${prefix}township farm [id] [crop] - Plant crops
-${prefix}township harvest [id] - Harvest crops
-${prefix}township factory - View factories
-${prefix}township produce [id] [recipe] - Produce goods
-${prefix}township trade sell [item] [amount] - Sell items
-${prefix}township inventory - View your items
-${prefix}township buildings - List all buildings
-${prefix}township market - View market
-${prefix}township leaderboard - See top players
-${prefix}township reward - Claim daily bonus
-${prefix}township orders - View active world orders (helicopter/train/plane/zoo)
-${prefix}township fulfill <order-id> <amount> - Fulfill an order from your inventory
-${prefix}township help - Show this help
+  • \`{prefix}township start\` - Start a new township
+  • \`${prefix}township status\` - View your township
+  • \`${prefix}township level\` - View your progress
+  • \`${prefix}township build [name]\` - Build a structure
+  • \`${prefix}township farm [id] [crop]\` - Plant crops
+  • \`${prefix}township harvest [id]\` - Harvest crops
+  • \`${prefix}township factory\` - View factories
+  • \`${prefix}township produce [id] [recipe]\` - Produce goods
+  • \`${prefix}township trade sell [item] [amount]\` - Sell items
+  • \`${prefix}township inventory\` - View your items
+  • \`${prefix}township buildings\` - List all buildings
+  • \`${prefix}township market\` - View market
+  • \`{prefix}township leaderboard\` - See top players
+  • \`${prefix}township reward\` - Claim daily bonus
+  • \`${prefix}township orders\` - View active world orders (helicopter/train/plane/zoo)
+  • \`{prefix}township fulfill <order-id> <amount>\` - Fulfill an order from your inventory
+  • \`${prefix}township help\`- Show this help
 
 🎮 *Game Features:*
 ✅ Progressive level system (1-100)
