@@ -650,7 +650,16 @@ async function handleBuild(m, sock, args, userId, db) {
       });
     }
 
-    await collection.updateOne({ userId }, { $set: player });
+    await collection.updateOne(
+      { userId },
+      {
+        $set: {
+          buildings: player.buildings,
+          farms: player.farms,
+          factories: player.factories,
+        },
+      }
+    );
 
     const remainingCoins = await unifiedUserManager.getMoney(userId);
     await m.reply(
@@ -724,7 +733,14 @@ async function handleFarm(m, sock, args, userId, db) {
       readyAt: Date.now() + crop.growthTime * 1000,
     };
 
-    await collection.updateOne({ userId }, { $set: player });
+    await collection.updateOne(
+      { userId },
+      {
+        $set: {
+          farms: player.farms,
+        },
+      }
+    );
 
     const timeMin = Math.ceil(crop.growthTime / 60);
     await m.reply(
@@ -790,7 +806,16 @@ async function handleHarvest(m, sock, args, userId, db) {
       player.inventory[cropType] = (player.inventory[cropType] || 0) + amount;
     }
 
-    await collection.updateOne({ userId }, { $set: player });
+    await collection.updateOne(
+      { userId },
+      {
+        $set: {
+          farms: player.farms,
+          inventory: player.inventory,
+          experience: player.experience,
+        },
+      }
+    );
 
     const harvestedText = Object.entries(harvested)
       .map(([type, amount]) => `${GAME_CONFIG.CROPS[type].emoji} ${amount} ${GAME_CONFIG.CROPS[type].name}`)
@@ -1171,7 +1196,7 @@ async function showTownshipHelp(m, sock, prefix) {
 🏘️ *Township - City Building Game*
 
 📚 *Commands:*
-  • \`{prefix}township start\` - Start a new township
+  • \`${prefix}township start\` - Start a new township
   • \`${prefix}township status\` - View your township
   • \`${prefix}township level\` - View your progress
   • \`${prefix}township build [name]\` - Build a structure
