@@ -141,69 +141,94 @@ export default {
       const subCommand = args[0]?.toLowerCase();
       const userId = (m.key && (m.key.participant || m.key.remoteJid)) || m.sender;
 
-      // Check if this is a quoted selection (user is quoting a message with just a number)
-      console.log(chalk.blue("=== MESSAGE DEBUG ==="));
-      console.log(chalk.blue(`Body: ${m.body}`));
-      console.log(chalk.blue(`Has quoted: ${!!m.quoted}`));
+    // Check if this is a quoted selection (user is quoting a message with just a number)
+    console.log(chalk.blue("=== MESSAGE DEBUG ==="));
+    console.log(chalk.blue(`Body: ${m.body}`));
+    console.log(chalk.blue(`Has quoted: ${!!m.quoted}`));
 
-      if (m.quoted) {
-        console.log(chalk.blue(`Quoted ID: ${m.quoted.id}`));
-        console.log(chalk.blue(`Quoted text: ${m.quoted.text}`));
-      }
+    if (m.quoted) {
+      console.log(chalk.blue(`Quoted ID: ${m.quoted.id}`));
+      console.log(chalk.blue(`Quoted key:`, JSON.stringify(m.quoted.key, null, 2)));
+      console.log(chalk.blue(`Quoted text: ${m.quoted.text?.substring(0, 100)}`));
+    }
 
-      if (m.quoted && m.quoted.text) {
-        const bodyTrimmed = m.body.trim();
-        console.log(chalk.yellow(`Trimmed body: "${bodyTrimmed}"`));
+    if (m.quoted) {
+      const bodyTrimmed = m.body.trim();
+      console.log(chalk.yellow(`Trimmed body: "${bodyTrimmed}"`));
 
-        const selectionNumber = parseInt(bodyTrimmed, 10);
-        console.log(chalk.yellow(`Parsed number: ${selectionNumber}`));
-        console.log(chalk.yellow(`Is valid number: ${!isNaN(selectionNumber) && selectionNumber > 0}`));
+      // Check if the body is ONLY a number (no prefix)
+      const selectionNumber = parseInt(bodyTrimmed, 10);
+      console.log(chalk.yellow(`Parsed number: ${selectionNumber}`));
+      console.log(chalk.yellow(`Is valid number: ${!isNaN(selectionNumber) && selectionNumber > 0}`));
 
-        if (!isNaN(selectionNumber) && selectionNumber > 0) {
-          console.log(chalk.green(`Looking for context with ID: ${m.quoted.id}`));
+      if (!isNaN(selectionNumber) && selectionNumber > 0) {
+        // Try different ways to get the quoted message ID
+        const possibleIds = [
+          m.quoted.id,
+          m.quoted.key?.id,
+          m.quoted.stanzaId,
+        ].filter(Boolean);
 
-          // Debug: Show all stored contexts
-          console.log(chalk.cyan("=== ALL STORED CONTEXTS ==="));
-          Object.keys(selectionContextStore).forEach(key => {
-            console.log(chalk.cyan(`Key: ${key}, Type: ${selectionContextStore[key].type}`));
-          });
+        console.log(chalk.green(`Possible IDs to check:`, possibleIds));
 
-          const context = getSelectionContext(m.quoted.id);
-          console.log(chalk.green(`Context found: ${!!context}`));
+        // Debug: Show all stored contexts
+        console.log(chalk.cyan("=== ALL STORED CONTEXTS ==="));
+        Object.keys(selectionContextStore).forEach(key => {
+          console.log(chalk.cyan(`Key: ${key}, Type: ${selectionContextStore[key].type}`));
+        });
+        console.log(chalk.cyan("=== END CONTEXTS ==="));
 
+        // Try to find context with any of the possible IDs
+        let context = null;
+        let matchedId = null;
+
+        for (const id of possibleIds) {
+          context = getSelectionContext(id);
           if (context) {
-            console.log(chalk.green(`Context type: ${context.type}`));
-            console.log(chalk.green(`Options count: ${context.options.length}`));
+            matchedId = id;
+            break;
+          }
+        }
 
-            if (selectionNumber <= context.options.length) {
-              try {
-                console.log(chalk.magenta(`Executing handler for selection ${selectionNumber}`));
-                await context.handler(selectionNumber, m, sock, userId, db);
-                return;
-              } catch (error) {
-                console.error(
-                  chalk.red("❌ Selection handler error:"),
-                  error.message,
-                );
-                console.error(error.stack);
-                await m.reply(
-                  "❌ An error occurred while processing your selection. Please try again.",
-                );
-                return;
-              }
-            } else {
+        console.log(chalk.green(`Context found: ${!!context}`));
+        if (matchedId) {
+          console.log(chalk.green(`Matched with ID: ${matchedId}`));
+        }
+
+        if (context) {
+          console.log(chalk.green(`Context type: ${context.type}`));
+          console.log(chalk.green(`Options count: ${context.options.length}`));
+
+          if (selectionNumber <= context.options.length) {
+            try {
+              console.log(chalk.magenta(`Executing handler for selection ${selectionNumber}`));
+              await context.handler(selectionNumber, m, sock, userId, db);
+              return;
+            } catch (error) {
+              console.error(
+                chalk.red("❌ Selection handler error:"),
+                error.message,
+              );
+              console.error(error.stack);
               await m.reply(
-                `❌ Invalid selection! Please choose a number between 1 and ${context.options.length}.`,
+                "❌ An error occurred while processing your selection. Please try again.",
               );
               return;
             }
           } else {
-            console.log(chalk.red(`No context found for quoted message ID: ${m.quoted.id}`));
+            await m.reply(
+              `❌ Invalid selection! Please choose a number between 1 and ${context.options.length}.`,
+            );
+            return;
           }
+        } else {
+          console.log(chalk.red(`No context found for any quoted message IDs`));
+          console.log(chalk.red(`This might be an old message or the context expired.`));
         }
       }
+    }
 
-      console.log(chalk.blue("=== END MESSAGE DEBUG ===\n"));
+    console.log(chalk.blue("=== END MESSAGE DEBUG ===\n"));
 
       // Rest of your code...
 
