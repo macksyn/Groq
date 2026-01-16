@@ -2346,21 +2346,24 @@ async function handleLeaderboard(context, args) {
 
     let leaderboard = `${emoji} *${title}* ${emoji}\n\n`;
 
-      users.forEach((user, index) => {
-        const rank = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
-        const userName = user.userId.split('@')[0];
+        users.forEach((user, index) => {
+          const rank = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
 
-        // ✨ NEW: Show tier badges
-        let badge = '';
-        if (user.activeEffects?.royalCrown || user.subscription?.tier === 'titan') {
-          badge = '🔱 ';
-        } else if (user.subscription?.tier === 'supreme') {
-          badge = '🌟 ';
-        } else if (user.activeEffects?.crown) {
-          badge = '👑 ';
-        }
+          // ✅ FIX: Handle userId as either string or ObjectId
+          const userIdString = typeof user.userId === 'string' ? user.userId : user.userId.toString();
+          const userName = userIdString.split('@')[0];
 
-        leaderboard += `${rank} ${badge}@${userName}\n`;
+          // ✨ NEW: Show tier badges
+          let badge = '';
+          if (user.activeEffects?.royalCrown || user.subscription?.tier === 'titan') {
+            badge = '🔱 ';
+          } else if (user.subscription?.tier === 'supreme') {
+            badge = '🌟 ';
+          } else if (user.activeEffects?.crown) {
+            badge = '👑 ';
+          }
+
+          leaderboard += `${rank} ${badge}@${userName}\n`;
 
         switch (category) {
           case 'wealth':

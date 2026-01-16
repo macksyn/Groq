@@ -307,7 +307,7 @@ function getBirthdayWishMessage(birthdayPerson) {
     message += `\n\n🎈 Celebrating ${birthdayPerson.birthday.age} wonderful years! 🎈`;
   }
 
-  message += `\n\n👏 From your friends at GIST HQ! 👏`;
+  message += `\n\n👏 From all of us at GIST HQ! 👏`;
 
   return message;
 }

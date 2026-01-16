@@ -479,12 +479,9 @@ async function handleStart(m, sock, userId, db) {
       return;
     }
 
-    // Use unified user manager for coins (shared wallet)
-    await unifiedUserManager.addMoney(userId, 1000, "Township starting bonus");
-
     const newPlayer = {
       userId,
-      createdAt: new Date().toISOString(), // Convert to ISO string
+      createdAt: new Date(),
       level: 1,
       experience: 0,
       energy: 100,
@@ -494,10 +491,15 @@ async function handleStart(m, sock, userId, db) {
       factories: {},
       inventory: {},
       completedDailyBonus: false,
-      lastBonusDate: null, // Add this field
     };
 
-    await collection.insertOne(newPlayer);
+    // Use unified user manager for coins (shared wallet)
+    await unifiedUserManager.addMoney(userId, 1000, "Township starting bonus");
+    
+    // Create a clean, deep copy with no functions/circular refs
+    const safePlayer = JSON.parse(JSON.stringify(newPlayer));
+
+    await collection.insertOne(safePlayer);
 
     const msg = `
 ✨ *Welcome to Township!* ✨
