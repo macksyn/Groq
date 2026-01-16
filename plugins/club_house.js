@@ -121,56 +121,91 @@ export default {
   ],
 
   // ===== V3 Main Handler =====
+  // In your main run function, update the quoted message handling section:
   async run(context) {
-    // Destructure the V3 context object
-    const {
-      msg: m,
-      args,
-      text,
-      command,
-      sock,
-      db,
-      config,
-      bot,
-      logger,
-      helpers,
-    } = context;
+      const {
+        msg: m,
+        args,
+        text,
+        command,
+        sock,
+        db,
+        config,
+        bot,
+        logger,
+        helpers,
+      } = context;
 
-    if (!m.body || !m.body.startsWith(config.PREFIX)) return;
+      if (!m.body || !m.body.startsWith(config.PREFIX)) return;
 
-    const subCommand = args[0]?.toLowerCase();
-    const userId = (m.key && (m.key.participant || m.key.remoteJid)) || m.sender;
+      const subCommand = args[0]?.toLowerCase();
+      const userId = (m.key && (m.key.participant || m.key.remoteJid)) || m.sender;
 
-    // Check if this is a quoted selection (user is quoting a message with just a number)
-    if (m.quoted && m.quoted.text) {
-      const selectionNumber = parseInt(m.body.trim(), 10);
-      if (!isNaN(selectionNumber) && selectionNumber > 0) {
-        const context = getSelectionContext(m.quoted.id);
-        if (context) {
-          // This is a selection response!
-          if (selectionNumber <= context.options.length) {
-            try {
-              await context.handler(selectionNumber, m, sock, userId, db);
-              return;
-            } catch (error) {
-              console.error(
-                chalk.red("❌ Selection handler error:"),
-                error.message,
-              );
+      // Check if this is a quoted selection (user is quoting a message with just a number)
+      console.log(chalk.blue("=== MESSAGE DEBUG ==="));
+      console.log(chalk.blue(`Body: ${m.body}`));
+      console.log(chalk.blue(`Has quoted: ${!!m.quoted}`));
+
+      if (m.quoted) {
+        console.log(chalk.blue(`Quoted ID: ${m.quoted.id}`));
+        console.log(chalk.blue(`Quoted text: ${m.quoted.text}`));
+      }
+
+      if (m.quoted && m.quoted.text) {
+        const bodyTrimmed = m.body.trim();
+        console.log(chalk.yellow(`Trimmed body: "${bodyTrimmed}"`));
+
+        const selectionNumber = parseInt(bodyTrimmed, 10);
+        console.log(chalk.yellow(`Parsed number: ${selectionNumber}`));
+        console.log(chalk.yellow(`Is valid number: ${!isNaN(selectionNumber) && selectionNumber > 0}`));
+
+        if (!isNaN(selectionNumber) && selectionNumber > 0) {
+          console.log(chalk.green(`Looking for context with ID: ${m.quoted.id}`));
+
+          // Debug: Show all stored contexts
+          console.log(chalk.cyan("=== ALL STORED CONTEXTS ==="));
+          Object.keys(selectionContextStore).forEach(key => {
+            console.log(chalk.cyan(`Key: ${key}, Type: ${selectionContextStore[key].type}`));
+          });
+
+          const context = getSelectionContext(m.quoted.id);
+          console.log(chalk.green(`Context found: ${!!context}`));
+
+          if (context) {
+            console.log(chalk.green(`Context type: ${context.type}`));
+            console.log(chalk.green(`Options count: ${context.options.length}`));
+
+            if (selectionNumber <= context.options.length) {
+              try {
+                console.log(chalk.magenta(`Executing handler for selection ${selectionNumber}`));
+                await context.handler(selectionNumber, m, sock, userId, db);
+                return;
+              } catch (error) {
+                console.error(
+                  chalk.red("❌ Selection handler error:"),
+                  error.message,
+                );
+                console.error(error.stack);
+                await m.reply(
+                  "❌ An error occurred while processing your selection. Please try again.",
+                );
+                return;
+              }
+            } else {
               await m.reply(
-                "❌ An error occurred while processing your selection. Please try again.",
+                `❌ Invalid selection! Please choose a number between 1 and ${context.options.length}.`,
               );
               return;
             }
           } else {
-            await m.reply(
-              `❌ Invalid selection! Please choose a number between 1 and ${context.options.length}.`,
-            );
-            return;
+            console.log(chalk.red(`No context found for quoted message ID: ${m.quoted.id}`));
           }
         }
       }
-    }
+
+      console.log(chalk.blue("=== END MESSAGE DEBUG ===\n"));
+
+      // Rest of your code...
 
     // Rate limiting
     if (isRateLimited(userId, subCommand)) {
@@ -3373,7 +3408,7 @@ async function handleClubDecision(m, sock, args, userId, db) {
     let decisionMsg = `${pendingDecision.emoji} *${pendingDecision.title}*\n━━━━━━━━━━━━━━━━━━━\n\n📝 *Situation:*\n${pendingDecision.situation}\n\n*What will you do?*\n\n`;
 
     pendingDecision.options.forEach((option, index) => {
-      decisionMsg += `${option.emoji} ${option.text}\n`;
+      decisionMsg += `${index + 1}️⃣ ${option.text}\n`;
     });
 
     decisionMsg += `\n💡 *Reply with just the number* (1, 2, or 3) to this message to make your choice.`;
@@ -3381,13 +3416,23 @@ async function handleClubDecision(m, sock, args, userId, db) {
     // Send decision message and store selection context
     const sentMsg = await m.reply(decisionMsg);
 
-    // Store the selection handler for this message - FIXED SIGNATURE
-    const messageId = sentMsg.key?.id || m.key.id;
+    // Try multiple ways to get the message ID
+    const messageId = sentMsg?.key?.id || sentMsg?.id || m.key?.id;
+
+    console.log(chalk.magenta("=== STORING CONTEXT ==="));
+    console.log(chalk.magenta(`Message ID: ${messageId}`));
+    console.log(chalk.magenta(`Sent message structure:`), JSON.stringify(sentMsg?.key, null, 2));
+    console.log(chalk.magenta(`Decision ID: ${pendingDecision.id}`));
+    console.log(chalk.magenta(`Options count: ${pendingDecision.options.length}`));
+
+    // Store the selection handler for this message
     storeSelectionContext(
       messageId,
       "decision",
       pendingDecision.options,
       async (choiceNumber, replyMsg, sock, replyUserId, db) => {
+        console.log(chalk.green(`Decision handler called with choice: ${choiceNumber}`));
+
         // Re-fetch fresh data since this runs later
         const freshClub = await clubsCollection.findOne({ userId: replyUserId });
         const freshDecision = await decisionsCollection.findOne({
@@ -3413,8 +3458,13 @@ async function handleClubDecision(m, sock, args, userId, db) {
         );
       },
     );
+
+    console.log(chalk.magenta("Context stored successfully"));
+    console.log(chalk.magenta("=== END STORING CONTEXT ===\n"));
+
   } catch (error) {
     console.error(chalk.red("❌ Decision handler error:"), error.message);
+    console.error(error.stack);
     await m.reply("❌ Failed to load your daily decision. Please try again.");
   }
 }
