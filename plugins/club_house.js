@@ -3381,20 +3381,34 @@ async function handleClubDecision(m, sock, args, userId, db) {
     // Send decision message and store selection context
     const sentMsg = await m.reply(decisionMsg);
 
-    // Store the selection handler for this message
+    // Store the selection handler for this message - FIXED SIGNATURE
+    const messageId = sentMsg.key?.id || m.key.id;
     storeSelectionContext(
-      sentMsg.id || m.id,
+      messageId,
       "decision",
       pendingDecision.options,
-      async (choiceNumber) => {
+      async (choiceNumber, replyMsg, sock, replyUserId, db) => {
+        // Re-fetch fresh data since this runs later
+        const freshClub = await clubsCollection.findOne({ userId: replyUserId });
+        const freshDecision = await decisionsCollection.findOne({
+          userId: replyUserId,
+          createdAt: { $gte: today },
+          resolved: false,
+        });
+
+        if (!freshDecision) {
+          await replyMsg.reply("❌ This decision has already been resolved or expired.");
+          return;
+        }
+
         await processDecisionChoice(
           choiceNumber,
-          pendingDecision,
-          userId,
-          club,
+          freshDecision,
+          replyUserId,
+          freshClub,
           clubsCollection,
           decisionsCollection,
-          m,
+          replyMsg,
           sock,
         );
       },
