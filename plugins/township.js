@@ -484,7 +484,7 @@ async function handleStart(m, sock, userId, db) {
 
     const newPlayer = {
       userId,
-      createdAt: new Date(),
+      createdAt: new Date().toISOString(), // Convert to ISO string
       level: 1,
       experience: 0,
       energy: 100,
@@ -494,6 +494,7 @@ async function handleStart(m, sock, userId, db) {
       factories: {},
       inventory: {},
       completedDailyBonus: false,
+      lastBonusDate: null, // Add this field
     };
 
     await collection.insertOne(newPlayer);
