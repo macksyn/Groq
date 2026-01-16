@@ -2346,23 +2346,21 @@ async function handleLeaderboard(context, args) {
 
     let leaderboard = `${emoji} *${title}* ${emoji}\n\n`;
 
-          users.forEach((user, index) => {
-            const rank = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+      users.forEach((user, index) => {
+        const rank = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+        const userName = user.userId.split('@')[0];
 
-            // ✅ FIX: Use the string version created in aggregation
-            const userName = user.userIdString.split('@')[0];
+        // ✨ NEW: Show tier badges
+        let badge = '';
+        if (user.activeEffects?.royalCrown || user.subscription?.tier === 'titan') {
+          badge = '🔱 ';
+        } else if (user.subscription?.tier === 'supreme') {
+          badge = '🌟 ';
+        } else if (user.activeEffects?.crown) {
+          badge = '👑 ';
+        }
 
-            // ✨ NEW: Show tier badges
-            let badge = '';
-            if (user.activeEffects?.royalCrown || user.subscription?.tier === 'titan') {
-              badge = '🔱 ';
-            } else if (user.subscription?.tier === 'supreme') {
-              badge = '🌟 ';
-            } else if (user.activeEffects?.crown) {
-              badge = '👑 ';
-            }
-
-            leaderboard += `${rank} ${badge}@${userName}\n`;
+        leaderboard += `${rank} ${badge}@${userName}\n`;
 
         switch (category) {
           case 'wealth':
