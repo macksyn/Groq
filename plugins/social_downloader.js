@@ -82,8 +82,8 @@ const PLATFORMS = {
 
 const PLATFORM_APIS = {
   tiktok: {
-    endpoint: 'https://delirius-apiofc.vercel.app/download/tiktok',
-    buildUrl: (url) => `https://delirius-apiofc.vercel.app/download/tiktok?url=${encodeURIComponent(url)}`,
+    endpoint: 'https://jawad-tech.vercel.app/download/tiktok',
+    buildUrl: (url) => `https://jawad-tech.vercel.app/download/tiktok?url=${encodeURIComponent(url)}`,
     extractData: (response) => {
       const data = response.data?.data;
       if (!data || !data.meta?.media?.[0]) {
@@ -93,16 +93,16 @@ const PLATFORM_APIS = {
       const media = data.meta.media[0];
       return {
         url: media.hd || media.org || media.wm,
-        thumbnail: null,
+        thumbnail: data.thumbnail || null,
         title: data.title || 'TikTok Video',
         duration: data.duration || null,
-        author: data.author?.nickname || data.author?.username || 'Unknown'
+        author: data.author?.author || data.author?.username || 'Unknown'
       };
     }
   },
   instagram: {
-    endpoint: 'https://delirius-apiofc.vercel.app/download/instagram',
-    buildUrl: (url) => `https://delirius-apiofc.vercel.app/download/instagram?url=${encodeURIComponent(url)}`,
+    endpoint: 'https://jawad-tech.vercel.app/igdl',
+    buildUrl: (url) => `https://jawad-tech.vercel.app/igdl?url=${encodeURIComponent(url)}`,
     extractData: (response) => {
       const data = response.data?.data;
       if (!data || !Array.isArray(data) || data.length === 0) {
