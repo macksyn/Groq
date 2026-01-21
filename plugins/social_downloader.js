@@ -85,18 +85,24 @@ const PLATFORM_APIS = {
     endpoint: 'https://jawad-tech.vercel.app/download/tiktok',
     buildUrl: (url) => `https://jawad-tech.vercel.app/download/tiktok?url=${encodeURIComponent(url)}`,
     extractData: (response) => {
-      const data = response.data?.data;
-      if (!data || !data.meta?.media?.[0]) {
-        throw new Error('Invalid TikTok response format');
+      const data = response.data;
+
+      // Check if API returned success
+      if (!data || data.status === false) {
+        throw new Error(data?.message || 'TikTok API returned error');
       }
 
-      const media = data.meta.media[0];
+      // Check if result (video URL) exists
+      if (!data.result) {
+        throw new Error('No video URL found in TikTok response');
+      }
+
       return {
-        url: media.hd || media.org || media.wm,
-        thumbnail: data.thumbnail || null,
-        title: data.title || 'TikTok Video',
-        duration: data.duration || null,
-        author: data.author?.author || data.author?.username || 'Unknown'
+        url: data.result,
+        thumbnail: data.metadata?.thumbnail || null,
+        title: data.metadata?.title || 'TikTok Video',
+        duration: null,
+        author: data.metadata?.author || data.metadata?.username || 'Unknown'
       };
     }
   },
