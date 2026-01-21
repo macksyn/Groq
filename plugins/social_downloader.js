@@ -110,18 +110,33 @@ const PLATFORM_APIS = {
     endpoint: 'https://jawad-tech.vercel.app/igdl',
     buildUrl: (url) => `https://jawad-tech.vercel.app/igdl?url=${encodeURIComponent(url)}`,
     extractData: (response) => {
-      const data = response.data?.data;
-      if (!data || !Array.isArray(data) || data.length === 0) {
-        throw new Error('Invalid Instagram response format');
+      const data = response.data;
+
+      // Check if API returned success
+      if (!data || data.status === false) {
+        throw new Error(data?.message || 'Instagram API returned error');
       }
 
-      const media = data[0];
+      // Check if result array exists and has items
+      if (!data.result || !Array.isArray(data.result) || data.result.length === 0) {
+        throw new Error('No media found in Instagram response');
+      }
+
+      const media = data.result[0];
+
+      // Validate media URL
+      if (!media.url) {
+        throw new Error('No valid media URL found in Instagram response');
+      }
+
       return {
         url: media.url,
         thumbnail: null,
         title: 'Instagram Media',
         duration: null,
-        type: media.type || 'image'
+        type: media.contentType?.includes('video') ? 'video' : 'image',
+        format: media.format || null,
+        size: media.size || null
       };
     }
   },
