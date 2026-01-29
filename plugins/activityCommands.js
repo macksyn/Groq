@@ -150,6 +150,11 @@ async function handleStats(context) {
     const currentMonth = moment.tz('Africa/Lagos').format('MMMM YYYY');
     const stats = activity.stats;
 
+    // Calculate total messages as sum of all activity types
+    const totalMessages = (stats.messages || 0) + (stats.stickers || 0) + (stats.videos || 0) + 
+                         (stats.voiceNotes || 0) + (stats.polls || 0) + (stats.photos || 0) + 
+                         (stats.attendance || 0);
+
     // Estimate last seen: if last message within 10 minutes, show 'Online'
     // Otherwise show relative time like "25 minutes ago" or "5h 34m ago"
     let lastSeenText = 'N/A';
@@ -172,14 +177,15 @@ async function handleStats(context) {
 
     let statsMessage = `📊 *YOUR ACTIVITY STATS* 📊\n\n` +
                       `📅 Month: ${currentMonth}\n` +
-                      `⭐ Total Points: ${activity.points || 0}\n\n` +
-                      `📝 Messages: ${stats.messages || 0}\n` +
-                      `🎨 Stickers: ${stats.stickers || 0}\n` +
-                      `🎥 Videos: ${stats.videos || 0}\n` +
-                      `🎤 Voice Notes: ${stats.voiceNotes || 0}\n` +
-                      `📊 Polls: ${stats.polls || 0}\n` +
-                      `📸 Photos: ${stats.photos || 0}\n` +
-                      `✅ Attendance: ${stats.attendance || 0}\n\n` +
+                      `⭐ Total Points: ${activity.points || 0}\n` +
+                      `📝 Total Messages: ${totalMessages}\n\n` +
+                      `   Text msgs: ${stats.messages || 0}\n` +
+                      `   🎨 Stickers: ${stats.stickers || 0}\n` +
+                      `   🎥 Videos: ${stats.videos || 0}\n` +
+                      `   🎤 Voice Notes: ${stats.voiceNotes || 0}\n` +
+                      `   📊 Polls: ${stats.polls || 0}\n` +
+                      `   📸 Photos: ${stats.photos || 0}\n` +
+                      `   ✅ Attendance: ${stats.attendance || 0}\n\n` +
                       `👁️ Last Seen: ${lastSeenText}\n` +
                       `📅 First Seen: ${moment(activity.firstSeen).tz('Africa/Lagos').format('DD/MM/YYYY')}`;
 
@@ -271,8 +277,15 @@ async function handleLeaderboard(context) {
     leaderboard.forEach((user, index) => {
       const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
       const phone = user.userId.split('@')[0];
+      
+      // Calculate total messages as sum of all activity types
+      const totalMessages = (user.stats.messages || 0) + (user.stats.stickers || 0) + 
+                           (user.stats.videos || 0) + (user.stats.voiceNotes || 0) + 
+                           (user.stats.polls || 0) + (user.stats.photos || 0) + 
+                           (user.stats.attendance || 0);
+      
       leaderboardMessage += `${medal} @${phone}\n` +
-                           `   ⭐ ${user.points} pts | 📝 ${user.stats.messages || 0} msgs | ✅ ${user.stats.attendance || 0} att\n\n`;
+                           `   ⭐ ${user.points} pts | 📝 ${totalMessages} total | ✅ ${user.stats.attendance || 0} att\n\n`;
     });
 
     leaderboardMessage += `💡 *Use .activity stats to see your detailed stats*`;
@@ -320,24 +333,59 @@ async function handleInactives(context, args) {
       return reply('❌ Unable to fetch group members. Please try again.');
     }
 
-    // Get members with activity records from DB
-    const activeMembers = await getInactiveMembers(chatId, Math.max(limit, 100));
-    const activeMemberIds = new Set(activeMembers.map(m => m.userId));
+    // Get ALL members with activity records from DB (not limited)
+    const allActivityMembers = await getInactiveMembers(chatId, 1000);
+    const ONE_WEEK = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 
-    // Find silent members (those not in activity DB)
+    // Build inactivity data: only members inactive for 7+ days
+    const inactivityData = [];
+
+    allActivityMembers.forEach(member => {
+      if (!member.lastSeen) return; // Skip if no lastSeen
+      
+      const lastSeenDate = new Date(member.lastSeen);
+      const daysInactive = (Date.now() - lastSeenDate.getTime()) / (24 * 60 * 60 * 1000);
+
+      // Only include if inactive for 7+ days
+      if (daysInactive >= 7) {
+        inactivityData.push({
+          ...member,
+          daysInactive,
+          isSilent: false
+        });
+      }
+    });
+
+    // Add completely silent members (never chatted)
+    const activeMemberIds = new Set(allActivityMembers.map(m => m.userId));
     const silentMembers = allGroupMembers.filter(memberId => !activeMemberIds.has(memberId));
-
-    // Get activity data for least active members from DB
-    const inactivesFromDb = activeMembers.slice(0, limit);
-
-    // Combine: silent members first, then least active from DB
-    const inactives = [
-      ...silentMembers.slice(0, limit).map(userId => ({
+    
+    silentMembers.forEach(userId => {
+      inactivityData.push({
         userId,
         points: 0,
         stats: { messages: 0, stickers: 0, videos: 0, voiceNotes: 0, polls: 0, photos: 0, attendance: 0 },
-        isSilent: true
-      })),
+        daysInactive: Infinity, // Sort to top
+        isSilent: true,
+        lastSeen: null
+      });
+    });
+
+    // Sort by days inactive (descending - longest inactive first)
+    inactivityData.sort((a, b) => b.daysInactive - a.daysInactive);
+
+    // Limit results
+    const inactives = inactivityData.slice(0, limit);
+
+    if (inactives.length === 0) {
+      return reply('✅ Great! All members have been active within the last 7 days.');
+    }
+
+    const currentMonth = moment.tz('Africa/Lagos').format('MMMM YYYY');
+
+    let inactivesMessage = `😴 *INACTIVE MEMBERS (7+ DAYS)* 😴\n\n` +
+                          `📅 Month: ${currentMonth}\n` +
+                          `📊 Showing ${inactives.length} members\n\n`;
       ...inactivesFromDb.slice(0, Math.max(0, limit - silentMembers.length))
     ];
 
@@ -347,28 +395,49 @@ async function handleInactives(context, args) {
 
     const currentMonth = moment.tz('Africa/Lagos').format('MMMM YYYY');
 
-    let inactivesMessage = `😴 *LEAST ACTIVE MEMBERS* 😴\n\n` +
+    let inactivesMessage = `😴 *INACTIVE MEMBERS* 😴\n\n` +
                           `📅 Month: ${currentMonth}\n` +
                           `📊 Showing ${inactives.length} members\n\n`;
 
     const mentions = inactives.map(u => u.userId);
 
     inactives.forEach((user, index) => {
-      let badge;
+      let badge, durationText;
+      
       if (user.isSilent) {
-        badge = '⚫'; // Black for silent members
+        badge = '⚫'; // Black for silent members (never chatted)
+        durationText = '(Never chatted)';
       } else {
-        badge = index === inactives.length - 1 ? '🔴' : index >= inactives.length - 3 ? '🟠' : '🟡';
+        // Color based on days inactive
+        const days = Math.floor(user.daysInactive);
+        if (days >= 30) {
+          badge = '⚫'; // Black: 30+ days (more than a month)
+          durationText = `(${days} days ago)`;
+        } else if (days >= 21) {
+          badge = '🔴'; // Red: 3+ weeks (21-30 days)
+          durationText = `(${days} days ago)`;
+        } else if (days >= 14) {
+          badge = '🟠'; // Orange: 2+ weeks (14-21 days)
+          durationText = `(${days} days ago)`;
+        } else {
+          badge = '🟡'; // Yellow: 1-2 weeks (7-14 days)
+          durationText = `(${days} days ago)`;
+        }
       }
       
       const phone = user.userId.split('@')[0];
-      const status = user.isSilent ? ' (SILENT)' : '';
       
-      inactivesMessage += `${badge} @${phone}${status}\n` +
-                         `   📝 ${user.stats.messages || 0} msgs | ⭐ ${user.points} pts\n\n`;
+      // Calculate total messages as sum of all activity types
+      const totalMessages = (user.stats.messages || 0) + (user.stats.stickers || 0) + 
+                           (user.stats.videos || 0) + (user.stats.voiceNotes || 0) + 
+                           (user.stats.polls || 0) + (user.stats.photos || 0) + 
+                           (user.stats.attendance || 0);
+      
+      inactivesMessage += `${badge} @${phone} ${durationText}\n` +
+                         `   📝 ${totalMessages} total | ⭐ ${user.points} pts\n\n`;
     });
 
-    inactivesMessage += `\n📌 *Legend:* ⚫ Silent (no messages) | 🔴 Least active | 🟠 Very low activity | 🟡 Low activity\n` +
+    inactivesMessage += `\n📌 *Legend:* 🟡 7-14 days | 🟠 2-3 weeks | 🔴 3-4 weeks | ⚫ 1+ month or never chatted\n` +
                        `💡 *Use .activity stats to see full details*`;
 
     await sock.sendMessage(chatId, { text: inactivesMessage, mentions }, { quoted: m });
