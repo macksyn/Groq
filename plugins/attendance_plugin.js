@@ -24,7 +24,7 @@ const defaultSettings = {
   streakBonusMultiplier: 1.5,
   adminNumbers: [],
   autoDetection: true,
-  preferredDateFormat: 'MM/DD'
+  preferredDateFormat: 'DD/MM'
 };
 
 // ===== IN-MEMORY CACHE =====
@@ -157,16 +157,26 @@ function parseBirthday(dobText) {
     const num1 = parseInt(match[1]);
     const num2 = parseInt(match[2]);
     year = match[3] ? (match[3].length === 2 ? 2000 + parseInt(match[3]) : parseInt(match[3])) : null;
-    if (attendanceSettings.preferredDateFormat === 'DD/MM' && num1 > 12 && num2 <= 12) {
-      day = num1;
-      month = num2;
-    } else if (num2 > 12 && num1 <= 12) {
-      month = num1;
-      day = num2;
-    } else {
-      month = num1;
-      day = num2;
-    }
+    if (attendanceSettings.preferredDateFormat === 'DD/MM') {
+  day = num1;
+  month = num2;
+} else if (attendanceSettings.preferredDateFormat === 'MM/DD') {
+  month = num1;
+  day = num2;
+} else {
+  // Only use heuristics if no format preference is set
+  if (num1 > 12 && num2 <= 12) {
+    day = num1;
+    month = num2;
+  } else if (num2 > 12 && num1 <= 12) {
+    month = num1;
+    day = num2;
+  } else {
+    // Ambiguous - could default to user's region preference
+    month = num1;
+    day = num2;
+  }
+}
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
       return formatBirthday(day, month, year, cleaned);
     }
