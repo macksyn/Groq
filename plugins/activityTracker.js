@@ -124,7 +124,7 @@ const defaultSettings = {
 const activityCache = new Map();
 const enabledGroupsCache = new Set();
 const settingsCache = { data: null, timestamp: 0 };
-const cacheTimeout = 5 * 60 * 1000; // 5 minutes
+const cacheTimeout = 60 * 1000; // 1 minute for real-time updates
 
 // Cache cleanup to prevent memory leaks
 function startCacheCleanup() {
@@ -329,6 +329,22 @@ export async function getUserActivity(userId, groupId, month = null) {
   return activity;
 }
 
+// Fresh query from database - used for stats display (no cache)
+export async function getUserActivityFresh(userId, groupId, month = null) {
+  const targetMonth = month || moment.tz('Africa/Lagos').format('YYYY-MM');
+  const activityId = `${userId}_${groupId}_${targetMonth}`;
+
+  return await PluginHelpers.safeDBOperation(async (db, collection) => {
+    let activity = await collection.findOne({ activityId });
+    
+    if (!activity) {
+      // Initialize if doesn't exist
+      activity = await initUserActivity(userId, groupId);
+    }
+    
+    return activity;
+  }, COLLECTIONS.ACTIVITY_DATA);
+}
 async function updateUserActivity(userId, groupId, updates) {
   const currentMonth = moment.tz('Africa/Lagos').format('YYYY-MM');
   const activityId = `${userId}_${groupId}_${currentMonth}`;

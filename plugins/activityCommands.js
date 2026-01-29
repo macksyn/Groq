@@ -4,6 +4,7 @@
 import moment from 'moment-timezone';
 import {
   getUserActivity,
+  getUserActivityFresh,
   getUserRank,
   getMonthlyLeaderboard,
   enableGroupTracking,
@@ -28,7 +29,7 @@ export default {
   // COMMAND REGISTRATION
   // ============================================================
   commands: ['activity', 'leaderboard'],
-  aliases: ['act', 'rank', 'top'],
+  aliases: ['act', 'rank'],
   ownerOnly: false,
 
   // ============================================================
@@ -55,7 +56,6 @@ export default {
           break;
 
         case 'leaderboard':
-        case 'top':
           await handleLeaderboard(context);
           break;
 
@@ -106,7 +106,7 @@ async function showActivityMenu(reply, prefix) {
     `👤 *User Commands:*\n` +
     `• *stats* - View your activity stats\n` +
     `• *rank* - Check your current rank\n` +
-    `• *top* - View top 10 members\n` +
+    `• *leaderboard* - View top 10 members\n` +
     `• *points* - View point values\n\n` +
     `👑 *Admin Commands:*\n` +
     `• *enable* - Enable tracking in this group\n` +
@@ -138,7 +138,7 @@ async function handleStats(context) {
   }
 
   try {
-    const activity = await getUserActivity(senderId, chatId);
+      const activity = await getUserActivityFresh(senderId, chatId);
     
     if (!activity) {
       return reply('❌ No activity data found. Start interacting to get tracked!');
@@ -185,7 +185,7 @@ async function handleRank(context) {
   }
 
   try {
-    const rankData = await getUserRank(senderId, chatId);
+      const rankData = await getUserRank(senderId, chatId);
     
     if (!rankData || !rankData.activity) {
       return reply('❌ No ranking data available yet.');
@@ -243,17 +243,18 @@ async function handleLeaderboard(context) {
     let leaderboardMessage = `🏆 *MONTHLY LEADERBOARD* 🏆\n\n` +
                             `📅 Month: ${currentMonth}\n\n`;
 
+    const mentions = leaderboard.map(u => u.userId);
+
     leaderboard.forEach((user, index) => {
       const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
       const phone = user.userId.split('@')[0];
-      
-      leaderboardMessage += `${medal} ${phone}\n` +
+      leaderboardMessage += `${medal} @${phone}\n` +
                            `   ⭐ ${user.points} pts | 📝 ${user.stats.messages || 0} msgs | ✅ ${user.stats.attendance || 0} att\n\n`;
     });
 
     leaderboardMessage += `💡 *Use .activity stats to see your detailed stats*`;
 
-    await reply(leaderboardMessage);
+    await sock.sendMessage(chatId, { text: leaderboardMessage, mentions }, { quoted: m });
   } catch (error) {
     console.error('Leaderboard error:', error);
     await reply('❌ Error loading leaderboard. Please try again.');
