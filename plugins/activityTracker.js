@@ -520,3 +520,17 @@ export async function getUserRank(userId, groupId) {
     };
   }, COLLECTIONS.ACTIVITY_DATA);
 }
+
+export async function getInactiveMembers(groupId, limit = 10) {
+  const currentMonth = moment.tz('Africa/Lagos').format('YYYY-MM');
+
+  return await PluginHelpers.safeDBOperation(async (db, collection) => {
+    const inactives = await collection
+      .find({ groupId, month: currentMonth })
+      .sort({ points: 1, 'stats.messages': 1 })
+      .limit(limit)
+      .toArray();
+
+    return inactives;
+  }, COLLECTIONS.ACTIVITY_DATA);
+}

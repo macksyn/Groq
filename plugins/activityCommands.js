@@ -2,11 +2,13 @@
 // Command interface for activity tracking system
 // ===== V3 PLUGIN EXPORT =====
 import moment from 'moment-timezone';
+import { TimeHelpers } from '../lib/helpers.js';
 import {
   getUserActivity,
   getUserActivityFresh,
   getUserRank,
   getMonthlyLeaderboard,
+  getInactiveMembers,
   enableGroupTracking,
   disableGroupTracking,
   getEnabledGroups,
@@ -107,6 +109,7 @@ async function showActivityMenu(reply, prefix) {
     `• *stats* - View your activity stats\n` +
     `• *rank* - Check your current rank\n` +
     `• *leaderboard* - View top 10 members\n` +
+    `• *inactives* - View least active members\n` +
     `• *points* - View point values\n\n` +
     `👑 *Admin Commands:*\n` +
     `• *enable* - Enable tracking in this group\n` +
@@ -147,6 +150,26 @@ async function handleStats(context) {
     const currentMonth = moment.tz('Africa/Lagos').format('MMMM YYYY');
     const stats = activity.stats;
 
+    // Estimate last seen: if last message within 10 minutes, show 'Online'
+    // Otherwise show relative time like "25 minutes ago" or "5h 34m ago"
+    let lastSeenText = 'N/A';
+    try {
+      if (activity.lastSeen) {
+        const lastSeenDate = new Date(activity.lastSeen);
+        const diffMs = Date.now() - lastSeenDate.getTime();
+        const TEN_MINUTES = 10 * 60 * 1000;
+        if (diffMs <= TEN_MINUTES) {
+          lastSeenText = '🟢 Online';
+        } else {
+          // Use formatDuration to show relative time
+          const relativeTime = TimeHelpers.formatDuration(diffMs);
+          lastSeenText = `${relativeTime} ago`;
+        }
+      }
+    } catch (e) {
+      lastSeenText = 'N/A';
+    }
+
     let statsMessage = `📊 *YOUR ACTIVITY STATS* 📊\n\n` +
                       `📅 Month: ${currentMonth}\n` +
                       `⭐ Total Points: ${activity.points || 0}\n\n` +
@@ -157,7 +180,7 @@ async function handleStats(context) {
                       `📊 Polls: ${stats.polls || 0}\n` +
                       `📸 Photos: ${stats.photos || 0}\n` +
                       `✅ Attendance: ${stats.attendance || 0}\n\n` +
-                      `👁️ Last Seen: ${moment(activity.lastSeen).tz('Africa/Lagos').format('DD/MM/YYYY HH:mm')}\n` +
+                      `👁️ Last Seen: ${lastSeenText}\n` +
                       `📅 First Seen: ${moment(activity.firstSeen).tz('Africa/Lagos').format('DD/MM/YYYY')}`;
 
     await reply(statsMessage);
@@ -258,6 +281,100 @@ async function handleLeaderboard(context) {
   } catch (error) {
     console.error('Leaderboard error:', error);
     await reply('❌ Error loading leaderboard. Please try again.');
+  }
+}
+
+async function handleInactives(context, args) {
+  const { msg: m, sock } = context;
+  const chatId = m.key.remoteJid;
+
+  const reply = async (text) => await sock.sendMessage(chatId, { text }, { quoted: m });
+
+  if (!chatId.endsWith('@g.us')) {
+    return reply('❌ This command only works in groups.');
+  }
+
+  // Check if tracking is enabled
+  const enabled = await isGroupEnabled(chatId);
+  if (!enabled) {
+    return reply('❌ Activity tracking is not enabled in this group.\n\n💡 Admins can enable it with: .activity enable');
+  }
+
+  try {
+    // Parse limit from args, default to 10, max 50
+    let limit = 10;
+    if (args && args[0]) {
+      const parsedLimit = parseInt(args[0]);
+      if (!isNaN(parsedLimit) && parsedLimit > 0) {
+        limit = Math.min(parsedLimit, 50);
+      }
+    }
+
+    // Fetch all group members from WhatsApp
+    let allGroupMembers = [];
+    try {
+      const groupMetadata = await sock.groupMetadata(chatId);
+      allGroupMembers = groupMetadata.participants.map(p => p.id);
+    } catch (error) {
+      console.error('Error fetching group metadata:', error);
+      return reply('❌ Unable to fetch group members. Please try again.');
+    }
+
+    // Get members with activity records from DB
+    const activeMembers = await getInactiveMembers(chatId, Math.max(limit, 100));
+    const activeMemberIds = new Set(activeMembers.map(m => m.userId));
+
+    // Find silent members (those not in activity DB)
+    const silentMembers = allGroupMembers.filter(memberId => !activeMemberIds.has(memberId));
+
+    // Get activity data for least active members from DB
+    const inactivesFromDb = activeMembers.slice(0, limit);
+
+    // Combine: silent members first, then least active from DB
+    const inactives = [
+      ...silentMembers.slice(0, limit).map(userId => ({
+        userId,
+        points: 0,
+        stats: { messages: 0, stickers: 0, videos: 0, voiceNotes: 0, polls: 0, photos: 0, attendance: 0 },
+        isSilent: true
+      })),
+      ...inactivesFromDb.slice(0, Math.max(0, limit - silentMembers.length))
+    ];
+
+    if (!inactives || inactives.length === 0) {
+      return reply('✅ All members have participated! No inactive members found.');
+    }
+
+    const currentMonth = moment.tz('Africa/Lagos').format('MMMM YYYY');
+
+    let inactivesMessage = `😴 *LEAST ACTIVE MEMBERS* 😴\n\n` +
+                          `📅 Month: ${currentMonth}\n` +
+                          `📊 Showing ${inactives.length} members\n\n`;
+
+    const mentions = inactives.map(u => u.userId);
+
+    inactives.forEach((user, index) => {
+      let badge;
+      if (user.isSilent) {
+        badge = '⚫'; // Black for silent members
+      } else {
+        badge = index === inactives.length - 1 ? '🔴' : index >= inactives.length - 3 ? '🟠' : '🟡';
+      }
+      
+      const phone = user.userId.split('@')[0];
+      const status = user.isSilent ? ' (SILENT)' : '';
+      
+      inactivesMessage += `${badge} @${phone}${status}\n` +
+                         `   📝 ${user.stats.messages || 0} msgs | ⭐ ${user.points} pts\n\n`;
+    });
+
+    inactivesMessage += `\n📌 *Legend:* ⚫ Silent (no messages) | 🔴 Least active | 🟠 Very low activity | 🟡 Low activity\n` +
+                       `💡 *Use .activity stats to see full details*`;
+
+    await sock.sendMessage(chatId, { text: inactivesMessage, mentions }, { quoted: m });
+  } catch (error) {
+    console.error('Inactives error:', error);
+    await reply('❌ Error loading inactives. Please try again.');
   }
 }
 
@@ -510,6 +627,10 @@ async function handleSubCommand(subCommand, args, context) {
     case 'top':
     case 'leaderboard':
       await handleLeaderboard(context);
+      break;
+    case 'inactives':
+    case 'inactive':
+      await handleInactives(context, args);
       break;
     case 'points':
       await handlePoints(context);
