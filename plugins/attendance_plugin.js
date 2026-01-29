@@ -152,35 +152,38 @@ function parseBirthday(dobText) {
   }
 
   // Pattern 3: MM/DD/YYYY or DD/MM/YYYY
-  match = cleaned.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
-  if (match) {
-    const num1 = parseInt(match[1]);
-    const num2 = parseInt(match[2]);
-    year = match[3] ? (match[3].length === 2 ? 2000 + parseInt(match[3]) : parseInt(match[3])) : null;
-    if (attendanceSettings.preferredDateFormat === 'DD/MM') {
-  day = num1;
-  month = num2;
-} else if (attendanceSettings.preferredDateFormat === 'MM/DD') {
-  month = num1;
-  day = num2;
-} else {
-  // Only use heuristics if no format preference is set
-  if (num1 > 12 && num2 <= 12) {
+match = cleaned.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
+if (match) {
+  const num1 = parseInt(match[1]);
+  const num2 = parseInt(match[2]);
+  year = match[3] ? (match[3].length === 2 ? 2000 + parseInt(match[3]) : parseInt(match[3])) : null;
+  
+  // Respect the preferredDateFormat setting first
+  if (attendanceSettings.preferredDateFormat === 'DD/MM') {
     day = num1;
     month = num2;
-  } else if (num2 > 12 && num1 <= 12) {
+  } else if (attendanceSettings.preferredDateFormat === 'MM/DD') {
     month = num1;
     day = num2;
   } else {
-    // Ambiguous - could default to user's region preference
-    month = num1;
-    day = num2;
-  }
-}
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      return formatBirthday(day, month, year, cleaned);
+    // Fallback: Use heuristics only if no preference is set
+    if (num1 > 12 && num2 <= 12) {
+      day = num1;
+      month = num2;
+    } else if (num2 > 12 && num1 <= 12) {
+      month = num1;
+      day = num2;
+    } else {
+      // Ambiguous case - default to DD/MM for Nigeria
+      day = num1;
+      month = num2;
     }
   }
+  
+  if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+    return formatBirthday(day, month, year, cleaned);
+  }
+}
 
   // Pattern 4: YYYY-MM-DD
   match = cleaned.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);

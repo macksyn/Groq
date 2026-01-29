@@ -1028,7 +1028,7 @@ async function handleMyBirthday(context) {
       message += `🎈 Current Age: ${birthday.age} years old\n`;
     }
 
-    message += `💾 Last Updated: ${new Date(birthdayData.lastUpdated).toLocaleString()}\n`;
+    message += `💾 Last Updated: ${new Date(birthdayData.lastUpdated).tz('Africa/Lagos').format('DD/MM/YYYY HH:mm')}\n`;
 
     const today = new Date();
     const thisYear = today.getFullYear();
