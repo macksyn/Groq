@@ -374,7 +374,6 @@ async function handleInactives(context, args) {
     // Sort by days inactive (descending - longest inactive first)
     inactivityData.sort((a, b) => b.daysInactive - a.daysInactive);
 
-    // Limit results
     const inactives = inactivityData.slice(0, limit);
 
     if (inactives.length === 0) {
@@ -384,18 +383,6 @@ async function handleInactives(context, args) {
     const currentMonth = moment.tz('Africa/Lagos').format('MMMM YYYY');
 
     let inactivesMessage = `😴 *INACTIVE MEMBERS (7+ DAYS)* 😴\n\n` +
-                          `📅 Month: ${currentMonth}\n` +
-                          `📊 Showing ${inactives.length} members\n\n`;
-      ...inactivesFromDb.slice(0, Math.max(0, limit - silentMembers.length))
-    ];
-
-    if (!inactives || inactives.length === 0) {
-      return reply('✅ All members have participated! No inactive members found.');
-    }
-
-    const currentMonth = moment.tz('Africa/Lagos').format('MMMM YYYY');
-
-    let inactivesMessage = `😴 *INACTIVE MEMBERS* 😴\n\n` +
                           `📅 Month: ${currentMonth}\n` +
                           `📊 Showing ${inactives.length} members\n\n`;
 
