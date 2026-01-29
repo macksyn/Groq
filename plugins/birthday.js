@@ -314,12 +314,13 @@ function getBirthdayWishMessage(birthdayPerson) {
 
 // Generate reminder message
 function getReminderMessage(birthdayPerson, daysUntil) {
+  const userTag = `@${birthdayPerson.userId.split('@')[0]}`;
   let message;
 
   if (daysUntil === 1) {
-    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 Tomorrow is ${birthdayPerson.name}'s birthday!\n\n🎁 Don't forget to wish them well! 🎉`;
+    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 Tomorrow is ${userTag}'s birthday!\n\n🎁 Don't forget to wish them well! 🎉`;
   } else {
-    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 ${birthdayPerson.name}'s birthday is in ${daysUntil} days!\n\n🗓️ Save the date: ${birthdayPerson.birthday.displayDate} 🎉`;
+    message = `🎂 *BIRTHDAY REMINDER* 🎂\n\n📅 ${userTag}'s birthday is in ${daysUntil} days!\n\n🗓️ Save the date: ${birthdayPerson.birthday.displayDate} 🎉`;
   }
 
   if (birthdayPerson.birthday.age !== undefined) {
