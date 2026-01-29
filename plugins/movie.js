@@ -123,11 +123,8 @@ class MovieDownloader {
     this.statsCache = null;
     this.statsCacheTime = 0;
     this.statsCacheDuration = 5 * 60 * 1000;
+    this._extractDirectUrl = _extractDirectUrl;
   }
-
-  // --- Add the new function to the class instance ---
-  _extractDirectUrl = _extractDirectUrl;
-  // ---
 
   async initialize() {
     try {

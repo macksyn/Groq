@@ -139,8 +139,17 @@ async function showDriverInfo() {
   try {
     // Get MongoDB driver version
     const { MongoClient } = await import('mongodb');
-    const pkg = await import('mongodb/package.json', { assert: { type: 'json' } });
-    console.log(chalk.cyan(`📦 MongoDB Driver Version: ${pkg.default.version}`));
+    // Importing package.json may require import assertions in some runtimes.
+    // Use a safe dynamic import and fallback handling to avoid parser/runtime issues.
+    let pkg = {};
+    try {
+      const mod = await import('mongodb/package.json').catch(() => null);
+      pkg = (mod && (mod.default || mod)) || {};
+    } catch (e) {
+      pkg = {};
+    }
+    const driverVersion = pkg.version || (pkg.default && pkg.default.version) || 'unknown';
+    console.log(chalk.cyan(`📦 MongoDB Driver Version: ${driverVersion}`));
     
     // Check for deprecated options
     const deprecatedOptions = ['bufferMaxEntries', 'bufferCommands'];
