@@ -179,7 +179,7 @@ async function handleStats(context) {
                       `📅 Month: ${currentMonth}\n` +
                       `⭐ Total Points: ${activity.points || 0}\n` +
                       `📝 Total Messages: ${totalMessages}\n\n` +
-                      `   Text msgs: ${stats.messages || 0}\n` +
+                      `   💬 Text: ${stats.messages || 0}\n` +
                       `   🎨 Stickers: ${stats.stickers || 0}\n` +
                       `   🎥 Videos: ${stats.videos || 0}\n` +
                       `   🎤 Voice Notes: ${stats.voiceNotes || 0}\n` +
@@ -377,12 +377,12 @@ async function handleInactives(context, args) {
     const inactives = inactivityData.slice(0, limit);
 
     if (inactives.length === 0) {
-      return reply('✅ Great! All members have been active within the last 7 days.');
+      return reply('✅ Great! All members have been active.');
     }
 
     const currentMonth = moment.tz('Africa/Lagos').format('MMMM YYYY');
 
-    let inactivesMessage = `😴 *INACTIVE MEMBERS (7+ DAYS)* 😴\n\n` +
+    let inactivesMessage = `😴 *INACTIVE MEMBERS* 😴\n\n` +
                           `📅 Month: ${currentMonth}\n` +
                           `📊 Showing ${inactives.length} members\n\n`;
 
