@@ -505,17 +505,18 @@ export async function getUserRank(userId, groupId) {
   const currentMonth = moment.tz('Africa/Lagos').format('YYYY-MM');
 
   return await PluginHelpers.safeDBOperation(async (db, collection) => {
-    const allUsers = await collection
+    // Get all users with activity in DB (sorted by points descending)
+    const dbUsers = await collection
       .find({ groupId, month: currentMonth })
       .sort({ points: -1 })
       .toArray();
 
-    const userIndex = allUsers.findIndex(u => u.userId === userId);
-    const userActivity = allUsers[userIndex];
+    const userIndex = dbUsers.findIndex(u => u.userId === userId);
+    const userActivity = dbUsers[userIndex];
 
     return {
       rank: userIndex + 1,
-      totalUsers: allUsers.length,
+      totalUsers: dbUsers.length,
       activity: userActivity
     };
   }, COLLECTIONS.ACTIVITY_DATA);

@@ -125,7 +125,7 @@ async function showActivityMenu(reply, prefix) {
 
 async function handleStats(context) {
   const { msg: m, sock } = context;
-  const senderId = m.key.participant || m.key.remoteJid;
+  let targetUserId = m.key.participant || m.key.remoteJid; // Default to sender
   const chatId = m.key.remoteJid;
 
   const reply = async (text) => await sock.sendMessage(chatId, { text }, { quoted: m });
@@ -141,14 +141,26 @@ async function handleStats(context) {
   }
 
   try {
-      const activity = await getUserActivityFresh(senderId, chatId);
+    // Check for mentioned user
+    if (m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
+      targetUserId = m.message.extendedTextMessage.contextInfo.mentionedJid[0];
+    }
+    // Check for quoted message
+    else if (m.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+      targetUserId = m.message.extendedTextMessage.contextInfo.participant || m.key.participant;
+    }
+
+    const activity = await getUserActivityFresh(targetUserId, chatId);
     
     if (!activity) {
-      return reply('❌ No activity data found. Start interacting to get tracked!');
+      const phone = targetUserId.split('@')[0];
+      return reply(`❌ No activity data found for @${phone}. They haven't participated yet.`);
     }
 
     const currentMonth = moment.tz('Africa/Lagos').format('MMMM YYYY');
     const stats = activity.stats;
+    const phone = targetUserId.split('@')[0];
+    const isSelf = targetUserId === (m.key.participant || m.key.remoteJid);
 
     // Calculate total messages as sum of all activity types
     const totalMessages = (stats.messages || 0) + (stats.stickers || 0) + (stats.videos || 0) + 
@@ -175,7 +187,9 @@ async function handleStats(context) {
       lastSeenText = 'N/A';
     }
 
-    let statsMessage = `📊 *YOUR ACTIVITY STATS* 📊\n\n` +
+    const header = isSelf ? `📊 *YOUR ACTIVITY STATS* 📊` : `📊 *ACTIVITY STATS - @${phone}* 📊`;
+    
+    let statsMessage = `${header}\n\n` +
                       `📅 Month: ${currentMonth}\n` +
                       `⭐ Total Points: ${activity.points || 0}\n` +
                       `📝 Total Messages: ${totalMessages}\n\n` +
@@ -189,7 +203,7 @@ async function handleStats(context) {
                       `👁️ Last Seen: ${lastSeenText}\n` +
                       `📅 First Seen: ${moment(activity.firstSeen).tz('Africa/Lagos').format('DD/MM/YYYY')}`;
 
-    await reply(statsMessage);
+    await sock.sendMessage(chatId, { text: statsMessage, mentions: [targetUserId] }, { quoted: m });
   } catch (error) {
     console.error('Stats error:', error);
     await reply('❌ Error loading stats. Please try again.');
@@ -214,17 +228,28 @@ async function handleRank(context) {
   }
 
   try {
-      const rankData = await getUserRank(senderId, chatId);
+    // Fetch all group members
+    let allGroupMembers = [];
+    try {
+      const groupMetadata = await sock.groupMetadata(chatId);
+      allGroupMembers = groupMetadata.participants.map(p => p.id);
+    } catch (error) {
+      console.error('Error fetching group metadata:', error);
+      return reply('❌ Unable to fetch group members. Please try again.');
+    }
+
+    const rankData = await getUserRank(senderId, chatId);
     
     if (!rankData || !rankData.activity) {
       return reply('❌ No ranking data available yet.');
     }
 
     const currentMonth = moment.tz('Africa/Lagos').format('MMMM YYYY');
+    const totalGroupMembers = allGroupMembers.length;
 
     let rankMessage = `🏆 *YOUR RANK* 🏆\n\n` +
                      `📅 Month: ${currentMonth}\n` +
-                     `🥇 Rank: #${rankData.rank} out of ${rankData.totalUsers}\n` +
+                     `🥇 Rank: #${rankData.rank} out of ${totalGroupMembers}\n` +
                      `⭐ Points: ${rankData.activity.points || 0}\n\n`;
 
     if (rankData.rank === 1) {
