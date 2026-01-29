@@ -1004,10 +1004,12 @@ async function handleMyBirthday(context) {
   const { msg: m, config } = context;
 
   try {
-    const birthdayData = await getBirthdayData(m.sender);
+    // FIX: Use the same userId format as attendance plugin
+    const userId = m.key?.participant || m.key?.remoteJid || m.sender;
+    const birthdayData = await getBirthdayData(userId);
 
     if (!birthdayData) {
-      await m.reply(`🎂 *No Birthday Recorded*\n\nYour birthday hasn't been saved yet. It will be automatically saved when you submit your next attendance form with a valid D.O.B field.\n\n💡 *Make sure to fill your D.O.B correctly in the attendance form!*`);
+      await m.reply(`🎂 *No Birthday Recorded*\n\nYour birthday hasn't been saved yet...`);
       return;
     }
 
