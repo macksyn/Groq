@@ -1,6 +1,7 @@
 // plugins/attendance.js - V3 Attendance Plugin with Scheduled Tasks
 import moment from 'moment-timezone';
 import { PluginHelpers } from '../lib/pluginIntegration.js';
+import { recordAttendance } from './activityTracker.js';
 
 // ===== COLLECTIONS =====
 const COLLECTIONS = {
@@ -484,6 +485,13 @@ async function handleAutoAttendance(m, sock, config) {
       reward: finalReward,
       streak: currentStreak
     });
+
+    // Notify activity tracker so attendance is counted in leaderboards
+    try {
+      await recordAttendance(senderId, from);
+    } catch (err) {
+      console.error('Error notifying activity tracker about attendance:', err);
+    }
 
     const updatedUserData = await getUserData(senderId);
     let successMessage = `✅ *ATTENDANCE APPROVED!* ✅\n\n🔥 Current streak: ${currentStreak} days\n💰 New wallet balance: ₦${(updatedUserData.balance || 0).toLocaleString()}${birthdayMessage}\n\n🎉 *Thank you for your consistent participation!*`;

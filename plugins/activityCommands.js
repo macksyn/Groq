@@ -23,7 +23,7 @@ export default {
   // ============================================================
   name: 'Activity Commands',
   version: '1.0.0',
-  author: 'Your Bot',
+  author: 'Alex Macksyn',
   description: 'Command interface for activity tracking system',
   category: 'utility',
 
