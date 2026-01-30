@@ -108,9 +108,11 @@ async function handleWelcome(sock, groupJid, participants, logger) {
     const groupName = groupMetadata.subject;
     
     for (const participant of participants) {
-      const userName = participant.split('@')[0];
+      const phone = participant.split('@')[0];
+      const useAtToken = settings.welcomeMessage.includes('@{user}');
+      const userReplacement = useAtToken ? phone : `@${phone}`;
       const message = formatMessage(settings.welcomeMessage, {
-        user: userName,
+        user: userReplacement,
         groupName: groupName
       });
       
@@ -153,9 +155,11 @@ async function handleGoodbye(sock, groupJid, participants, logger) {
     const groupName = groupMetadata.subject;
     
     for (const participant of participants) {
-      const userName = participant.split('@')[0];
+      const phone = participant.split('@')[0];
+      const useAtToken = settings.goodbyeMessage.includes('@{user}');
+      const userReplacement = useAtToken ? phone : `@${phone}`;
       const message = formatMessage(settings.goodbyeMessage, {
-        user: userName,
+        user: userReplacement,
         groupName: groupName
       });
       
@@ -422,10 +426,12 @@ async function handleWelcomeTest(m, sock, logger) {
   
   const settings = await getGroupSettings(groupJid);
   const groupMetadata = await sock.groupMetadata(groupJid);
-  const userName = senderId.split('@')[0];
-  
+  const phone = senderId.split('@')[0];
+  const useAtToken = settings.welcomeMessage.includes('@{user}');
+  const userReplacement = useAtToken ? phone : `@${phone}`;
+
   const message = formatMessage(settings.welcomeMessage, {
-    user: userName,
+    user: userReplacement,
     groupName: groupMetadata.subject
   });
   
@@ -467,10 +473,12 @@ async function handleGoodbyeTest(m, sock, logger) {
   
   const settings = await getGroupSettings(groupJid);
   const groupMetadata = await sock.groupMetadata(groupJid);
-  const userName = senderId.split('@')[0];
-  
+  const phone = senderId.split('@')[0];
+  const useAtToken = settings.goodbyeMessage.includes('@{user}');
+  const userReplacement = useAtToken ? phone : `@${phone}`;
+
   const message = formatMessage(settings.goodbyeMessage, {
-    user: userName,
+    user: userReplacement,
     groupName: groupMetadata.subject
   });
   
