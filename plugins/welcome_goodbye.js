@@ -108,13 +108,14 @@ async function handleWelcome(sock, groupJid, participants, logger) {
     const groupName = groupMetadata.subject;
     
     for (const participant of participants) {
-      const phone = participant.split('@')[0];
-      const useAtToken = settings.welcomeMessage.includes('@{user}');
-      const userReplacement = useAtToken ? phone : `@${phone}`;
-      const message = formatMessage(settings.welcomeMessage, {
-        user: userReplacement,
-        groupName: groupName
-      });
+        const phone = participant.split('@')[0];
+        const userName = phone;
+        const useAtToken = settings.welcomeMessage.includes('@{user}');
+        const userReplacement = useAtToken ? phone : `@${phone}`;
+        const message = formatMessage(settings.welcomeMessage, {
+          user: userReplacement,
+          groupName: groupName
+        });
       
       if (settings.useProfilePic) {
         const ppUrl = await getProfilePicture(sock, participant);
@@ -155,13 +156,14 @@ async function handleGoodbye(sock, groupJid, participants, logger) {
     const groupName = groupMetadata.subject;
     
     for (const participant of participants) {
-      const phone = participant.split('@')[0];
-      const useAtToken = settings.goodbyeMessage.includes('@{user}');
-      const userReplacement = useAtToken ? phone : `@${phone}`;
-      const message = formatMessage(settings.goodbyeMessage, {
-        user: userReplacement,
-        groupName: groupName
-      });
+        const phone = participant.split('@')[0];
+        const userName = phone;
+        const useAtToken = settings.goodbyeMessage.includes('@{user}');
+        const userReplacement = useAtToken ? phone : `@${phone}`;
+        const message = formatMessage(settings.goodbyeMessage, {
+          user: userReplacement,
+          groupName: groupName
+        });
       
       // Send goodbye message in group
       if (settings.useProfilePic) {
@@ -190,20 +192,20 @@ async function handleGoodbye(sock, groupJid, participants, logger) {
       if (settings.dmOnLeave) {
         try {
           const dmMessage = formatMessage(settings.dmMessage, {
-            user: userName,
+            user: userReplacement,
             groupName: groupName
           });
-          
+
           await sock.sendMessage(participant, {
             text: dmMessage
           });
-          
+
           logger.info(`✅ DM sent to ${userName} after leaving ${groupName}`);
         } catch (dmError) {
           logger.error(`Failed to send DM to ${userName}:`, dmError);
         }
       }
-      
+
       logger.info(`✅ Goodbye message sent for ${userName} in ${groupName}`);
     }
   } catch (error) {
