@@ -10,8 +10,8 @@ const COLLECTIONS = {
 
 // ===== DEFAULT SETTINGS =====
 const defaultGroupSettings = {
-  welcomeEnabled: false,
-  goodbyeEnabled: false,
+  welcomeEnabled: true,
+  goodbyeEnabled: true,
   welcomeMessage: '👋 Welcome to {groupName}, @{user}!\n\nWe\'re glad to have you here! 🎉',
   goodbyeMessage: '👋 Goodbye @{user}!\n\nWe\'ll miss you from {groupName}. Take care! 💙',
   dmOnLeave: false,
