@@ -100,7 +100,9 @@ async function isAuthorized(sock, groupJid, userJid) {
 // ===== EVENT HANDLERS - FIXED =====
 async function handleWelcome(sock, groupJid, participants, logger) {
   try {
-    logger.info(`🎯 Welcome handler triggered for ${participants.length} participants in ${groupJid}`);
+    // Ensure participants is an array
+    const participantArray = Array.isArray(participants) ? participants : [];
+    logger.info(`🎯 Welcome handler triggered for ${participantArray.length} participants in ${groupJid}`);
     
     const settings = await getGroupSettings(groupJid);
     
@@ -112,8 +114,14 @@ async function handleWelcome(sock, groupJid, participants, logger) {
     const groupMetadata = await sock.groupMetadata(groupJid);
     const groupName = groupMetadata.subject;
     
-    for (const participant of participants) {
-      const phone = participant.split('@')[0];
+    for (const participant of participantArray) {
+      // Handle both string JID and object with id property
+      const jid = typeof participant === 'string' ? participant : (participant?.id || participant);
+      if (!jid || typeof jid !== 'string') {
+        logger.warn(`⚠️ Invalid participant data:`, participant);
+        continue;
+      }
+      const phone = jid.split('@')[0];
       
       // FIXED: Simplified message formatting
       const message = formatMessage(settings.welcomeMessage, {
@@ -122,24 +130,24 @@ async function handleWelcome(sock, groupJid, participants, logger) {
       });
       
       if (settings.useProfilePic) {
-        const ppUrl = await getProfilePicture(sock, participant);
+        const ppUrl = await getProfilePicture(sock, jid);
         
         if (ppUrl) {
           await sock.sendMessage(groupJid, {
             image: { url: ppUrl },
             caption: message,
-            mentions: [participant]
+            mentions: [jid]
           });
         } else {
           await sock.sendMessage(groupJid, {
             text: message,
-            mentions: [participant]
+            mentions: [jid]
           });
         }
       } else {
         await sock.sendMessage(groupJid, {
           text: message,
-          mentions: [participant]
+          mentions: [jid]
         });
       }
       
@@ -152,7 +160,9 @@ async function handleWelcome(sock, groupJid, participants, logger) {
 
 async function handleGoodbye(sock, groupJid, participants, logger) {
   try {
-    logger.info(`🎯 Goodbye handler triggered for ${participants.length} participants in ${groupJid}`);
+    // Ensure participants is an array
+    const participantArray = Array.isArray(participants) ? participants : [];
+    logger.info(`🎯 Goodbye handler triggered for ${participantArray.length} participants in ${groupJid}`);
     
     const settings = await getGroupSettings(groupJid);
     
@@ -164,8 +174,14 @@ async function handleGoodbye(sock, groupJid, participants, logger) {
     const groupMetadata = await sock.groupMetadata(groupJid);
     const groupName = groupMetadata.subject;
     
-    for (const participant of participants) {
-      const phone = participant.split('@')[0];
+    for (const participant of participantArray) {
+      // Handle both string JID and object with id property
+      const jid = typeof participant === 'string' ? participant : (participant?.id || participant);
+      if (!jid || typeof jid !== 'string') {
+        logger.warn(`⚠️ Invalid participant data:`, participant);
+        continue;
+      }
+      const phone = jid.split('@')[0];
       
       // FIXED: Simplified message formatting
       const message = formatMessage(settings.goodbyeMessage, {
@@ -175,24 +191,24 @@ async function handleGoodbye(sock, groupJid, participants, logger) {
       
       // Send goodbye message in group
       if (settings.useProfilePic) {
-        const ppUrl = await getProfilePicture(sock, participant);
+        const ppUrl = await getProfilePicture(sock, jid);
         
         if (ppUrl) {
           await sock.sendMessage(groupJid, {
             image: { url: ppUrl },
             caption: message,
-            mentions: [participant]
+            mentions: [jid]
           });
         } else {
           await sock.sendMessage(groupJid, {
             text: message,
-            mentions: [participant]
+            mentions: [jid]
           });
         }
       } else {
         await sock.sendMessage(groupJid, {
           text: message,
-          mentions: [participant]
+          mentions: [jid]
         });
       }
       
@@ -204,7 +220,7 @@ async function handleGoodbye(sock, groupJid, participants, logger) {
             groupName: groupName
           });
 
-          await sock.sendMessage(participant, {
+          await sock.sendMessage(jid, {
             text: dmMessage
           });
 
@@ -261,12 +277,19 @@ async function handleToggleWelcome(m, sock, args, logger) {
   }
   
   const settings = await getGroupSettings(groupJid);
-  settings.welcomeEnabled = args[0].toLowerCase() === 'on';
+  const shouldEnable = args[0].toLowerCase() === 'on';
   
+  // Check if already in desired state
+  if (settings.welcomeEnabled === shouldEnable) {
+    const status = shouldEnable ? 'already enabled' : 'already disabled';
+    return m.reply(`ℹ️ Welcome messages are ${status}`);
+  }
+  
+  settings.welcomeEnabled = shouldEnable;
   await saveGroupSettings(groupJid, settings);
   
-  await m.reply(`✅ Welcome messages ${settings.welcomeEnabled ? 'enabled' : 'disabled'}`);
-  logger.info(`Welcome toggled ${settings.welcomeEnabled ? 'on' : 'off'} in ${groupJid}`);
+  await m.reply(`✅ Welcome messages ${shouldEnable ? 'enabled' : 'disabled'}`);
+  logger.info(`Welcome toggled ${shouldEnable ? 'on' : 'off'} in ${groupJid}`);
 }
 
 async function handleToggleGoodbye(m, sock, args, logger) {
@@ -286,12 +309,19 @@ async function handleToggleGoodbye(m, sock, args, logger) {
   }
   
   const settings = await getGroupSettings(groupJid);
-  settings.goodbyeEnabled = args[0].toLowerCase() === 'on';
+  const shouldEnable = args[0].toLowerCase() === 'on';
   
+  // Check if already in desired state
+  if (settings.goodbyeEnabled === shouldEnable) {
+    const status = shouldEnable ? 'already enabled' : 'already disabled';
+    return m.reply(`ℹ️ Goodbye messages are ${status}`);
+  }
+  
+  settings.goodbyeEnabled = shouldEnable;
   await saveGroupSettings(groupJid, settings);
   
-  await m.reply(`✅ Goodbye messages ${settings.goodbyeEnabled ? 'enabled' : 'disabled'}`);
-  logger.info(`Goodbye toggled ${settings.goodbyeEnabled ? 'on' : 'off'} in ${groupJid}`);
+  await m.reply(`✅ Goodbye messages ${shouldEnable ? 'enabled' : 'disabled'}`);
+  logger.info(`Goodbye toggled ${shouldEnable ? 'on' : 'off'} in ${groupJid}`);
 }
 
 async function handleSetWelcomeMessage(m, sock, args, logger) {
