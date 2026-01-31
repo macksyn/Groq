@@ -182,8 +182,18 @@ export class WhatsAppBot extends EventEmitter {
     });
 
       this.socketManager.on('groupUpdate', async (data) => {
-        await GroupHandler(data.socket, data.event, this.config, logger);
-    });
+        // Pass group metadata updates (groups.update)
+        await GroupHandler(data.socket, data.groupUpdate, this.config);
+      });
+
+      // Listen for participant add/remove events (group-participants.update)
+      this.socketManager.on('groupParticipants', async (data) => {
+        try {
+          await GroupHandler(data.socket, data.event, this.config);
+        } catch (err) {
+          logger.error(err, '❌ Participant event handler error');
+        }
+      });
 
     this.socketManager.on('statusChange', (status) => {
       this.handleStatusChange(status);

@@ -3,8 +3,11 @@ import moment from 'moment-timezone';
 
 export default async function GroupHandler(sock, groupUpdate, config) {
   try {
-    for (const update of groupUpdate) {
-      const { id, participants, action } = update;
+    // Normalize input: accept a single update object or an array of updates
+    const updates = Array.isArray(groupUpdate) ? groupUpdate : [groupUpdate];
+
+    for (const update of updates) {
+      const { id, participants, action } = update || {};
       
       if (!config.WELCOME || !participants) continue;
       
