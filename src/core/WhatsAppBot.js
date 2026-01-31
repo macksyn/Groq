@@ -181,8 +181,8 @@ export class WhatsAppBot extends EventEmitter {
       await CallHandler(data.callUpdate, data.socket, this.config, logger);
     });
 
-    this.socketManager.on('groupUpdate', async (data) => {
-      await GroupHandler(data.socket, data.groupUpdate, this.config, logger);
+      this.socketManager.on('groupUpdate', async (data) => {
+        await GroupHandler(data.socket, data.event, this.config, logger);
     });
 
     this.socketManager.on('statusChange', (status) => {
