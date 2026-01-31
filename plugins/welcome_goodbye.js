@@ -584,7 +584,58 @@ export default {
         m.chat = m.key.remoteJid;
       }
 
-      // [... rest of run() remains the same ...]
+       // Route commands
+      switch (command.toLowerCase()) {
+        case 'welcome':
+        case 'wel':
+          if (args.length === 0) {
+            await showMenu(m, sock, config.PREFIX);
+          } else {
+            await handleToggleWelcome(m, sock, args, logger);
+          }
+          break;
+
+        case 'goodbye':
+        case 'bye':
+          await handleToggleGoodbye(m, sock, args, logger);
+          break;
+
+        case 'welcomemsg':
+          await handleSetWelcomeMessage(m, sock, args, logger);
+          break;
+
+        case 'goodbyemsg':
+          await handleSetGoodbyeMessage(m, sock, args, logger);
+          break;
+
+        case 'dmonleave':
+          await handleToggleDM(m, sock, args, logger);
+          break;
+
+        case 'dmmsg':
+          await handleSetDMMessage(m, sock, args, logger);
+          break;
+
+        case 'usedp':
+          await handleToggleDP(m, sock, args, logger);
+          break;
+
+        case 'welcometest':
+          await handleWelcomeTest(m, sock, logger);
+          break;
+
+        case 'goodbyetest':
+          await handleGoodbyeTest(m, sock, logger);
+          break;
+
+        case 'welcomestatus':
+          await handleStatus(m, sock, logger);
+          break;
+
+        default:
+          await showMenu(m, sock, config.PREFIX);
+      }
+
     } catch (error) {
       logger.error('Error in Welcome/Goodbye plugin:', error);
       m.reply('❌ An error occurred while processing your request.');
