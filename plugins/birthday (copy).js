@@ -1,12 +1,9 @@
-// plugins/birthday.js - V3 Plugin Format with Scheduled Tasks Integration + Photo Support
+// plugins/birthday.js - V3 Plugin Format with Scheduled Tasks Integration
 // FIXED: Removed globalSock and now uses the 'context' object passed by PluginManager.
 // FIXED: Group wishes now include birthday person in mentions array
 // ADDED: Test command for debugging
-// ADDED: MongoDB GridFS photo storage and management
 import { PluginHelpers } from '../lib/pluginIntegration.js';
 import moment from 'moment-timezone';
-import { GridFSBucket } from 'mongodb';
-import { Readable } from 'stream';
 
 // Collection names
 const COLLECTIONS = {
@@ -15,9 +12,6 @@ const COLLECTIONS = {
   BIRTHDAY_WISHES: 'birthday_wishes',
   BIRTHDAY_REMINDERS: 'birthday_reminders'
 };
-
-// GridFS bucket name
-const GRIDFS_BUCKET = 'birthday_photos';
 
 // Set Nigeria timezone
 moment.tz.setDefault('Africa/Lagos');
@@ -34,8 +28,7 @@ const defaultSettings = {
   reminderGroups: [],
   adminNumbers: [],
   maxRetries: 3,
-  retryDelay: 5000,
-  enablePhotoWishes: true // New: Enable photo wishes
+  retryDelay: 5000
 };
 
 // Global settings cache
@@ -44,9 +37,9 @@ let birthdaySettings = { ...defaultSettings };
 // ===== V3 PLUGIN EXPORT =====
 export default {
   name: 'Birthday System',
-  version: '3.1.0', // Incremented version for photo support
-  author: 'Alex Macksyn (with photo support)',
-  description: 'Advanced birthday system with automatic reminders, wishes, and AI-generated photo support using MongoDB GridFS',
+  version: '3.0.2', // Incremented version
+  author: 'Alex Macksyn (with fixes)',
+  description: 'Advanced birthday system with automatic reminders and wishes using scheduled tasks',
   category: 'social',
 
   // Commands this plugin handles
@@ -119,164 +112,6 @@ export default {
     }
   }
 };
-
-// ==================== GRIDFS PHOTO HELPERS ====================
-
-// Upload birthday photo to GridFS
-async function uploadBirthdayPhoto(userId, imageBuffer, uploadedBy) {
-  try {
-    return await PluginHelpers.safeDBOperation(async (db) => {
-      const bucket = new GridFSBucket(db, { bucketName: GRIDFS_BUCKET });
-
-      // Get existing birthday data
-      const birthdayData = await db.collection(COLLECTIONS.BIRTHDAYS)
-        .findOne({ userId });
-
-      if (!birthdayData) {
-        throw new Error('No birthday record found for user');
-      }
-
-      // Delete old photo if exists
-      if (birthdayData.birthdayPhoto?.gridfsId) {
-        try {
-          await bucket.delete(birthdayData.birthdayPhoto.gridfsId);
-          console.log(`🗑️ Deleted old photo for ${userId}`);
-        } catch (error) {
-          console.log('⚠️ No old photo to delete or deletion failed:', error.message);
-        }
-      }
-
-      // Upload new photo
-      const filename = `${userId.split('@')[0]}_${Date.now()}.jpg`;
-      const uploadStream = bucket.openUploadStream(filename, {
-        metadata: { 
-          userId, 
-          uploadedBy, 
-          uploadedAt: new Date(),
-          userName: birthdayData.name
-        }
-      });
-
-      const readStream = Readable.from(imageBuffer);
-
-      await new Promise((resolve, reject) => {
-        readStream.pipe(uploadStream)
-          .on('finish', resolve)
-          .on('error', reject);
-      });
-
-      // Update birthday record with photo info
-      await db.collection(COLLECTIONS.BIRTHDAYS).updateOne(
-        { userId },
-        {
-          $set: {
-            'birthdayPhoto.hasPhoto': true,
-            'birthdayPhoto.gridfsId': uploadStream.id,
-            'birthdayPhoto.filename': filename,
-            'birthdayPhoto.uploadedAt': new Date(),
-            'birthdayPhoto.uploadedBy': uploadedBy,
-            'birthdayPhoto.fileSize': imageBuffer.length
-          }
-        }
-      );
-
-      console.log(`✅ Photo uploaded for ${userId}: ${filename} (${(imageBuffer.length / 1024).toFixed(2)} KB)`);
-
-      return {
-        gridfsId: uploadStream.id,
-        filename,
-        fileSize: imageBuffer.length
-      };
-    });
-  } catch (error) {
-    console.error('❌ Error uploading birthday photo:', error);
-    throw error;
-  }
-}
-
-// Download birthday photo from GridFS
-async function downloadBirthdayPhoto(gridfsId) {
-  try {
-    return await PluginHelpers.safeDBOperation(async (db) => {
-      const bucket = new GridFSBucket(db, { bucketName: GRIDFS_BUCKET });
-
-      const chunks = [];
-      const downloadStream = bucket.openDownloadStream(gridfsId);
-
-      return new Promise((resolve, reject) => {
-        downloadStream
-          .on('data', (chunk) => chunks.push(chunk))
-          .on('end', () => {
-            const buffer = Buffer.concat(chunks);
-            console.log(`📥 Downloaded photo from GridFS: ${(buffer.length / 1024).toFixed(2)} KB`);
-            resolve(buffer);
-          })
-          .on('error', (error) => {
-            console.error('❌ Error downloading from GridFS:', error);
-            reject(error);
-          });
-      });
-    });
-  } catch (error) {
-    console.error('❌ Error in downloadBirthdayPhoto:', error);
-    throw error;
-  }
-}
-
-// Delete birthday photo from GridFS
-async function deleteBirthdayPhoto(userId) {
-  try {
-    return await PluginHelpers.safeDBOperation(async (db) => {
-      const bucket = new GridFSBucket(db, { bucketName: GRIDFS_BUCKET });
-
-      const birthdayData = await db.collection(COLLECTIONS.BIRTHDAYS)
-        .findOne({ userId });
-
-      if (!birthdayData?.birthdayPhoto?.gridfsId) {
-        return false;
-      }
-
-      // Delete from GridFS
-      await bucket.delete(birthdayData.birthdayPhoto.gridfsId);
-
-      // Update birthday record
-      await db.collection(COLLECTIONS.BIRTHDAYS).updateOne(
-        { userId },
-        {
-          $set: {
-            'birthdayPhoto.hasPhoto': false,
-            'birthdayPhoto.gridfsId': null,
-            'birthdayPhoto.filename': null,
-            'birthdayPhoto.uploadedAt': null,
-            'birthdayPhoto.uploadedBy': null,
-            'birthdayPhoto.fileSize': 0
-          }
-        }
-      );
-
-      console.log(`🗑️ Deleted birthday photo for ${userId}`);
-      return true;
-    });
-  } catch (error) {
-    console.error('❌ Error deleting birthday photo:', error);
-    throw error;
-  }
-}
-
-// Get list of all users with photos
-async function getUsersWithPhotos() {
-  try {
-    return await PluginHelpers.safeDBOperation(async (db) => {
-      const collection = db.collection(COLLECTIONS.BIRTHDAYS);
-      return await collection
-        .find({ 'birthdayPhoto.hasPhoto': true })
-        .toArray();
-    });
-  } catch (error) {
-    console.error('❌ Error getting users with photos:', error);
-    return [];
-  }
-}
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -392,8 +227,7 @@ async function getAllBirthdays() {
         formattedBirthdays[entry.userId] = {
           userId: entry.userId,
           name: entry.name,
-          birthday: entry.birthday,
-          birthdayPhoto: entry.birthdayPhoto || { hasPhoto: false }
+          birthday: entry.birthday
         };
       });
 
@@ -548,43 +382,15 @@ async function scheduledBirthdayWishes(context) {
         const wishMessage = getBirthdayWishMessage(birthdayPerson);
         let successfulSends = 0;
 
-        // Check if user has birthday photo
-        const hasPhoto = birthdayPerson.birthdayPhoto?.hasPhoto && 
-                        birthdayPerson.birthdayPhoto?.gridfsId &&
-                        birthdaySettings.enablePhotoWishes;
-
-        let photoBuffer = null;
-
-        if (hasPhoto) {
-          try {
-            logger.info(`📸 Downloading birthday photo for ${birthdayPerson.name}`);
-            photoBuffer = await downloadBirthdayPhoto(birthdayPerson.birthdayPhoto.gridfsId);
-            logger.info(`✅ Photo downloaded (${(photoBuffer.length / 1024).toFixed(2)} KB)`);
-          } catch (photoError) {
-            logger.error(`❌ Photo download failed for ${birthdayPerson.name}:`, photoError.message);
-            photoBuffer = null;
-          }
-        }
-
         // Send private wish
         if (birthdaySettings.enablePrivateReminders) {
           try {
             const privateMsg = `🎉 *HAPPY BIRTHDAY ${birthdayPerson.name}!* 🎉\n\nToday is your special day! 🎂\n\nWishing you all the happiness in the world! ✨🎈`;
 
-            let privateMessage;
-            if (photoBuffer) {
-              privateMessage = {
-                image: photoBuffer,
-                caption: privateMsg
-              };
-            } else {
-              privateMessage = { text: privateMsg };
-            }
-
-            const success = await safeSend(sock, birthdayPerson.userId, privateMessage);
+            const success = await safeSend(sock, birthdayPerson.userId, { text: privateMsg });
             if (success) {
               successfulSends++;
-              logger.info(`✅ Private wish sent to ${birthdayPerson.name} ${photoBuffer ? 'with photo' : ''}`);
+              logger.info(`✅ Private wish sent to ${birthdayPerson.name}`);
             }
 
             await new Promise(resolve => setTimeout(resolve, 3000));
@@ -600,27 +406,18 @@ async function scheduledBirthdayWishes(context) {
               if (!isConnectionHealthy(sock)) break;
 
               const allParticipants = await getGroupParticipants(sock, groupId, logger);
+
+              // FIXED: Include birthday person in mentions array
               const mentions = [...new Set([birthdayPerson.userId, ...allParticipants])];
 
-              let groupMessage;
-              if (photoBuffer) {
-                groupMessage = {
-                  image: photoBuffer,
-                  caption: wishMessage,
-                  mentions: mentions
-                };
-              } else {
-                groupMessage = {
-                  text: wishMessage,
-                  mentions: mentions
-                };
-              }
-
-              const success = await safeSend(sock, groupId, groupMessage);
+              const success = await safeSend(sock, groupId, {
+                text: wishMessage,
+                mentions: mentions
+              });
 
               if (success) {
                 successfulSends++;
-                logger.info(`✅ Group wish sent to ${groupId.split('@')[0]} for ${birthdayPerson.name} ${photoBuffer ? 'with photo' : ''}`);
+                logger.info(`✅ Group wish sent to ${groupId.split('@')[0]} for ${birthdayPerson.name}`);
               }
 
               await new Promise(resolve => setTimeout(resolve, 5000));
@@ -628,11 +425,6 @@ async function scheduledBirthdayWishes(context) {
               logger.error(`❌ Group wish failed for ${groupId.split('@')[0]}:`, error.message);
             }
           }
-        }
-
-        // Free memory
-        if (photoBuffer) {
-          photoBuffer = null;
         }
 
         if (successfulSends > 0) {
@@ -643,12 +435,11 @@ async function scheduledBirthdayWishes(context) {
               name: birthdayPerson.name,
               date: today,
               timestamp: new Date(),
-              successfulSends,
-              withPhoto: hasPhoto
+              successfulSends
             });
           });
 
-          logger.info(`✅ Birthday completed for ${birthdayPerson.name} (${successfulSends} sent${hasPhoto ? ' with photo' : ''})`);
+          logger.info(`✅ Birthday completed for ${birthdayPerson.name} (${successfulSends} sent)`);
         }
 
         await new Promise(resolve => setTimeout(resolve, 8000));
@@ -798,9 +589,6 @@ async function handleSubCommand(subCommand, args, context) {
     case 'groups':
       await handleGroups(context, args);
       break;
-    case 'photo':
-      await handleBirthdayPhoto(context, args);
-      break;
     case 'force':
       await handleForceWishes(context, args);
       break;
@@ -819,7 +607,7 @@ async function handleSubCommand(subCommand, args, context) {
 }
 
 async function showBirthdayMenu(m, prefix) {
-  const menuText = `🎂 *BIRTHDAY SYSTEM v3.1.0* 🎂\n\n` +
+  const menuText = `🎂 *BIRTHDAY SYSTEM v3.0.2* 🎂\n\n` +
                   `📅 *View Commands:*\n` +
                   `• *today* - Today's birthdays\n` +
                   `• *upcoming [days]* - Upcoming birthdays (default: 7 days)\n` +
@@ -829,13 +617,10 @@ async function showBirthdayMenu(m, prefix) {
                   `👑 *Admin Commands:*\n` +
                   `• *settings* - View/modify settings\n` +
                   `• *groups* - Manage reminder groups\n` +
-                  `• *photo* - Manage birthday photos 📸\n` +
                   `• *force* - Force birthday checks\n` +
                   `• *test [@user]* - Test birthday wish (in group)\n\n` +
                   `🤖 *Features:*\n` +
                   `• Scheduled wishes via cron tasks\n` +
-                  `• AI-generated photo support 📸\n` +
-                  `• MongoDB GridFS storage\n` +
                   `• Reliable reminder system\n` +
                   `• Connection health monitoring\n` +
                   `• Retry logic for failed messages\n\n` +
@@ -843,234 +628,6 @@ async function showBirthdayMenu(m, prefix) {
 
   await m.reply(menuText);
 }
-
-// ==================== PHOTO MANAGEMENT COMMANDS ====================
-
-async function handleBirthdayPhoto(context, args) {
-  const { msg: m, sock, config, logger } = context;
-
-  if (!isAuthorized(m.sender, config)) {
-    await m.reply('🚫 Only admins can manage birthday photos.');
-    return;
-  }
-
-  const action = args[0]?.toLowerCase();
-
-  switch (action) {
-    case 'upload':
-      await uploadPhotoCommand(m, sock, config, logger);
-      break;
-    case 'remove':
-      await removePhotoCommand(m, args[1], config);
-      break;
-    case 'view':
-      await viewPhotoCommand(m, sock, args[1], config);
-      break;
-    case 'list':
-      await listPhotosCommand(m, config);
-      break;
-    default:
-      await m.reply(`📸 *BIRTHDAY PHOTO MANAGEMENT*\n\n` +
-        `*Available Commands:*\n` +
-        `• *upload* - Upload photo (reply to image)\n` +
-        `• *remove @user* - Remove user's photo\n` +
-        `• *view @user* - Preview user's photo\n` +
-        `• *list* - List users with photos\n\n` +
-        `💡 *How to Upload:*\n` +
-        `1. Send/forward the birthday photo\n` +
-        `2. Reply to it with:\n` +
-        `   *${config.PREFIX}birthday photo upload @user*\n\n` +
-        `📊 Photos are stored in MongoDB GridFS\n` +
-        `🎂 Photos will be sent automatically on birthdays`);
-  }
-}
-
-async function uploadPhotoCommand(m, sock, config, logger) {
-  // Check if replying to an image
-  const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-  const imageMsg = quotedMsg?.imageMessage;
-
-  if (!imageMsg) {
-    await m.reply('⚠️ *Please reply to an image with this command.*\n\n' +
-      '*Steps:*\n' +
-      '1. Send the birthday photo\n' +
-      '2. Reply to it with this command mentioning the user\n\n' +
-      `*Example:* ${config.PREFIX}birthday photo upload @2348012345678`);
-    return;
-  }
-
-  // Get mentioned user
-  const mentionedJid = m.message?.extendedTextMessage?.contextInfo?.mentionedJid;
-  if (!mentionedJid || mentionedJid.length === 0) {
-    await m.reply('⚠️ *Please mention the user whose birthday photo this is.*\n\n' +
-      `*Example:* ${config.PREFIX}birthday photo upload @user`);
-    return;
-  }
-
-  const userId = mentionedJid[0];
-
-  // Check if user has birthday record
-  const birthdayData = await getBirthdayData(userId);
-  if (!birthdayData) {
-    await m.reply(`⚠️ *No birthday record found for @${userId.split('@')[0]}*\n\n` +
-      'User must have a birthday saved first before uploading a photo.');
-    return;
-  }
-
-  try {
-    await m.reply('📸 Uploading birthday photo...');
-
-    // Download image from WhatsApp
-    const buffer = await sock.downloadMediaMessage(quotedMsg);
-
-    if (!buffer || buffer.length === 0) {
-      await m.reply('❌ Failed to download image. Please try again.');
-      return;
-    }
-
-    const sizeMB = (buffer.length / (1024 * 1024)).toFixed(2);
-    const sizeKB = (buffer.length / 1024).toFixed(2);
-
-    // Check file size (max 5MB to be safe with 512MB RAM)
-    if (buffer.length > 5 * 1024 * 1024) {
-      await m.reply(`⚠️ *Image too large (${sizeMB} MB)*\n\n` +
-        'Please use an image under 5MB to ensure smooth operation on limited RAM.');
-      return;
-    }
-
-    // Upload to GridFS
-    logger.info(`📤 Uploading ${sizeKB} KB photo for ${birthdayData.name}`);
-    const result = await uploadBirthdayPhoto(userId, buffer, m.sender);
-
-    await m.reply(`✅ *Birthday photo uploaded successfully!*\n\n` +
-      `👤 *User:* @${userId.split('@')[0]}\n` +
-      `👤 *Name:* ${birthdayData.name}\n` +
-      `📊 *Size:* ${sizeKB} KB\n` +
-      `📁 *Filename:* ${result.filename}\n` +
-      `🎂 *Birthday:* ${birthdayData.birthday.displayDate}\n\n` +
-      `🎉 This photo will be sent automatically on their birthday!`,
-      { mentions: [userId] });
-
-  } catch (error) {
-    logger.error('Photo upload error:', error);
-    await m.reply(`❌ *Error uploading photo*\n\n${error.message}\n\nPlease try again or contact support.`);
-  }
-}
-
-async function removePhotoCommand(m, userArg, config) {
-  if (!userArg) {
-    await m.reply(`⚠️ *Please mention the user*\n\n*Example:* ${config.PREFIX}birthday photo remove @user`);
-    return;
-  }
-
-  const userId = userArg.includes('@s.whatsapp.net') ? userArg : `${userArg.replace('@', '')}@s.whatsapp.net`;
-
-  try {
-    const birthdayData = await getBirthdayData(userId);
-
-    if (!birthdayData?.birthdayPhoto?.hasPhoto) {
-      await m.reply(`⚠️ *No photo found for @${userId.split('@')[0]}*`,
-        { mentions: [userId] });
-      return;
-    }
-
-    const deleted = await deleteBirthdayPhoto(userId);
-
-    if (deleted) {
-      await m.reply(`✅ *Birthday photo removed successfully!*\n\n` +
-        `👤 User: @${userId.split('@')[0]}\n` +
-        `📁 Previous file: ${birthdayData.birthdayPhoto.filename}\n\n` +
-        `🎂 Birthday wishes will now be sent without a photo.`,
-        { mentions: [userId] });
-    } else {
-      await m.reply('❌ Failed to remove photo. Please try again.');
-    }
-
-  } catch (error) {
-    await m.reply(`❌ *Error removing photo*\n\n${error.message}`);
-    console.error('Photo removal error:', error);
-  }
-}
-
-async function viewPhotoCommand(m, sock, userArg, config) {
-  if (!userArg) {
-    await m.reply(`⚠️ *Please mention the user*\n\n*Example:* ${config.PREFIX}birthday photo view @user`);
-    return;
-  }
-
-  const userId = userArg.includes('@s.whatsapp.net') ? userArg : `${userArg.replace('@', '')}@s.whatsapp.net`;
-
-  try {
-    const birthdayData = await getBirthdayData(userId);
-
-    if (!birthdayData?.birthdayPhoto?.hasPhoto) {
-      await m.reply(`⚠️ *No photo found for @${userId.split('@')[0]}*`,
-        { mentions: [userId] });
-      return;
-    }
-
-    await m.reply('📥 Downloading photo from database...');
-
-    const imageBuffer = await downloadBirthdayPhoto(birthdayData.birthdayPhoto.gridfsId);
-
-    await sock.sendMessage(m.from, {
-      image: imageBuffer,
-      caption: `📸 *Birthday Photo Preview*\n\n` +
-        `👤 *User:* @${userId.split('@')[0]}\n` +
-        `👤 *Name:* ${birthdayData.name}\n` +
-        `🎂 *Birthday:* ${birthdayData.birthday.displayDate}\n` +
-        `📊 *Size:* ${(birthdayData.birthdayPhoto.fileSize / 1024).toFixed(2)} KB\n` +
-        `📁 *Filename:* ${birthdayData.birthdayPhoto.filename}\n` +
-        `📤 *Uploaded:* ${new Date(birthdayData.birthdayPhoto.uploadedAt).toLocaleString()}\n\n` +
-        `🎉 This photo will be used for automatic birthday wishes!`,
-      mentions: [userId]
-    });
-
-  } catch (error) {
-    await m.reply(`❌ *Error retrieving photo*\n\n${error.message}`);
-    console.error('Photo view error:', error);
-  }
-}
-
-async function listPhotosCommand(m, config) {
-  try {
-    const usersWithPhotos = await getUsersWithPhotos();
-
-    if (usersWithPhotos.length === 0) {
-      await m.reply('📸 *No birthday photos uploaded yet.*\n\n' +
-        `Upload photos using:\n${config.PREFIX}birthday photo upload @user`);
-      return;
-    }
-
-    let message = `📸 *BIRTHDAY PHOTOS* 📸\n\n`;
-    message += `📊 *Total:* ${usersWithPhotos.length} user(s) with photos\n\n`;
-
-    const mentions = [];
-
-    usersWithPhotos.forEach((person, index) => {
-      mentions.push(person.userId);
-      const sizeKB = (person.birthdayPhoto.fileSize / 1024).toFixed(2);
-      const uploadDate = new Date(person.birthdayPhoto.uploadedAt).toLocaleDateString();
-
-      message += `${index + 1}. @${person.userId.split('@')[0]}\n`;
-      message += `   👤 ${person.name}\n`;
-      message += `   🎂 ${person.birthday.displayDate}\n`;
-      message += `   📊 ${sizeKB} KB\n`;
-      message += `   📅 Uploaded: ${uploadDate}\n\n`;
-    });
-
-    message += `💡 *View photo:* ${config.PREFIX}birthday photo view @user\n`;
-    message += `🗑️ *Remove photo:* ${config.PREFIX}birthday photo remove @user`;
-
-    await m.reply(message, { mentions });
-
-  } catch (error) {
-    await m.reply('❌ Error listing photos. Please try again.');
-    console.error('Photo list error:', error);
-  }
-}
-
-// ==================== TEST AND FORCE COMMANDS ====================
 
 async function handleTestWish(context, args) {
   const { msg: m, sock, config, logger } = context;
@@ -1117,59 +674,26 @@ async function handleTestWish(context, args) {
       birthday: {
         age: 25,
         displayDate: moment.tz('Africa/Lagos').format('MMMM DD')
-      },
-      birthdayPhoto: { hasPhoto: false }
+      }
     };
-
-    // Check if target has a photo
-    const birthdayData = await getBirthdayData(targetUserId);
-    if (birthdayData?.birthdayPhoto?.hasPhoto) {
-      testBirthdayPerson.birthdayPhoto = birthdayData.birthdayPhoto;
-    }
 
     const wishMessage = getBirthdayWishMessage(testBirthdayPerson);
     const groupId = m.from;
 
     const allParticipants = await getGroupParticipants(sock, groupId, logger);
+
+    // FIXED: Include birthday person in mentions
     const mentions = [...new Set([testBirthdayPerson.userId, ...allParticipants])];
 
-    let messageToSend;
-
-    // Try to download photo if exists
-    if (testBirthdayPerson.birthdayPhoto?.hasPhoto && birthdaySettings.enablePhotoWishes) {
-      try {
-        await m.reply('📸 Downloading test photo...');
-        const photoBuffer = await downloadBirthdayPhoto(testBirthdayPerson.birthdayPhoto.gridfsId);
-
-        messageToSend = {
-          image: photoBuffer,
-          caption: `🧪 **TEST MODE** 🧪\n\n${wishMessage}\n\n_This is a test birthday wish with photo. No actual birthday today._`,
-          mentions: mentions
-        };
-      } catch (photoError) {
-        logger.error('Test photo download failed:', photoError);
-        messageToSend = {
-          text: `🧪 **TEST MODE** 🧪\n\n${wishMessage}\n\n_This is a test birthday wish. Photo download failed. No actual birthday today._`,
-          mentions: mentions
-        };
-      }
-    } else {
-      messageToSend = {
-        text: `🧪 **TEST MODE** 🧪\n\n${wishMessage}\n\n_This is a test birthday wish. No actual birthday today._`,
-        mentions: mentions
-      };
-    }
-
-    const success = await safeSend(sock, groupId, messageToSend);
+    const success = await safeSend(sock, groupId, {
+      text: `🧪 **TEST MODE** 🧪\n\n${wishMessage}\n\n_This is a test birthday wish. No actual birthday today._`,
+      mentions: mentions
+    });
 
     if (success) {
       logger.info(`✅ Test wish sent successfully for ${targetName}`);
       await sock.sendMessage(m.sender, {
-        text: `✅ *Test birthday wish sent successfully!*\n\n` +
-          `👤 *Target:* ${targetName}\n` +
-          `📊 *Mentions:* ${mentions.length} users\n` +
-          `🎯 *Group:* ${groupId.split('@')[0]}\n` +
-          `📸 *Photo:* ${testBirthdayPerson.birthdayPhoto?.hasPhoto ? 'Yes ✅' : 'No ❌'}`
+        text: `✅ Test birthday wish sent successfully!\n\n👤 Target: ${targetName}\n📊 Mentions: ${mentions.length} users\n🎯 Group: ${groupId.split('@')[0]}`
       });
     } else {
       await sock.sendMessage(m.sender, {
@@ -1194,11 +718,7 @@ async function handleForceWishes(context, args) {
   }
 
   if (args.length === 0) {
-    await m.reply(`🔧 *FORCE COMMANDS*\n\n` +
-      `• *wishes* - Force today's birthday wishes\n` +
-      `• *reminders [days]* - Force reminders for specific days\n` +
-      `• *cleanup* - Force cleanup\n\n` +
-      `Usage: *${config.PREFIX}birthday force [command]*`);
+    await m.reply(`🔧 *FORCE COMMANDS*\n\n• *wishes* - Force today's birthday wishes\n• *reminders [days]* - Force reminders for specific days\n• *cleanup* - Force cleanup\n\nUsage: *${config.PREFIX}birthday force [command]*`);
     return;
   }
 
@@ -1238,33 +758,23 @@ async function handleStatus(context) {
     const upcoming7 = await getUpcomingBirthdays(7);
     const upcoming3 = await getUpcomingBirthdays(3);
     const upcoming1 = await getUpcomingBirthdays(1);
-    const usersWithPhotos = await getUsersWithPhotos();
 
     const now = moment.tz('Africa/Lagos');
     const connectionStatus = sock && isConnectionHealthy(sock) ? '✅ Healthy' : '❌ Unhealthy';
 
     let statusText = `📊 *BIRTHDAY SYSTEM STATUS* 📊\n\n`;
     statusText += `🔌 *Connection:* ${connectionStatus}\n`;
-    statusText += `⏰ *Current Time:* ${now.format('YYYY-MM-DD HH:mm:ss')}\n`;
-    statusText += `📅 *Server Time:* ${now.tz()}\n\n`;
-
-    statusText += `🎂 *Birthday Counts:*\n`;
+    statusText += `⏰ *Current Time:* ${now.format('YYYY-MM-DD HH:mm:ss')}\n\n`;
+    statusText += `📅 *Birthday Counts:*\n`;
     statusText += `• Today: ${todaysBirthdays.length}\n`;
     statusText += `• Tomorrow: ${upcoming1.length}\n`;
     statusText += `• Next 3 days: ${upcoming3.length}\n`;
     statusText += `• Next 7 days: ${upcoming7.length}\n\n`;
-
-    statusText += `📸 *Photo System:*\n`;
-    statusText += `• Users with photos: ${usersWithPhotos.length}\n`;
-    statusText += `• Photo wishes: ${birthdaySettings.enablePhotoWishes ? '✅ Enabled' : '❌ Disabled'}\n`;
-    statusText += `• Storage: MongoDB GridFS\n\n`;
-
     statusText += `⚙️ *Settings:*\n`;
     statusText += `• Auto Wishes: ${birthdaySettings.enableAutoWishes ? '✅' : '❌'}\n`;
     statusText += `• Reminders: ${birthdaySettings.enableReminders ? '✅' : '❌'}\n`;
     statusText += `• Groups: ${birthdaySettings.reminderGroups.length}\n`;
     statusText += `• Reminder Days: ${birthdaySettings.reminderDays.join(', ')}\n\n`;
-
     statusText += `🤖 *Scheduled Tasks:*\n`;
     statusText += `• Birthday wishes: Daily at 00:01\n`;
     statusText += `• Reminders: Daily at 09:00\n`;
@@ -1276,8 +786,6 @@ async function handleStatus(context) {
     console.error('Status error:', error);
   }
 }
-
-// ==================== VIEW COMMANDS ====================
 
 async function handleToday(context) {
   const { sock, msg: m, config } = context;
@@ -1296,14 +804,7 @@ async function handleToday(context) {
 
   todaysBirthdays.forEach(person => {
     mentions.push(person.userId);
-    message += `🎂 @${person.userId.split('@')[0]}`;
-
-    if (person.birthdayPhoto?.hasPhoto) {
-      message += ` 📸`;
-    }
-
-    message += `\n`;
-
+    message += `🎂 @${person.userId.split('@')[0]}\n`;
     if (person.birthday.age !== undefined) {
       message += `   🎈 Turning ${person.birthday.age} today!\n`;
     }
@@ -1368,18 +869,12 @@ async function handleUpcoming(context, args) {
     mentions.push(upcoming.userId);
 
     if (upcoming.daysUntil === 0) {
-      message += `🎊 @${upcoming.userId.split('@')[0]} - TODAY! 🎊`;
+      message += `🎊 @${upcoming.userId.split('@')[0]} - TODAY! 🎊\n`;
     } else if (upcoming.daysUntil === 1) {
-      message += `🎂 @${upcoming.userId.split('@')[0]} - Tomorrow`;
+      message += `🎂 @${upcoming.userId.split('@')[0]} - Tomorrow\n`;
     } else {
-      message += `📌 @${upcoming.userId.split('@')[0]} - ${upcoming.daysUntil} days (${upcoming.birthday.monthName} ${upcoming.birthday.day})`;
+      message += `📌 @${upcoming.userId.split('@')[0]} - ${upcoming.daysUntil} days (${upcoming.birthday.monthName} ${upcoming.birthday.day})\n`;
     }
-
-    if (upcoming.birthdayPhoto?.hasPhoto) {
-      message += ` 📸`;
-    }
-
-    message += `\n`;
 
     if (upcoming.birthday.age !== undefined) {
       const upcomingAge = upcoming.birthday.age + (upcoming.daysUntil === 0 ? 0 : 1);
@@ -1426,10 +921,6 @@ async function handleThisMonth(context) {
     mentions.push(person.userId);
     message += `🎂 @${person.userId.split('@')[0]} - ${person.birthday.monthName} ${person.birthday.day}`;
 
-    if (person.birthdayPhoto?.hasPhoto) {
-      message += ` 📸`;
-    }
-
     if (person.birthday.age !== undefined) {
       message += ` (${person.birthday.age} years old)`;
     }
@@ -1475,8 +966,6 @@ async function handleAll(context) {
     return;
   }
 
-  const withPhotos = birthdayEntries.filter(b => b.birthdayPhoto?.hasPhoto).length;
-
   birthdayEntries.sort((a, b) => {
     if (a.birthday.month !== b.birthday.month) {
       return a.birthday.month - b.birthday.month;
@@ -1484,10 +973,7 @@ async function handleAll(context) {
     return a.birthday.day - b.birthday.day;
   });
 
-  let message = `🎂 *ALL BIRTHDAYS* 🎂\n\n`;
-  message += `📊 Total: ${birthdayEntries.length} members\n`;
-  message += `📸 With photos: ${withPhotos}\n\n`;
-
+  let message = `🎂 *ALL BIRTHDAYS* 🎂\n\n📊 Total: ${birthdayEntries.length} members\n\n`;
   const mentions = [];
 
   let currentMonth = null;
@@ -1501,10 +987,6 @@ async function handleAll(context) {
     }
 
     message += `🎂 @${person.userId.split('@')[0]} - ${person.birthday.day}`;
-
-    if (person.birthdayPhoto?.hasPhoto) {
-      message += ` 📸`;
-    }
 
     if (person.birthday.age !== undefined) {
       message += ` (${person.birthday.age} years old)`;
@@ -1523,6 +1005,7 @@ async function handleMyBirthday(context) {
   const { msg: m, config } = context;
 
   try {
+    // FIX: Use the same userId format as attendance plugin
     const userId = m.key?.participant || m.key?.remoteJid || m.sender;
     const birthdayData = await getBirthdayData(userId);
 
@@ -1544,13 +1027,6 @@ async function handleMyBirthday(context) {
 
     if (birthday.age !== undefined) {
       message += `🎈 Current Age: ${birthday.age} years old\n`;
-    }
-
-    if (birthdayData.birthdayPhoto?.hasPhoto) {
-      message += `📸 Photo: Yes ✅\n`;
-      message += `📁 File: ${birthdayData.birthdayPhoto.filename}\n`;
-    } else {
-      message += `📸 Photo: Not uploaded ❌\n`;
     }
 
     message += `💾 Last Updated: ${new Date(birthdayData.lastUpdated).toLocaleString()}\n`;
@@ -1583,8 +1059,6 @@ async function handleMyBirthday(context) {
   }
 }
 
-// ==================== SETTINGS MANAGEMENT ====================
-
 async function handleSettings(context, args) {
   const { msg: m, config } = context;
 
@@ -1607,9 +1081,6 @@ async function handleSettings(context, args) {
       break;
     case 'wishes':
       await toggleWishes(m, value, config);
-      break;
-    case 'photowishes':
-      await togglePhotoWishes(m, value, config);
       break;
     case 'remindertime':
       await setReminderTime(m, value, config);
@@ -1647,7 +1118,6 @@ async function showSettings(m, config) {
 
   message += `🔔 *Reminders:* ${settings.enableReminders ? '✅ ON' : '❌ OFF'}\n`;
   message += `🎉 *Auto Wishes:* ${settings.enableAutoWishes ? '✅ ON' : '❌ OFF'}\n`;
-  message += `📸 *Photo Wishes:* ${settings.enablePhotoWishes ? '✅ ON' : '❌ OFF'}\n`;
   message += `👥 *Group Reminders:* ${settings.enableGroupReminders ? '✅ ON' : '❌ OFF'}\n`;
   message += `💬 *Private Reminders:* ${settings.enablePrivateReminders ? '✅ ON' : '❌ OFF'}\n\n`;
 
@@ -1661,7 +1131,6 @@ async function showSettings(m, config) {
   message += `🔧 *Change Settings:*\n`;
   message += `• *reminders on/off* - Toggle reminders\n`;
   message += `• *wishes on/off* - Toggle auto wishes\n`;
-  message += `• *photowishes on/off* - Toggle photo wishes\n`;
   message += `• *remindertime HH:MM* - Set reminder time\n`;
   message += `• *wishtime HH:MM* - Set wish time\n`;
   message += `• *reminderdays 7,3,1* - Set reminder days\n`;
@@ -1697,21 +1166,6 @@ async function toggleWishes(m, value, config) {
   await saveSettings();
 
   await m.reply(`✅ Auto birthday wishes ${enable ? 'enabled' : 'disabled'} successfully!`);
-}
-
-async function togglePhotoWishes(m, value, config) {
-  if (!value) {
-    await m.reply(`⚠️ Please specify: *on* or *off*\n\nExample: *${config.PREFIX}birthday settings photowishes on*`);
-    return;
-  }
-
-  const enable = value.toLowerCase() === 'on';
-  birthdaySettings.enablePhotoWishes = enable;
-  await saveSettings();
-
-  await m.reply(`✅ Photo birthday wishes ${enable ? 'enabled' : 'disabled'} successfully!\n\n` +
-    (enable ? '📸 Photos will be included in birthday wishes when available.' : 
-     '📝 Only text wishes will be sent, even if photos are uploaded.'));
 }
 
 async function setReminderTime(m, value, config) {
@@ -1857,8 +1311,6 @@ async function reloadSettings(m, config) {
   }
 }
 
-// ==================== GROUPS MANAGEMENT ====================
-
 async function handleGroups(context, args) {
   const { msg: m, config } = context;
 
@@ -1937,7 +1389,7 @@ async function addGroup(m, config) {
   await saveSettings();
 
   const shortId = groupId.split('@')[0];
-  await m.reply(`✅ Group *${shortId}* added for birthday reminders!\n\n🎂 This group will now receive birthday wishes (with photos when available) and reminders.`);
+  await m.reply(`✅ Group *${shortId}* added for birthday reminders!\n\n🎂 This group will now receive birthday wishes and reminders.`);
 }
 
 async function removeGroup(m, groupIdArg, config) {
@@ -1977,16 +1429,10 @@ async function clearGroups(m, config) {
   await m.reply(`✅ Cleared all ${groupCount} group(s) from birthday reminders!`);
 }
 
-// ==================== EXPORTS ====================
-
 export {
   getAllBirthdays,
   getBirthdayData,
   getTodaysBirthdays,
   getUpcomingBirthdays,
-  birthdaySettings,
-  uploadBirthdayPhoto,
-  downloadBirthdayPhoto,
-  deleteBirthdayPhoto,
-  getUsersWithPhotos
+  birthdaySettings
 };
