@@ -7,6 +7,7 @@ import { PluginHelpers } from '../lib/pluginIntegration.js';
 import moment from 'moment-timezone';
 import { GridFSBucket } from 'mongodb';
 import { Readable } from 'stream';
+import { downloadMediaMessage } from "@whiskeysockets/baileys";
 
 // Collection names
 const COLLECTIONS = {
@@ -921,7 +922,15 @@ async function uploadPhotoCommand(m, sock, config, logger) {
     await m.reply('📸 Uploading birthday photo...');
 
     // Download image from WhatsApp
-    const buffer = await sock.downloadMediaMessage(quotedMsg);
+    const buffer = await downloadMediaMessage(
+      quotedMsg,
+      "buffer",
+      {},
+      {
+        logger,
+        reuploadRequest: sock.updateMediaMessage
+      }
+    );
 
     if (!buffer || buffer.length === 0) {
       await m.reply('❌ Failed to download image. Please try again.');
