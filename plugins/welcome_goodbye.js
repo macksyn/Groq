@@ -2,6 +2,7 @@
 // Welcome and Goodbye plugin with customizable messages and DP support
 
 import { PluginHelpers } from '../lib/pluginIntegration.js';
+import { validateAndNormalizeJid } from '../lib/serializer.js';
 
 // ===== COLLECTIONS =====
 const COLLECTIONS = {
@@ -79,17 +80,30 @@ async function getProfilePicture(sock, jid) {
   }
 }
 
+// Use serializer's validation to normalize participant JIDs
+function normalizeParticipant(participant) {
+  if (!participant) return null;
+  const candidate = typeof participant === 'string' ? participant : (participant.id ?? null);
+  if (!candidate) return null;
+  const validated = validateAndNormalizeJid(candidate);
+  return validated || candidate;
+}
+
 // ===== AUTHORIZATION CHECK =====
 async function isAuthorized(sock, groupJid, userJid) {
   try {
     const ownerNumber = process.env.OWNER_NUMBER || '';
-    const bareNumber = userJid.split('@')[0];
-    
+
+    // Normalize the user JID for consistent comparison
+    const normalizedUser = validateAndNormalizeJid(typeof userJid === 'string' ? userJid : (userJid?.id ?? '')) || (typeof userJid === 'string' ? userJid : null);
+    if (!normalizedUser) return false;
+
+    const bareNumber = normalizedUser.split('@')[0];
     if (bareNumber === ownerNumber) return true;
-    
+
     const groupMetadata = await sock.groupMetadata(groupJid);
-    const participant = groupMetadata.participants.find(p => p.id === userJid);
-    
+    const participant = groupMetadata.participants.find(p => p.id === normalizedUser || p.id === userJid);
+
     return participant && (participant.admin === 'admin' || participant.admin === 'superadmin');
   } catch (error) {
     console.error('Error checking authorization:', error);
@@ -103,35 +117,35 @@ async function handleWelcome(sock, groupJid, participants, logger) {
     // Ensure participants is an array
     const participantArray = Array.isArray(participants) ? participants : [];
     logger.info(`🎯 Welcome handler triggered for ${participantArray.length} participants in ${groupJid}`);
-    
+
     const settings = await getGroupSettings(groupJid);
-    
+
     if (!settings.welcomeEnabled) {
       logger.info(`⏭️ Welcome disabled for ${groupJid}`);
       return;
     }
-    
+
     const groupMetadata = await sock.groupMetadata(groupJid);
     const groupName = groupMetadata.subject;
-    
+
     for (const participant of participantArray) {
-      // Handle both string JID and object with id property
-      const jid = typeof participant === 'string' ? participant : (participant?.id || participant);
-      if (!jid || typeof jid !== 'string') {
+      // Normalize participant JID to a string
+      const jid = normalizeParticipant(participant);
+      if (!jid) {
         logger.warn(`⚠️ Invalid participant data:`, participant);
         continue;
       }
-      const phone = jid.split('@')[0];
-      
+      const phone = typeof jid === 'string' ? jid.split('@')[0] : jid;
+
       // FIXED: Simplified message formatting
       const message = formatMessage(settings.welcomeMessage, {
         user: phone,
         groupName: groupName
       });
-      
+
       if (settings.useProfilePic) {
         const ppUrl = await getProfilePicture(sock, jid);
-        
+
         if (ppUrl) {
           await sock.sendMessage(groupJid, {
             image: { url: ppUrl },
@@ -150,7 +164,7 @@ async function handleWelcome(sock, groupJid, participants, logger) {
           mentions: [jid]
         });
       }
-      
+
       logger.info(`✅ Welcome message sent to ${phone} in ${groupName}`);
     }
   } catch (error) {
@@ -163,36 +177,36 @@ async function handleGoodbye(sock, groupJid, participants, logger) {
     // Ensure participants is an array
     const participantArray = Array.isArray(participants) ? participants : [];
     logger.info(`🎯 Goodbye handler triggered for ${participantArray.length} participants in ${groupJid}`);
-    
+
     const settings = await getGroupSettings(groupJid);
-    
+
     if (!settings.goodbyeEnabled) {
       logger.info(`⏭️ Goodbye disabled for ${groupJid}`);
       return;
     }
-    
+
     const groupMetadata = await sock.groupMetadata(groupJid);
     const groupName = groupMetadata.subject;
-    
+
     for (const participant of participantArray) {
-      // Handle both string JID and object with id property
-      const jid = typeof participant === 'string' ? participant : (participant?.id || participant);
-      if (!jid || typeof jid !== 'string') {
+      // Normalize participant JID to a string
+      const jid = normalizeParticipant(participant);
+      if (!jid) {
         logger.warn(`⚠️ Invalid participant data:`, participant);
         continue;
       }
-      const phone = jid.split('@')[0];
-      
+      const phone = typeof jid === 'string' ? jid.split('@')[0] : jid;
+
       // FIXED: Simplified message formatting
       const message = formatMessage(settings.goodbyeMessage, {
         user: phone,
         groupName: groupName
       });
-      
+
       // Send goodbye message in group
       if (settings.useProfilePic) {
         const ppUrl = await getProfilePicture(sock, jid);
-        
+
         if (ppUrl) {
           await sock.sendMessage(groupJid, {
             image: { url: ppUrl },
@@ -211,7 +225,7 @@ async function handleGoodbye(sock, groupJid, participants, logger) {
           mentions: [jid]
         });
       }
-      
+
       // Send DM if enabled
       if (settings.dmOnLeave) {
         try {
@@ -256,38 +270,38 @@ async function showMenu(m, sock, prefix) {
     `• {groupName} - Group name\n\n` +
     `📝 *Example:*\n` +
     `${prefix}welcomemsg Welcome @{user} to {groupName}! 🎉`;
-  
+
   await sock.sendMessage(m.chat, { text: menuText }, { quoted: m });
 }
 
 async function handleToggleWelcome(m, sock, args, logger) {
   const groupJid = m.key.remoteJid;
   const senderId = m.key.participant || m.key.remoteJid;
-  
+
   if (!groupJid.endsWith('@g.us')) {
     return m.reply('❌ This command only works in groups.');
   }
-  
+
   if (!(await isAuthorized(sock, groupJid, senderId))) {
     return m.reply('🔒 Only group admins can use this command.');
   }
-  
+
   if (!args[0] || !['on', 'off'].includes(args[0].toLowerCase())) {
     return m.reply('⚠️ Usage: Use *on* or *off*');
   }
-  
+
   const settings = await getGroupSettings(groupJid);
   const shouldEnable = args[0].toLowerCase() === 'on';
-  
+
   // Check if already in desired state
   if (settings.welcomeEnabled === shouldEnable) {
     const status = shouldEnable ? 'already enabled' : 'already disabled';
     return m.reply(`ℹ️ Welcome messages are ${status}`);
   }
-  
+
   settings.welcomeEnabled = shouldEnable;
   await saveGroupSettings(groupJid, settings);
-  
+
   await m.reply(`✅ Welcome messages ${shouldEnable ? 'enabled' : 'disabled'}`);
   logger.info(`Welcome toggled ${shouldEnable ? 'on' : 'off'} in ${groupJid}`);
 }
@@ -295,31 +309,31 @@ async function handleToggleWelcome(m, sock, args, logger) {
 async function handleToggleGoodbye(m, sock, args, logger) {
   const groupJid = m.key.remoteJid;
   const senderId = m.key.participant || m.key.remoteJid;
-  
+
   if (!groupJid.endsWith('@g.us')) {
     return m.reply('❌ This command only works in groups.');
   }
-  
+
   if (!(await isAuthorized(sock, groupJid, senderId))) {
     return m.reply('🔒 Only group admins can use this command.');
   }
-  
+
   if (!args[0] || !['on', 'off'].includes(args[0].toLowerCase())) {
     return m.reply('⚠️ Usage: Use *on* or *off*');
   }
-  
+
   const settings = await getGroupSettings(groupJid);
   const shouldEnable = args[0].toLowerCase() === 'on';
-  
+
   // Check if already in desired state
   if (settings.goodbyeEnabled === shouldEnable) {
     const status = shouldEnable ? 'already enabled' : 'already disabled';
     return m.reply(`ℹ️ Goodbye messages are ${status}`);
   }
-  
+
   settings.goodbyeEnabled = shouldEnable;
   await saveGroupSettings(groupJid, settings);
-  
+
   await m.reply(`✅ Goodbye messages ${shouldEnable ? 'enabled' : 'disabled'}`);
   logger.info(`Goodbye toggled ${shouldEnable ? 'on' : 'off'} in ${groupJid}`);
 }
@@ -327,25 +341,25 @@ async function handleToggleGoodbye(m, sock, args, logger) {
 async function handleSetWelcomeMessage(m, sock, args, logger) {
   const groupJid = m.key.remoteJid;
   const senderId = m.key.participant || m.key.remoteJid;
-  
+
   if (!groupJid.endsWith('@g.us')) {
     return m.reply('❌ This command only works in groups.');
   }
-  
+
   if (!(await isAuthorized(sock, groupJid, senderId))) {
     return m.reply('🔒 Only group admins can use this command.');
   }
-  
+
   const message = args.join(' ');
   if (!message) {
     return m.reply('⚠️ Please provide a welcome message.\n\nExample: Welcome @{user} to {groupName}!');
   }
-  
+
   const settings = await getGroupSettings(groupJid);
   settings.welcomeMessage = message;
-  
+
   await saveGroupSettings(groupJid, settings);
-  
+
   await m.reply(`✅ Welcome message updated!\n\nNew message:\n${message}`);
   logger.info(`Welcome message updated in ${groupJid}`);
 }
@@ -353,25 +367,25 @@ async function handleSetWelcomeMessage(m, sock, args, logger) {
 async function handleSetGoodbyeMessage(m, sock, args, logger) {
   const groupJid = m.key.remoteJid;
   const senderId = m.key.participant || m.key.remoteJid;
-  
+
   if (!groupJid.endsWith('@g.us')) {
     return m.reply('❌ This command only works in groups.');
   }
-  
+
   if (!(await isAuthorized(sock, groupJid, senderId))) {
     return m.reply('🔒 Only group admins can use this command.');
   }
-  
+
   const message = args.join(' ');
   if (!message) {
     return m.reply('⚠️ Please provide a goodbye message.\n\nExample: Goodbye @{user} from {groupName}!');
   }
-  
+
   const settings = await getGroupSettings(groupJid);
   settings.goodbyeMessage = message;
-  
+
   await saveGroupSettings(groupJid, settings);
-  
+
   await m.reply(`✅ Goodbye message updated!\n\nNew message:\n${message}`);
   logger.info(`Goodbye message updated in ${groupJid}`);
 }
@@ -379,24 +393,24 @@ async function handleSetGoodbyeMessage(m, sock, args, logger) {
 async function handleToggleDM(m, sock, args, logger) {
   const groupJid = m.key.remoteJid;
   const senderId = m.key.participant || m.key.remoteJid;
-  
+
   if (!groupJid.endsWith('@g.us')) {
     return m.reply('❌ This command only works in groups.');
   }
-  
+
   if (!(await isAuthorized(sock, groupJid, senderId))) {
     return m.reply('🔒 Only group admins can use this command.');
   }
-  
+
   if (!args[0] || !['on', 'off'].includes(args[0].toLowerCase())) {
     return m.reply('⚠️ Usage: Use *on* or *off*');
   }
-  
+
   const settings = await getGroupSettings(groupJid);
   settings.dmOnLeave = args[0].toLowerCase() === 'on';
-  
+
   await saveGroupSettings(groupJid, settings);
-  
+
   await m.reply(`✅ DM on leave ${settings.dmOnLeave ? 'enabled' : 'disabled'}`);
   logger.info(`DM on leave toggled ${settings.dmOnLeave ? 'on' : 'off'} in ${groupJid}`);
 }
@@ -404,25 +418,25 @@ async function handleToggleDM(m, sock, args, logger) {
 async function handleSetDMMessage(m, sock, args, logger) {
   const groupJid = m.key.remoteJid;
   const senderId = m.key.participant || m.key.remoteJid;
-  
+
   if (!groupJid.endsWith('@g.us')) {
     return m.reply('❌ This command only works in groups.');
   }
-  
+
   if (!(await isAuthorized(sock, groupJid, senderId))) {
     return m.reply('🔒 Only group admins can use this command.');
   }
-  
+
   const message = args.join(' ');
   if (!message) {
     return m.reply('⚠️ Please provide a DM message.\n\nExample: Hi @{user}, why did you leave {groupName}?');
   }
-  
+
   const settings = await getGroupSettings(groupJid);
   settings.dmMessage = message;
-  
+
   await saveGroupSettings(groupJid, settings);
-  
+
   await m.reply(`✅ DM message updated!\n\nNew message:\n${message}`);
   logger.info(`DM message updated in ${groupJid}`);
 }
@@ -430,24 +444,24 @@ async function handleSetDMMessage(m, sock, args, logger) {
 async function handleToggleDP(m, sock, args, logger) {
   const groupJid = m.key.remoteJid;
   const senderId = m.key.participant || m.key.remoteJid;
-  
+
   if (!groupJid.endsWith('@g.us')) {
     return m.reply('❌ This command only works in groups.');
   }
-  
+
   if (!(await isAuthorized(sock, groupJid, senderId))) {
     return m.reply('🔒 Only group admins can use this command.');
   }
-  
+
   if (!args[0] || !['on', 'off'].includes(args[0].toLowerCase())) {
     return m.reply('⚠️ Usage: Use *on* or *off*');
   }
-  
+
   const settings = await getGroupSettings(groupJid);
   settings.useProfilePic = args[0].toLowerCase() === 'on';
-  
+
   await saveGroupSettings(groupJid, settings);
-  
+
   await m.reply(`✅ Profile picture in messages ${settings.useProfilePic ? 'enabled' : 'disabled'}`);
   logger.info(`Profile picture toggled ${settings.useProfilePic ? 'on' : 'off'} in ${groupJid}`);
 }
@@ -455,15 +469,15 @@ async function handleToggleDP(m, sock, args, logger) {
 async function handleWelcomeTest(m, sock, logger) {
   const groupJid = m.key.remoteJid;
   const senderId = m.key.participant || m.key.remoteJid;
-  
+
   if (!groupJid.endsWith('@g.us')) {
     return m.reply('❌ This command only works in groups.');
   }
-  
+
   if (!(await isAuthorized(sock, groupJid, senderId))) {
     return m.reply('🔒 Only group admins can use this command.');
   }
-  
+
   const settings = await getGroupSettings(groupJid);
   const groupMetadata = await sock.groupMetadata(groupJid);
   const phone = senderId.split('@')[0];
@@ -474,7 +488,7 @@ async function handleWelcomeTest(m, sock, logger) {
     user: userReplacement,
     groupName: groupMetadata.subject
   });
-  
+
   if (settings.useProfilePic) {
     const ppUrl = await getProfilePicture(sock, senderId);
     if (ppUrl) {
@@ -495,22 +509,22 @@ async function handleWelcomeTest(m, sock, logger) {
       mentions: [senderId]
     });
   }
-  
+
   logger.info(`Test welcome message sent in ${groupJid}`);
 }
 
 async function handleGoodbyeTest(m, sock, logger) {
   const groupJid = m.key.remoteJid;
   const senderId = m.key.participant || m.key.remoteJid;
-  
+
   if (!groupJid.endsWith('@g.us')) {
     return m.reply('❌ This command only works in groups.');
   }
-  
+
   if (!(await isAuthorized(sock, groupJid, senderId))) {
     return m.reply('🔒 Only group admins can use this command.');
   }
-  
+
   const settings = await getGroupSettings(groupJid);
   const groupMetadata = await sock.groupMetadata(groupJid);
   const phone = senderId.split('@')[0];
@@ -521,7 +535,7 @@ async function handleGoodbyeTest(m, sock, logger) {
     user: userReplacement,
     groupName: groupMetadata.subject
   });
-  
+
   if (settings.useProfilePic) {
     const ppUrl = await getProfilePicture(sock, senderId);
     if (ppUrl) {
@@ -542,25 +556,25 @@ async function handleGoodbyeTest(m, sock, logger) {
       mentions: [senderId]
     });
   }
-  
+
   logger.info(`Test goodbye message sent in ${groupJid}`);
 }
 
 async function handleStatus(m, sock, logger) {
   const groupJid = m.key.remoteJid;
   const senderId = m.key.participant || m.key.remoteJid;
-  
+
   if (!groupJid.endsWith('@g.us')) {
     return m.reply('❌ This command only works in groups.');
   }
-  
+
   if (!(await isAuthorized(sock, groupJid, senderId))) {
     return m.reply('🔒 Only group admins can use this command.');
   }
-  
+
   const settings = await getGroupSettings(groupJid);
   const groupMetadata = await sock.groupMetadata(groupJid);
-  
+
   const statusText = `📊 *WELCOME/GOODBYE STATUS*\n` +
     `🏷️ Group: ${groupMetadata.subject}\n\n` +
     `👋 Welcome: ${settings.welcomeEnabled ? '✅ Enabled' : '❌ Disabled'}\n` +
@@ -570,7 +584,7 @@ async function handleStatus(m, sock, logger) {
     `📩 DM on Leave: ${settings.dmOnLeave ? '✅ Enabled' : '❌ Disabled'}\n` +
     `💬 DM Message:\n${settings.dmMessage}\n\n` +
     `📸 Use Profile Pic: ${settings.useProfilePic ? '✅ Yes' : '❌ No'}`;
-  
+
   await sock.sendMessage(groupJid, { text: statusText }, { quoted: m });
   logger.info(`Status shown in ${groupJid}`);
 }
@@ -586,7 +600,7 @@ export default {
   commands: ['welcome', 'goodbye', 'welcomemsg', 'goodbyemsg', 'dmonleave', 'dmmsg', 'usedp', 'welcometest', 'goodbyetest', 'welcomestatus'],
   aliases: ['wel', 'bye'],
   ownerOnly: false,
-  
+
   // ADDED: This ensures the plugin stays active even though it has commands
   executeOnAllMessages: false, // We only need event handlers, not message processing
 

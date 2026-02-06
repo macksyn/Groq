@@ -130,8 +130,15 @@ function parseBirthday(dobText) {
 
   let day, month, year;
 
+  // Normalize ordinals (1st, 2nd, 3rd, 4th) and remove the word 'of' to accept phrases
+  // like "3rd of june" or "4th of july"
+  const norm = cleaned
+    .replace(/(\d+)(st|nd|rd|th)\b/g, '$1')
+    .replace(/\bof\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   // Pattern 1: Month Day, Year
-  let match = cleaned.match(/([a-z]+)\s+(\d{1,2}),?\s*(\d{4})?/i);
+  let match = norm.match(/([a-z]+)\s+(\d{1,2}),?\s*(\d{4})?/i);
   if (match) {
     month = MONTH_NAMES[match[1]] || MONTH_NAMES[match[1].substring(0, 3)];
     day = parseInt(match[2]);
@@ -142,7 +149,7 @@ function parseBirthday(dobText) {
   }
 
   // Pattern 2: Day Month Year
-  match = cleaned.match(/(\d{1,2})\s+([a-z]+)\s*(\d{4})?/i);
+  match = norm.match(/(\d{1,2})\s+([a-z]+)\s*(\d{4})?/i);
   if (match) {
     day = parseInt(match[1]);
     month = MONTH_NAMES[match[2]] || MONTH_NAMES[match[2].substring(0, 3)];
@@ -153,12 +160,12 @@ function parseBirthday(dobText) {
   }
 
   // Pattern 3: MM/DD/YYYY or DD/MM/YYYY
-match = cleaned.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
+  match = norm.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
 if (match) {
   const num1 = parseInt(match[1]);
   const num2 = parseInt(match[2]);
   year = match[3] ? (match[3].length === 2 ? 2000 + parseInt(match[3]) : parseInt(match[3])) : null;
-  
+
   // Respect the preferredDateFormat setting first
   if (attendanceSettings.preferredDateFormat === 'DD/MM') {
     day = num1;
@@ -180,14 +187,14 @@ if (match) {
       month = num2;
     }
   }
-  
+
   if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
     return formatBirthday(day, month, year, cleaned);
   }
 }
 
   // Pattern 4: YYYY-MM-DD
-  match = cleaned.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  match = norm.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
   if (match) {
     year = parseInt(match[1]);
     month = parseInt(match[2]);
@@ -198,7 +205,7 @@ if (match) {
   }
 
   // Pattern 5: Just month and day
-  match = cleaned.match(/([a-z]+)\s+(\d{1,2})/i);
+  match = norm.match(/([a-z]+)\s+(\d{1,2})/i);
   if (match) {
     month = MONTH_NAMES[match[1]] || MONTH_NAMES[match[1].substring(0, 3)];
     day = parseInt(match[2]);
@@ -469,15 +476,8 @@ async function handleAutoAttendance(m, sock, config) {
       }
     }
 
-    let finalReward = attendanceSettings.rewardAmount;
-    if (messageHasImage && attendanceSettings.imageRewardBonus > 0) {
-      finalReward += attendanceSettings.imageRewardBonus;
-    }
-    if (attendanceSettings.enableStreakBonus && currentStreak >= 3) {
-      finalReward = Math.floor(finalReward * attendanceSettings.streakBonusMultiplier);
-    }
-
-    await addMoney(senderId, finalReward, 'Attendance reward');
+    // Economy is disabled for now — do not modify wallets. Save reward as 0.
+    const finalReward = 0;
     await saveAttendanceRecord(senderId, {
       date: today,
       extractedData: validation.extractedData,
@@ -493,8 +493,7 @@ async function handleAutoAttendance(m, sock, config) {
       console.error('Error notifying activity tracker about attendance:', err);
     }
 
-    const updatedUserData = await getUserData(senderId);
-    let successMessage = `✅ *ATTENDANCE APPROVED!* ✅\n\n🔥 Current streak: ${currentStreak} days\n💰 New wallet balance: ₦${(updatedUserData.balance || 0).toLocaleString()}${birthdayMessage}\n\n🎉 *Thank you for your consistent participation!*`;
+    let successMessage = `✅ *ATTENDANCE APPROVED!* ✅\n\n🔥 Current streak: ${currentStreak} days${birthdayMessage ? `\n${birthdayMessage}` : ''}\n\n🎉 *Thank you for your participation!*`;
     await sock.sendMessage(from, { text: successMessage }, { quoted: m });
 
     return true;
@@ -538,7 +537,6 @@ async function handleStats(context) {
                       `🔥 Current streak: ${userData.streak || 0} days\n` +
                       `🏆 Longest streak: ${userData.longestStreak || 0} days\n` +
                       `✅ Today's status: ${userData.lastAttendance === today ? 'Marked ✅' : 'Not marked ❌'}\n` +
-                      `💰 Current balance: ₦${(userData.balance || 0).toLocaleString()}\n` +
                       `📸 Image required: ${attendanceSettings.requireImage ? 'Yes' : 'No'}\n` +
                       `📅 Date format: ${attendanceSettings.preferredDateFormat}`;
     const streak = userData.streak || 0;
