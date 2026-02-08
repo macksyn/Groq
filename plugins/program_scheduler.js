@@ -60,7 +60,7 @@ export default {
 
   // Commands this plugin handles
   commands: ['schedule', 'programs', 'today', 'attend', 'cantmake', 'attendees'],
-  aliases: ['program', 'activity', 'activities', 'schedule-list', 'todayschedule', 'rsvp', 'join', 'skip', 'absent', 'rsvps', 'going'],
+  aliases: ['program', 'schedule-list', 'todayschedule', 'rsvp', 'join', 'skip', 'absent', 'rsvps', 'going'],
 
   // Group-only command
   groupOnly: true,
@@ -104,12 +104,10 @@ export default {
     switch (command.toLowerCase()) {
       case 'schedule':
       case 'program':
-      case 'activity':
         await handleScheduleCommand(context, args, senderId, groupId);
         break;
 
       case 'programs':
-      case 'activities':
       case 'schedule-list':
         await handleProgramsCommand(context, groupId);
         break;
