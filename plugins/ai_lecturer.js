@@ -210,7 +210,7 @@ async function generateLecture(lecturer, topic, mode, sessionNum, prevTopics, pr
 
   if (mode === 'variety') {
     const avoid = prevTopics.length > 0 ? `Avoid: ${prevTopics.slice(-3).join(', ')}. ` : '';
-    userPrompt = `${topic} - Session ${sessionNum}\n${avoid}Pick NEW engaging topic. 1600-1800 words. Hook → 5 points → tips → close. DO NOT include greeting or closing. Start directly with content.`;
+    userPrompt = `${topic} - Session ${sessionNum}\n${avoid}Pick NEW engaging topic. 1600-1800 words. Deep explanation and mentoring. DO NOT include greeting or closing. Start directly with content.`;
   } else {
     const recap = prevSummary ? `Last week we covered: "${prevSummary}". ` : '';
     userPrompt = `${topic} - Part ${sessionNum}\n${recap}Teach progressively. ${sessionNum === 1 ? 'Intro + roadmap.' : 'Build on previous.'} 1500-1700 words. DO NOT include greeting or closing. End with a brief teaser of what comes next (1 sentence). Start directly with content.`;
